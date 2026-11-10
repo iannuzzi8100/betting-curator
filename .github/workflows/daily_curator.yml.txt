@@ -1,0 +1,30 @@
+name: Daily Betting Curator
+
+on:
+  schedule:
+    # 14:00 UTC = 9:00 AM EST (or 10:00 AM EDT)
+    - cron: '0 14 * * *'
+  workflow_dispatch: # Allows manual one-click trigger from the GitHub UI
+
+jobs:
+  run-curator:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Curator Engine
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: python curator.py
