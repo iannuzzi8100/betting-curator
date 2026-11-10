@@ -4,9 +4,12 @@ import requests
 import gspread
 from datetime import datetime, timezone, timedelta
 from google.oauth2.service_account import Credentials
+from google import genai
+from google.genai import types
 
 # --- CONFIGURATION (TIER 1 PROFILE) ---
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SHEET_NAME = "Betting Tracker & Strategy Log - $100 to $1,000 Challenge"
 FEED_TAB_NAME = "Curator Feed"
 
@@ -15,13 +18,13 @@ BASE_UNIT = 4.00
 CORE_STAKE = round(BASE_UNIT * 1.75, 2)       # $7.00 (1.75U)
 SECONDARY_STAKE = round(BASE_UNIT * 0.75, 2)  # $3.00 (0.75U)
 
-# ESPN Public Leagues
 ESPN_LEAGUES = {
     "CFB": {"path": "football/college-football", "groups": "80"},
     "NFL": {"path": "football/nfl", "groups": None},
     "NBA": {"path": "basketball/nba", "groups": None},
     "NCAAM": {"path": "basketball/mens-college-basketball", "groups": "50"},
-    "NHL": {"path": "hockey/nhl", "groups": None}
+    "NHL": {"path": "hockey/nhl", "groups": None},
+    "MLB": {"path": "baseball/mlb", "groups": None}
 }
 
 # --- 1. GOOGLE SHEETS CONNECTION ---
@@ -51,11 +54,12 @@ def get_curator_sheet():
             "Favorite ML",
             "Target Combined Odds",
             "Rec Stake ($)",
-            "Status"
+            "Status",
+            "AI Deep Dive & Edge Rationale"
         ])
     return sheet
 
-# --- 2. ESPN PUBLIC SCRAPER (WITH DATES PARAMETER) ---
+# --- 2. ESPN SLATE INGESTION ---
 def fetch_espn_events_for_date(league_info, yyyymmdd):
     path = league_info["path"]
     url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard?dates={yyyymmdd}"
@@ -70,65 +74,29 @@ def fetch_espn_events_for_date(league_info, yyyymmdd):
         print(f"Error fetching {path} for {yyyymmdd}: {e}")
     return []
 
-def parse_game_odds(competition):
-    odds_list = competition.get("odds", [])
-    if not odds_list:
-        return None
-
-    odds_data = odds_list[0]
-    total = odds_data.get("overUnder")
-    details = odds_data.get("details", "")
-
-    # Parse moneyline (handling int or string formats)
-    def clean_ml(val):
-        if val is None:
-            return None
-        try:
-            return int(str(val).replace("+", ""))
-        except ValueError:
-            return None
-
-    home_ml = clean_ml(odds_data.get("homeTeamOdds", {}).get("moneyLine"))
-    away_ml = clean_ml(odds_data.get("awayTeamOdds", {}).get("moneyLine"))
-
-    return {
-        "total": float(total) if total is not None else None,
-        "details": details,
-        "home_ml": home_ml,
-        "away_ml": away_ml
-    }
-
-# --- 3. CURATION LOGIC ---
-def curate_card():
+def extract_slate_candidates():
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(hours=36)
+    dates_to_check = [now.strftime("%Y%m%d"), (now + timedelta(days=1)).strftime("%Y%m%d")]
 
-    today_str = now.strftime("%Y%m%d")
-    tomorrow_str = (now + timedelta(days=1)).strftime("%Y%m%d")
-    dates_to_check = [today_str, tomorrow_str]
-
-    candidate_plays = []
+    board = []
 
     for league_name, league_info in ESPN_LEAGUES.items():
         all_events = []
         for d in dates_to_check:
             all_events.extend(fetch_espn_events_for_date(league_info, d))
 
-        # Deduplicate events by event ID
         seen_ids = set()
-        unique_events = []
-        for e in all_events:
-            if e.get("id") not in seen_ids:
-                seen_ids.add(e.get("id"))
-                unique_events.append(e)
+        for event in all_events:
+            event_id = event.get("id")
+            if not event_id or event_id in seen_ids:
+                continue
+            seen_ids.add(event_id)
 
-        for event in unique_events:
             date_str = event.get("date")
             if not date_str:
                 continue
-
             event_time = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            # Only consider games that have not started and start within the next 36 hours
             if not (now <= event_time <= cutoff):
                 continue
 
@@ -148,85 +116,137 @@ def curate_card():
 
             home_team = home_comp.get("team", {}).get("displayName", "")
             away_team = away_comp.get("team", {}).get("displayName", "")
-            home_abbr = home_comp.get("team", {}).get("abbreviation", "")
-            away_abbr = away_comp.get("team", {}).get("abbreviation", "")
+            matchup = f"{away_team} @ {home_team}"
 
-            matchup_str = f"{away_team} @ {home_team}".lower()
-            if any(kw in matchup_str for kw in EXCLUDED_KEYWORDS):
+            if any(kw in matchup.lower() for kw in EXCLUDED_KEYWORDS):
                 continue
 
-            odds = parse_game_odds(comp)
-            if not odds:
-                continue
+            odds_list = comp.get("odds", [])
+            odds_info = {}
+            if odds_list:
+                o = odds_list[0]
+                odds_info = {
+                    "overUnder": o.get("overUnder"),
+                    "details": o.get("details"),
+                    "homeML": o.get("homeTeamOdds", {}).get("moneyLine"),
+                    "awayML": o.get("awayTeamOdds", {}).get("moneyLine"),
+                    "provider": o.get("provider", {}).get("name")
+                }
 
-            total = odds["total"]
-            home_ml = odds["home_ml"]
-            away_ml = odds["away_ml"]
-            details = odds["details"].strip() if odds["details"] else ""
+            board.append({
+                "league": league_name,
+                "game": matchup,
+                "home": home_team,
+                "away": away_team,
+                "start_utc": event_time.strftime("%Y-%m-%d %H:%M UTC"),
+                "odds": odds_info
+            })
 
-            fav_team, fav_price = None, None
+    return board
 
-            # 1. Direct Moneyline check (-250 to -600)
-            if home_ml and -600 <= home_ml <= -250:
-                fav_team, fav_price = home_team, home_ml
-            elif away_ml and -600 <= away_ml <= -250:
-                fav_team, fav_price = away_team, away_ml
+# --- 3. GEMINI REASONING & RESEARCH ENGINE ---
+def run_ai_curation(board):
+    if not GEMINI_API_KEY:
+        raise ValueError("Missing GEMINI_API_KEY environment variable.")
 
-            # 2. Spread fallback if moneyline not explicitly populated
-            if not fav_team and details and " -" in details:
-                parts = details.split(" -")
-                team_abbrev = parts[0].strip()
-                try:
-                    spread_val = float(parts[1])
-                    # Spreads from 6.0 to 17.5 roughly correspond to -250 to -600 ML
-                    if 6.0 <= spread_val <= 17.5:
-                        if team_abbrev == home_abbr:
-                            fav_team, fav_price = home_team, -300
-                        elif team_abbrev == away_abbr:
-                            fav_team, fav_price = away_team, -300
-                except (ValueError, IndexError):
-                    pass
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
-            # Core Tier 1 (Football or Basketball with consensus total)
-            if fav_team and total and league_name in ["CFB", "NFL", "NBA", "NCAAM"]:
-                padding = 10.0 if "NBA" in league_name or "NCAAM" in league_name else 7.0
-                candidate_plays.append({
-                    "scraped_date": now.strftime("%Y-%m-%d"),
-                    "kickoff": event_time.strftime("%Y-%m-%d %H:%M UTC"),
-                    "matchup": f"{away_team} @ {home_team}",
-                    "play_type": f"Core Tier 1 ({league_name} SGP)",
-                    "consensus_total": total,
-                    "target_under": f"Under {total + padding}",
-                    "favorite": fav_team,
-                    "fav_price": fav_price,
-                    "target_odds": "-135 to -110",
-                    "stake": CORE_STAKE,
-                    "status": "UNEXECUTED"
-                })
+    prompt = f"""
+You are an expert sports quantitative analyst and professional bettor managing a strict bankroll challenge from $100 to $1,000.
+Current Bankroll Tier: Tier 1 ($100 - $249.99).
+Base Unit (1U): ${BASE_UNIT:.2f}
 
-    return candidate_plays[:2]  # Limit to top 2 qualifying plays
+STRATEGY CONSTRAINTS:
+1. Play 1 (Core Tier 1): Stake = ${CORE_STAKE:.2f} (1.75U). Target Odds: -135 to -110.
+   - Primary high-probability bankroll builder.
+   - Can be a Correlated SGP (Heavy ML Favorite -250 to -600 paired with +7 to +10 padded alternate under) OR an elite high-floor player prop / alt line with a proven 75%+ hit rate and dominant matchup.
+2. Play 2 (Multi-Window Tier 2): Stake = ${SECONDARY_STAKE:.2f} (0.75U). Target Odds: +160 to +250.
+   - A 2-to-3 leg parlay (can cross multiple sports/leagues, moneyline floors, or player props).
+3. ABSOLUTE EXCLUSION: Never bet on or against Kentucky/Wildcats.
+4. Total Daily Risk: Max ${CORE_STAKE + SECONDARY_STAKE:.2f} across both plays combined.
+
+Here is the upcoming 36-hour slate scraped from ESPN:
+{json.dumps(board, indent=2)}
+
+TASK:
+Analyze the board. Apply deep matchup reasoning (team pace, defense vs position, efficiency, line movements, injury context, prop value).
+Select the optimal Play 1 (Core Tier 1) and Play 2 (Tier 2 Parlay).
+
+Respond ONLY with valid JSON matching this exact structure:
+{{
+  "plays": [
+    {{
+      "play_type": "Core Tier 1 (SGP)",
+      "matchup": "Away @ Home",
+      "kickoff": "YYYY-MM-DD HH:MM UTC",
+      "consensus_total": "49.5",
+      "target_under": "Under 56.5",
+      "favorite": "Team Name",
+      "favorite_ml": "-300",
+      "target_combined_odds": "-120",
+      "rec_stake": {CORE_STAKE},
+      "deep_dive_analysis": "Comprehensive statistical reasoning, matchup trench analysis, pace, and hit rate justification."
+    }},
+    {{
+      "play_type": "Multi-Window Tier 2 (Cross-Sport Parlay)",
+      "matchup": "Multiple Slates",
+      "kickoff": "YYYY-MM-DD HH:MM UTC",
+      "consensus_total": "N/A",
+      "target_under": "N/A",
+      "favorite": "Leg 1 + Leg 2",
+      "favorite_ml": "Multiple",
+      "target_combined_odds": "+185",
+      "rec_stake": {SECONDARY_STAKE},
+      "deep_dive_analysis": "Detailed rationale for each leg, usage trends, and why this parlay holds an edge."
+    }}
+  ]
+}}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-pro",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.2
+        )
+    )
+
+    try:
+        return json.loads(response.text).get("plays", [])
+    except Exception as e:
+        print(f"Error parsing Gemini JSON response: {e}")
+        print("Raw model response:", response.text)
+        return []
 
 # --- 4. EXECUTION ---
 if __name__ == "__main__":
     sheet = get_curator_sheet()
-    plays = curate_card()
+    print("Ingesting live slates from ESPN...")
+    board = extract_slate_candidates()
+    print(f"Ingested {len(board)} upcoming matchups within 36-hour window.")
 
-    if not plays:
-        print("No qualifying plays found across ESPN slates in the next 36 hours.")
+    print("Submitting candidate board to Gemini for quantitative analysis...")
+    ai_plays = run_ai_curation(board)
+
+    if not ai_plays:
+        print("No qualifying plays finalized today.")
     else:
-        for p in plays:
-            print(f"Qualifying Play: {p['matchup']} | {p['favorite']} ({p['fav_price']}) + {p['target_under']}")
+        now_str = datetime.now().strftime("%Y-%m-%d")
+        for p in ai_plays:
+            print(f"Curated: [{p.get('play_type')}] {p.get('matchup')} | Stake: ${p.get('rec_stake')}")
             sheet.append_row([
-                p["scraped_date"],
-                p["kickoff"],
-                p["matchup"],
-                p["play_type"],
-                p["consensus_total"],
-                p["target_under"],
-                p["favorite"],
-                p["fav_price"],
-                p["target_odds"],
-                p["stake"],
-                p["status"]
+                now_str,
+                p.get("kickoff", "TBD"),
+                p.get("matchup", "N/A"),
+                p.get("play_type", "Tier 1"),
+                str(p.get("consensus_total", "N/A")),
+                str(p.get("target_under", "N/A")),
+                p.get("favorite", "N/A"),
+                str(p.get("favorite_ml", "N/A")),
+                p.get("target_combined_odds", "-110"),
+                p.get("rec_stake", CORE_STAKE),
+                "UNEXECUTED",
+                p.get("deep_dive_analysis", "")
             ])
-        print("Successfully updated Curator Feed tab.")
+        print("Deep dive card successfully logged to Google Sheets.")
