@@ -5,24 +5,47 @@ import gspread
 from datetime import datetime, timezone, timedelta
 from google.oauth2.service_account import Credentials
 
-# --- CONFIGURATION VIA ENVIRONMENT VARIABLES ---
+# --- CONFIGURATION ---
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
 SHEET_NAME = "Betting Tracker & Strategy Log - $100 to $1,000 Challenge"
+FEED_TAB_NAME = "Curator Feed"
 
 EXCLUDED_KEYWORDS = ["kentucky", "wildcats"]
 BASE_UNIT = 4.00  # Tier 1 ($100-$249)
 
-# --- 1. SPREADSHEET CONNECTION ---
-def get_tracker_sheet():
+# --- 1. SPREADSHEET CONNECTION & TAB INITIALIZATION ---
+def get_curator_sheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     if GCP_SA_KEY:
         service_account_info = json.loads(GCP_SA_KEY)
         creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
     else:
         creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    
     client = gspread.authorize(creds)
-    return client.open(SHEET_NAME).sheet1
+    workbook = client.open(SHEET_NAME)
+
+    # Get or automatically create the Curator Feed worksheet
+    try:
+        sheet = workbook.worksheet(FEED_TAB_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        sheet = workbook.add_worksheet(title=FEED_TAB_NAME, rows=500, cols=12)
+        # Establish header row
+        sheet.append_row([
+            "Scraped Date",
+            "Kickoff (UTC)",
+            "Matchup",
+            "Play Type",
+            "Consensus Total",
+            "Target Under",
+            "Favorite",
+            "Favorite ML",
+            "Target Combined Odds",
+            "Rec Stake ($)",
+            "Status"
+        ])
+    return sheet
 
 # --- 2. ODDS INGESTION ---
 def fetch_upcoming_odds(sport="americanfootball_ncaaf"):
@@ -52,7 +75,7 @@ def curate_todays_core_play(games):
 
         home = game.get("home_team", "")
         away = game.get("away_team", "")
-        matchup_str = f"{away} vs {home}".lower()
+        matchup_str = f"{away} @ {home}".lower()
 
         if any(keyword in matchup_str for keyword in EXCLUDED_KEYWORDS):
             continue
@@ -69,6 +92,7 @@ def curate_todays_core_play(games):
             continue
 
         favorite = None
+        fav_price = None
         for outcome in h2h["outcomes"]:
             price = outcome["price"]
             if -600 <= price <= -250:
@@ -83,19 +107,24 @@ def curate_todays_core_play(games):
         padded_under = consensus_total + 7.0
 
         candidate_plays.append({
+            "scraped_date": datetime.now().strftime("%Y-%m-%d"),
+            "kickoff": commence_time.strftime("%Y-%m-%d %H:%M UTC"),
             "game": f"{away} @ {home}",
             "type": "Core Tier A (SGP)",
-            "leg1": f"{favorite} ML ({fav_price})",
-            "leg2": f"Padded Under {padded_under}",
+            "consensus_total": consensus_total,
+            "padded_under": padded_under,
+            "favorite": favorite,
+            "fav_price": fav_price,
+            "target_odds": "-130 to -115",
             "wager": round(BASE_UNIT * 1.75, 2),
-            "target_odds": "-130 to -115"
+            "status": "UNEXECUTED"
         })
 
     return candidate_plays[:1]
 
 # --- 4. EXECUTION ---
 if __name__ == "__main__":
-    sheet = get_tracker_sheet()
+    sheet = get_curator_sheet()
     games = fetch_upcoming_odds("americanfootball_ncaaf")
     recommendations = curate_todays_core_play(games)
 
@@ -103,14 +132,18 @@ if __name__ == "__main__":
         print("No qualifying plays found in the next 24 hours.")
     else:
         for rec in recommendations:
-            print(f"Curated Play: {rec['game']} | {rec['leg1']} + {rec['leg2']} | Stake: ${rec['wager']}")
+            print(f"Curated: {rec['game']} | {rec['favorite']} ML + Under {rec['padded_under']}")
             sheet.append_row([
-                datetime.now().strftime("%Y-%m-%d"),
+                rec["scraped_date"],
+                rec["kickoff"],
                 rec["game"],
                 rec["type"],
-                f"{rec['leg1']} / {rec['leg2']}",
+                rec["consensus_total"],
+                rec["padded_under"],
+                rec["favorite"],
+                rec["fav_price"],
                 rec["target_odds"],
                 rec["wager"],
-                "PENDING"
+                rec["status"]
             ])
-            print("Successfully logged to Google Sheet!")
+            print(f"Logged to '{FEED_TAB_NAME}' tab successfully.")
