@@ -23,6 +23,17 @@ ESPN_LEAGUES = {
     "MLB": {"path": "baseball/mlb", "groups": None}
 }
 
+ALLOWED_EDGE_TAGS = [
+    "WIN: Correlated Home Favorite + Alt Total Cushion",
+    "WIN: Fatigue / Back-to-Back Fade",
+    "WIN: Trench / Pace Mismatch",
+    "WIN: Disciplined Straight / Floor Play",
+    "FAIL: Totals Blowout / Late Garbage Time",
+    "FAIL: Road Favorite Upset (Parlay Bust)",
+    "FAIL: Hook / Half-Point Variance",
+    "FAIL: Juice Parlay / Multi-Leg Bust"
+]
+
 # --- 1. GOOGLE SHEETS CONNECTION ---
 def get_tracker_sheet():
     scopes = [
@@ -96,7 +107,7 @@ def fetch_final_scores(target_dates):
 
     return final_games
 
-# --- 3. GRADE PENDING TICKETS WITH GEMINI ---
+# --- 3. GRADE & AUTO-TAG PENDING TICKETS WITH GEMINI ---
 def grade_pending_bets(pending_bets, final_games):
     if not GEMINI_API_KEY:
         raise ValueError("Missing GEMINI_API_KEY environment variable.")
@@ -104,10 +115,10 @@ def grade_pending_bets(pending_bets, final_games):
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     prompt = f"""
-You are a deterministic sportsbook settlement auditor.
-Verify each pending bet against the official ESPN scoreboard results provided below.
+You are a deterministic sportsbook settlement and post-mortem auditor.
+Verify each pending bet against the official ESPN scoreboard results provided below, and classify the root cause or winning edge using the allowed tags.
 
-RULES:
+GRADING RULES:
 1. Check EVERY leg of a parlay or Same Game Parlay (SGP).
 2. A parlay/SGP is "Won" ONLY if EVERY leg has completed AND won.
 3. A parlay/SGP is "Lost" if ANY single leg has completed AND lost (even if other legs are still in progress).
@@ -115,6 +126,14 @@ RULES:
 5. Match short team names (e.g., "Celtics", "Thunder", "Lakers", "Magic", "Pennsylvania") to ESPN full display names (e.g., "Boston Celtics", "Oklahoma City Thunder", "Los Angeles Lakers", "Orlando Magic", "Pennsylvania Quakers").
 6. For totals (e.g., "Under 57.5"), compare "total_points" (away_score + home_score) strictly against the line.
 7. For moneylines (e.g., "Toledo ML", "Thunder ML"), verify the selected team's score is strictly greater than the opponent's score.
+
+TAGGING RULES:
+- If result is "Won", select the single best matching "WIN: ..." tag from ALLOWED_EDGE_TAGS based on the bet's notes and structure.
+- If result is "Lost", select the single best matching "FAIL: ..." tag from ALLOWED_EDGE_TAGS based on which leg failed and why.
+- If result is "Pending" or "Push", set "edge_tag" to "".
+
+ALLOWED_EDGE_TAGS:
+{json.dumps(ALLOWED_EDGE_TAGS, indent=2)}
 
 PENDING BETS:
 {json.dumps(pending_bets, indent=2)}
@@ -126,9 +145,10 @@ Respond ONLY with valid JSON matching this exact schema:
 {{
   "settlements": [
     {{
-      "row_index": 17,
+      "row_index": 21,
       "bet_id": "BET-003",
       "result": "Won",
+      "edge_tag": "WIN: Correlated Home Favorite + Alt Total Cushion",
       "verification_note": "Toledo defeated UMass 38-14 (52 total pts < 57.5)."
     }}
   ]
@@ -171,7 +191,7 @@ Respond ONLY with valid JSON matching this exact schema:
 
 # --- 4. EXECUTION ENTRYPOINT ---
 if __name__ == "__main__":
-    print("Starting Nightly Settlement Engine...", flush=True)
+    print("Starting Nightly Settlement & Edge Audit Engine...", flush=True)
     sheet = get_tracker_sheet()
     all_values = sheet.get_all_values()
 
@@ -193,6 +213,7 @@ if __name__ == "__main__":
     col_selections = headers.index("Selections / Legs")
     col_result = headers.index("Result")
     col_notes = headers.index("Notes / Game Script Analysis") if "Notes / Game Script Analysis" in headers else None
+    col_tag = headers.index("Outcome / Edge Tag") if "Outcome / Edge Tag" in headers else None
 
     pending_bets = []
     dates_needed = set()
@@ -219,7 +240,8 @@ if __name__ == "__main__":
                 "date": raw_date,
                 "sport": row[col_sport] if col_sport is not None else "",
                 "bet_type": row[col_type] if col_type is not None else "",
-                "selections": row[col_selections]
+                "selections": row[col_selections],
+                "notes": row[col_notes] if (col_notes is not None and len(row) > col_notes) else ""
             })
 
     if not pending_bets:
@@ -241,16 +263,22 @@ if __name__ == "__main__":
         row_num = s.get("row_index")
         bet_id = s.get("bet_id")
         new_result = s.get("result", "Pending").strip()
+        edge_tag = s.get("edge_tag", "").strip()
         note = s.get("verification_note", "")
 
-        print(f"Audit -> {bet_id} (Row {row_num}): {new_result} | {note}", flush=True)
+        print(f"Audit -> {bet_id} (Row {row_num}): {new_result} | Tag: {edge_tag} | {note}", flush=True)
 
         if new_result in ["Won", "Lost", "Push"]:
             sheet.update_cell(row_num, col_result + 1, new_result)
+
             if col_notes is not None and note:
                 existing_note = all_values[row_num - 1][col_notes] if len(all_values[row_num - 1]) > col_notes else ""
                 updated_note = f"{existing_note} | [Settled: {note}]".strip(" |")
                 sheet.update_cell(row_num, col_notes + 1, updated_note)
+
+            if col_tag is not None and edge_tag in ALLOWED_EDGE_TAGS:
+                sheet.update_cell(row_num, col_tag + 1, edge_tag)
+
             updated_count += 1
 
     print(f"Settlement run complete. Updated {updated_count} ticket(s).", flush=True)
