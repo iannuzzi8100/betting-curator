@@ -135,7 +135,7 @@ Respond ONLY with valid JSON matching this exact schema:
 }}
 """
 
- models_to_try = [
+    models_to_try = [
         "gemini-3.8-flash",
         "gemini-3.5-flash",
         "gemini-3.8-flash",
@@ -155,7 +155,7 @@ Respond ONLY with valid JSON matching this exact schema:
             )
             break
         except errors.ServerError as e:
-            print(f"Attempt {attempt} ({model_name}) hit 503 overload: {e}. Retrying in 10s...", flush=True)
+            print(f"Attempt {attempt} ({model_name}) hit 503 overload: {e}. Retrying in 15s...", flush=True)
             time.sleep(15)
 
     if response is None:
