@@ -1,51 +1,7 @@
-name: Daily Betting Pipeline
-
-on:
-  schedule:
-    # 1. Nightly Settler: 07:00 UTC = 2:00 AM EST (3:00 AM EDT)
-    - cron: '0 7 * * *'
-    # 2. Morning Curator: 14:00 UTC = 9:00 AM EST (10:00 AM EDT)
-    - cron: '0 14 * * *'
-  workflow_dispatch:
-    inputs:
-      task:
-        description: 'Which script to run manually'
-        required: true
-        default: 'both'
-        type: choice
-        options:
-          - both
-          - settle_only
-          - curate_only
-
-jobs:
-  run-pipeline:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests gspread google-auth google-genai
-
-      - name: Run Nightly Settler
+- name: Run Nightly Settler
+        continue-on-error: true
         if: github.event.schedule == '0 7 * * *' || github.event.inputs.task == 'settle_only' || github.event.inputs.task == 'both'
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python settler.py
-
-      - name: Run Morning Curator
-        if: github.event.schedule == '0 14 * * *' || github.event.inputs.task == 'curate_only' || github.event.inputs.task == 'both'
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python curator.py
