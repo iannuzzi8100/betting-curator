@@ -156,7 +156,7 @@ Respond ONLY with valid JSON matching this exact schema:
             break
         except errors.ServerError as e:
             print(f"Attempt {attempt} ({model_name}) hit 503 overload: {e}. Retrying in 10s...", flush=True)
-            time.sleep(10)
+            time.sleep(15)
 
     if response is None:
         print("All model attempts experienced 503 overload. Skipping settlement until next run.", flush=True)
