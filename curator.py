@@ -22,7 +22,7 @@ ESPN_ENDPOINTS = {
     "MLB": "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"
 }
 
-# --- 1. GOOGLE SHEETS CONNECTION & CONTEXT LOADER ---
+# --- 1. GOOGLE SHEETS CONNECTION & BANKROLL/RULES LOADER ---
 def get_workbook():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -37,42 +37,21 @@ def get_workbook():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
-def load_strategy_context(workbook):
-    # 1. Read Current Bankroll & Recent Bets
+def load_bankroll_and_rules(workbook):
+    # 1. Read Current Bankroll only (no historical win/loss trend bias)
     tracker_ws = workbook.worksheet("Challenge Tracker ($100-$1k)")
     tracker_rows = tracker_ws.get_all_values()
 
     current_bankroll = 100.0
-    recent_bets = []
     for row in tracker_rows:
-        if len(row) >= 14 and row[0].strip() in ["START"] or (len(row) > 0 and row[0].strip().startswith("BET-")):
-            if row[1].strip():  # Has a date
+        if len(row) >= 14 and (row[0].strip() == "START" or row[0].strip().startswith("BET-")):
+            if row[1].strip() and row[13].strip():
                 try:
-                    if row[13].strip():
-                        current_bankroll = float(row[13].replace("$", "").replace(",", ""))
+                    current_bankroll = float(row[13].replace("$", "").replace(",", ""))
                 except ValueError:
                     pass
-                recent_bets.append({
-                    "bet_id": row[0],
-                    "date": row[1],
-                    "sport": row[2],
-                    "type": row[3],
-                    "selections": row[5],
-                    "odds": row[6],
-                    "stake": row[8],
-                    "result": row[10],
-                    "edge_tag": row[15] if len(row) > 15 else ""
-                })
 
-    # 2. Read Strategy Edge & Mistake Audit
-    try:
-        audit_ws = workbook.worksheet("Strategy Edge & Mistake Audit")
-        audit_rows = [r for r in audit_ws.get_all_values() if any(cell.strip() for cell in r)]
-    except Exception as e:
-        print(f"Warning: Could not read Strategy Edge & Mistake Audit tab: {e}", flush=True)
-        audit_rows = []
-
-    # 3. Read Unit & Tier Rules
+    # 2. Read Static Unit & Tier Rules
     try:
         rules_ws = workbook.worksheet("Unit & Tier Rules")
         rules_rows = [r for r in rules_ws.get_all_values() if any(cell.strip() for cell in r)]
@@ -82,8 +61,6 @@ def load_strategy_context(workbook):
 
     return {
         "current_bankroll": current_bankroll,
-        "recent_bets": recent_bets[-10:],
-        "edge_and_mistake_audit": audit_rows,
         "unit_tier_rules": rules_rows
     }
 
@@ -134,8 +111,8 @@ def fetch_daily_slate():
 
     return slate
 
-# --- 3. CURATE PLAYS USING FEEDBACK LOOP ---
-def run_ai_curation(slate, strategy_context):
+# --- 3. CURATE PLAYS (OBJECTIVE SLATE & UNIT RULES ONLY) ---
+def run_ai_curation(slate, bankroll_context):
     if not GEMINI_API_KEY:
         raise ValueError("Missing GEMINI_API_KEY environment variable.")
 
@@ -143,23 +120,19 @@ def run_ai_curation(slate, strategy_context):
 
     prompt = f"""
 You are a disciplined sports betting quantitative curator managing a $100-to-$1,000 bankroll challenge.
-Analyze today's ESPN slate using the user's live bankroll, Unit & Tier Rules, and Strategy Edge & Mistake Audit.
+Analyze today's ESPN slate strictly using objective matchup data, live odds, and the user's static Unit & Tier Rules.
 
-FEEDBACK LOOP MANDATES:
-1. DOUBLE DOWN ON WHAT WORKS: Inspect 'edge_and_mistake_audit' for 'WIN:' patterns with positive ROI and prioritize setups matching those exact game scripts (e.g., Correlated Home Favorite + Alt Total Cushion, Fatigue / Back-to-Back Fade, Trench / Pace Mismatch).
-2. ELIMINATE REPEAT MISTAKES: Inspect 'edge_and_mistake_audit' for 'FAIL:' patterns and enforce their Guardrail Adjustment Directives:
-   - Enforce a minimum +6.0 to +7.5 point alternate total cushion on any SGP Under; reject high-pace blowout risks.
-   - Ban road favorites worse than -150 in multi-window parlays unless verified rest/venue edge exists.
-   - Never stack high-variance garbage-time spreads or unbuffered totals.
-   - Never stack the same team across multiple recommended tickets (Rule 3: No Team Stacking).
-3. SIZING & TIER COMPLIANCE:
-   - Current Bankroll: ${strategy_context['current_bankroll']:.2f} (Tier 1: 1U = $4.00, Core Tier 1 = $7.00 [1.75U], Multi-Window Tier 2 = $3.00 [0.75U], Max Daily Volume = $10.00-$12.00).
+OPERATIONAL MANDATES (30-DAY BASELINE DATA COLLECTION):
+1. OBJECTIVE EVALUATION ONLY: Do NOT apply historical trend rules, venue restrictions, or bet-type bans. Evaluate home and road favorites equally based strictly on current season records, rest, matchup efficiency, and line value.
+2. RULE COMPLIANCE: Strictly follow the bankroll sizing and discipline rules in 'unit_tier_rules' (including Rule 3: Never stack the same team across multiple recommended tickets).
+3. SIZING & STRUCTURE:
+   - Current Bankroll: ${bankroll_context['current_bankroll']:.2f} (Tier 1: 1U = $4.00, Core Tier 1 = $7.00 [1.75U], Multi-Window Tier 2 = $3.00 [0.75U], Max Daily Volume = $10.00-$12.00).
    - Output 2 high-conviction plays:
-     * Play 1: Core Tier 1 ($7.00 stake) — e.g., Correlated Home Favorite ML + Padded Alt Under SGP (target combined odds -190 to -115) or high-edge straight play.
-     * Play 2: Multi-Window Tier 2 ($3.00 stake) — 2-to-3 leg cross-sport/cross-window floor parlay (target combined odds +120 to +240) built strictly from home anchors or verified rest mismatches.
+     * Play 1: Core Tier 1 ($7.00 stake) — Correlated SGP (Favorite ML + padded alternate total Under) or high-edge straight play (target odds -190 to -110).
+     * Play 2: Multi-Window Tier 2 ($3.00 stake) — 2-to-3 leg cross-sport/cross-window floor parlay (target combined odds +120 to +240) with zero team overlap against Play 1.
 
-STRATEGY & AUDIT CONTEXT:
-{json.dumps(strategy_context, indent=2)}
+BANKROLL & STATIC UNIT RULES:
+{json.dumps(bankroll_context, indent=2)}
 
 TODAY'S LIVE ESPN SLATE:
 {json.dumps(slate, indent=2)}
@@ -173,11 +146,11 @@ Respond ONLY with valid JSON matching this exact schema:
       "play_type": "Core Tier 1 (SGP)",
       "consensus_total": "51.5",
       "target_under": "Under 58.5",
-      "favorite": "Home Team",
+      "favorite": "Favorite Team",
       "favorite_ml": "-450",
       "target_combined_odds": "-125",
       "rec_stake": 7,
-      "rationale": "Detailed analytical breakdown citing edge tags, cushion math, and mistake guardrails."
+      "rationale": "Objective matchup, pace, and line value breakdown."
     }}
   ]
 }}
@@ -213,10 +186,10 @@ Respond ONLY with valid JSON matching this exact schema:
 
 # --- 4. EXECUTION ENTRYPOINT ---
 if __name__ == "__main__":
-    print("Starting Daily Curation Engine with Edge & Mistake Feedback Loop...", flush=True)
+    print("Starting Daily Curation Engine (30-Day Baseline Collection Mode)...", flush=True)
     workbook = get_workbook()
-    strategy_context = load_strategy_context(workbook)
-    print(f"Loaded strategy context. Current Bankroll: ${strategy_context['current_bankroll']:.2f}", flush=True)
+    bankroll_context = load_bankroll_and_rules(workbook)
+    print(f"Loaded bankroll (${bankroll_context['current_bankroll']:.2f}) and static unit rules.", flush=True)
 
     slate = fetch_daily_slate()
     print(f"Scraped {len(slate)} upcoming matchups from ESPN.", flush=True)
@@ -225,7 +198,7 @@ if __name__ == "__main__":
         print("No pre-game matchups found on ESPN today. Exiting.", flush=True)
         exit(0)
 
-    recommendations = run_ai_curation(slate, strategy_context)
+    recommendations = run_ai_curation(slate, bankroll_context)
     print(f"Generated {len(recommendations)} curated plays.", flush=True)
 
     feed_ws = workbook.worksheet("Curator Feed")
