@@ -1,9 +1,11 @@
 import os
+import re
 import json
 import time
 import requests
 import gspread
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
 from google import genai
 from google.genai import types, errors
@@ -24,19 +26,6 @@ ESPN_ENDPOINTS = {
     "SERIEA": "https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard",
     "BUNDESLIGA": "https://site.api.espn.com/apis/site/v2/sports/soccer/ger.1/scoreboard",
     "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard"
-}
-
-SUMMARY_SPORT_PATHS = {
-    "CFB": "football/college-football",
-    "NFL": "football/nfl",
-    "NBA": "basketball/nba",
-    "NCAAM": "basketball/mens-college-basketball",
-    "NHL": "hockey/nhl",
-    "EPL": "soccer/eng.1",
-    "LALIGA": "soccer/esp.1",
-    "SERIEA": "soccer/ita.1",
-    "BUNDESLIGA": "soccer/ger.1",
-    "UCL": "soccer/uefa.champions"
 }
 
 # --- 1. GOOGLE SHEETS CONNECTION & POST-SETTLEMENT LOADER ---
@@ -90,49 +79,34 @@ def load_post_settlement_context(workbook):
         print(f"Warning: Could not read Unit & Tier Rules tab: {e}", flush=True)
         rules_rows = []
 
+    max_active_budget = round(current_bankroll * 0.50, 2)
+
     return {
         "current_bankroll": current_bankroll,
+        "max_active_exposure_50pct": max_active_budget,
         "pending_bets_remaining": pending_count,
-        "next_bet_ids": [f"BET-{next_bet_num:03d}", f"BET-{next_bet_num + 1:03d}", f"BET-{next_bet_num + 2:03d}"],
+        "next_bet_num": next_bet_num,
         "unit_tier_rules": rules_rows
     }
 
-# --- 2. DEEP ESPN SLATE SCRAPER (SPLITS, STATS, INJURIES, BPI/FPI) ---
-def fetch_event_enrichment(league, event_id):
-    path = SUMMARY_SPORT_PATHS.get(league)
-    if not path or not event_id:
-        return {}
-    url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/summary?event={event_id}"
+# --- 2. FAST SINGLE-PASS ESPN SLATE SCRAPER (WITH EST TIME SLOTS & SPLITS) ---
+def classify_est_window(iso_date_str):
     try:
-        res = requests.get(url, timeout=6)
-        if res.status_code != 200:
-            return {}
-        data = res.json()
-
-        # 1. Extract BPI/FPI Win Projection if available
-        predictor = data.get("predictor", {})
-        home_proj = predictor.get("homeTeam", {}).get("gameProjection", "N/A")
-        away_proj = predictor.get("awayTeam", {}).get("gameProjection", "N/A")
-
-        # 2. Extract Key Injuries (Out / Doubtful / Questionable)
-        injuries_summary = []
-        for team_inj in data.get("injuries", []):
-            t_name = team_inj.get("team", {}).get("abbreviation", "")
-            notable = []
-            for item in team_inj.get("injuries", [])[:5]:
-                athlete = item.get("athlete", {}).get("shortName", "")
-                status = item.get("status", "")
-                if athlete and status:
-                    notable.append(f"{athlete} ({status})")
-            if notable:
-                injuries_summary.append(f"{t_name}: {', '.join(notable)}")
-
-        return {
-            "espn_win_prob": f"Home {home_proj}% / Away {away_proj}%" if home_proj != "N/A" else "N/A",
-            "key_injuries": " | ".join(injuries_summary) if injuries_summary else "None listed"
-        }
+        dt_utc = datetime.fromisoformat(iso_date_str.replace("Z", "+00:00"))
+        dt_est = dt_utc.astimezone(ZoneInfo("America/New_York"))
+        est_str = dt_est.strftime("%Y-%m-%d %I:%M %p EST")
+        hour = dt_est.hour + (dt_est.minute / 60.0)
+        if hour < 15.0:
+            slot = "Window 1: Early / Noon (11:00 AM - 2:59 PM EST)"
+        elif hour < 18.5:
+            slot = "Window 2: Afternoon (3:00 PM - 6:29 PM EST)"
+        elif hour < 21.5:
+            slot = "Window 3: Primetime (6:30 PM - 9:29 PM EST)"
+        else:
+            slot = "Window 4: Late Night (9:30 PM+ EST)"
+        return est_str, slot
     except Exception:
-        return {}
+        return iso_date_str, "Unclassified Window"
 
 def extract_records(competitor):
     recs = {}
@@ -141,7 +115,7 @@ def extract_records(competitor):
         recs[name] = r.get("summary", "")
     return recs
 
-def extract_team_stats(competitor):
+def extract_stats(competitor):
     stats = {}
     for s in competitor.get("statistics", []):
         name = s.get("abbreviation") or s.get("name")
@@ -152,11 +126,12 @@ def extract_team_stats(competitor):
 
 def fetch_daily_slate():
     slate = []
-    today_utc = datetime.now(timezone.utc).strftime("%Y%m%d")
+    # Use EST date so 3:12 AM EST pulls today's US slate accurately
+    today_est = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d")
 
     for league, base_url in ESPN_ENDPOINTS.items():
         sep = "&" if "?" in base_url else "?"
-        url = f"{base_url}{sep}dates={today_utc}"
+        url = f"{base_url}{sep}dates={today_est}"
         try:
             res = requests.get(url, timeout=10)
             if res.status_code != 200:
@@ -171,7 +146,6 @@ def fetch_daily_slate():
             if status_state != "pre":
                 continue
 
-            event_id = event.get("id", "")
             comps = event.get("competitions", [])
             if not comps:
                 continue
@@ -185,85 +159,105 @@ def fetch_daily_slate():
             odds_list = comp.get("odds", [])
             odds_info = odds_list[0] if odds_list else {}
 
-            # Only enrich games that have active betting lines or high-profile matchups
-            enrichment = fetch_event_enrichment(league, event_id)
+            broadcasts = []
+            for b in comp.get("broadcasts", []):
+                broadcasts.extend(b.get("names", []))
+
+            est_time_str, time_window = classify_est_window(event.get("date", ""))
 
             slate.append({
                 "league": league,
                 "kickoff_utc": event.get("date", ""),
+                "kickoff_est": est_time_str,
+                "time_window": time_window,
+                "tv_broadcast": ", ".join(broadcasts) if broadcasts else "Streaming",
                 "matchup": f"{away.get('team', {}).get('displayName', '')} @ {home.get('team', {}).get('displayName', '')}",
                 "home_team": home.get("team", {}).get("displayName", ""),
-                "home_splits": extract_records(home),
-                "home_stats": extract_team_stats(home),
+                "home_rank": home.get("curatedRank", {}).get("current", 99),
+                "home_records": extract_records(home),
+                "home_stats": extract_stats(home),
                 "away_team": away.get("team", {}).get("displayName", ""),
-                "away_splits": extract_records(away),
-                "away_stats": extract_team_stats(away),
+                "away_rank": away.get("curatedRank", {}).get("current", 99),
+                "away_records": extract_records(away),
+                "away_stats": extract_stats(away),
                 "spread_details": odds_info.get("details", "N/A"),
                 "over_under": odds_info.get("overUnder", "N/A"),
                 "home_ml": odds_info.get("homeTeamOdds", {}).get("moneyLine", "N/A"),
                 "away_ml": odds_info.get("awayTeamOdds", {}).get("moneyLine", "N/A"),
-                "draw_ml": odds_info.get("drawOdds", {}).get("moneyLine", "N/A"),
-                "espn_win_prob": enrichment.get("espn_win_prob", "N/A"),
-                "key_injuries": enrichment.get("key_injuries", "None listed")
+                "draw_ml": odds_info.get("drawOdds", {}).get("moneyLine", "N/A")
             })
 
     return slate
 
-# --- 3. DYNAMIC AI CURATION (WITH GOOGLE SEARCH GROUNDING & FLEXIBLE SLOTS) ---
+# --- 3. ROBUST JSON EXTRACTOR ---
+def extract_json_payload(raw_text):
+    text = raw_text.strip()
+    if "```" in text:
+        blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+        if blocks:
+            text = blocks[0]
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+    return json.loads(text)
+
+# --- 4. MULTI-WINDOW AI CURATION ENGINE ---
 def run_ai_curation(slate, context):
     if not GEMINI_API_KEY:
         raise ValueError("Missing GEMINI_API_KEY environment variable.")
 
     client = genai.Client(api_key=GEMINI_API_KEY)
+    start_num = context["next_bet_num"]
 
     prompt = f"""
 You are the quantitative sports betting curator for a $100-to-$1,000 challenge.
-Yesterday's bets have been settled by settler.py, and today's enriched ESPN slate (with home/away splits, team stats, BPI/FPI win probabilities, and injury lists) has been scraped.
-
-USE GOOGLE SEARCH GROUNDING BEFORE FINALIZING PICKS:
-Verify rest advantages (back-to-backs), starting lineups/quarterbacks/goalies, pace/efficiency mismatches, and current consensus lines for your top candidates.
+Yesterday's bets have been settled by settler.py, and today's live ESPN slate (grouped into EST broadcast time windows with splits, stats, rankings, TV networks, and odds) is loaded below.
 
 OPERATIONAL MANDATES:
-1. NO FIXED BET SLOTS (DYNAMIC PORTFOLIO SELECTION):
-   - You are NOT forced to output 1 SGP and 1 Parlay.
-   - Choose the 1 to 3 plays across today's slate that provide the HIGHEST mathematical expected value (+EV) and win probability based on 'unit_tier_rules':
-     * Straight Spreads or Totals (-135 to +110)
-     * Correlated 2-Leg SGPs (Favorite ML/Spread + Alternate Total with +6.0 to +7.5 pts cushion in CFB/NFL or +8.0 to +10.0 pts in NBA/NCAAM)
-     * High-Floor 2-to-3 Leg Moneyline/Spread Parlays (+105 to +220)
-   - If the best board today is two Straight Bets, recommend two Straight Bets. If it is one Straight Bet, one Correlated SGP, and one 0.5U Parlay, recommend those.
-2. STRICT TIER 1 UNIT SIZING (Current Bankroll: ${context['current_bankroll']:.2f}, 1U = $4.00, Max Daily Risk = $10.00-$12.00 [2.5U-3.0U]):
-   - Core Plays (Straight Bets or High-Correlation 2-Leg SGPs): $6.00 to $8.00 (1.50U to 2.00U).
-   - Secondary Floor Parlays / Flyers (Rule 5): Max 1 parlay per day, capped strictly at $2.00 to $3.00 (0.50U to 0.75U).
-   - Total combined stake across all recommended plays today MUST NOT exceed $12.00 (3.0U).
-3. 30-DAY BASELINE DATA COLLECTION MODE:
-   - Do NOT apply arbitrary historical trend bans or home/road biases. Evaluate home and road sides objectively using splits, rest, injuries, and efficiency.
-4. SPORT-SPECIFIC MARKET HYGIENE (NHL & EUROPEAN SOCCER):
-   - European Soccer (EPL, La Liga, Serie A, Bundesliga, UCL) uses 3-way 90-minute lines where a regulation Draw loses a standard Moneyline. NEVER put a raw 3-way Soccer ML in a parlay unless intentionally pricing the draw risk; instead specify 'Draw No Bet (DNB)', 'Double Chance (Win or Draw)', or 'Over/Under Goals'.
-   - For NHL, explicitly state '2-Way ML (Inc. OT/SO)' rather than 60-minute regulation ML.
-5. RULE 3 (NO TEAM STACKING):
-   - Never include the same team or game across multiple recommended tickets.
+1. MULTI-WINDOW TIME-SLOT ACTION (NO 2-BET RESTRICTION):
+   - You are NOT restricted to 2 bets a day.
+   - Spread action across today's available broadcast time windows ('Window 1: Early / Noon', 'Window 2: Afternoon', 'Window 3: Primetime', 'Window 4: Late Night') whenever multiple windows have games on the slate.
+   - On full slates (like CFB Saturdays or NFL Sundays), recommend 3 to 5 plays covering each active time window (e.g., Noon, 3:30/4:30 PM, 7:30 PM, 10:00 PM EST). On lighter weekday slates, recommend 2 to 4 plays across the active evening/late windows.
+2. BANKROLL & 50% MAX ACTIVE EXPOSURE RULE:
+   - Current Settled Bankroll: ${context['current_bankroll']:.2f}
+   - Maximum Active Exposure (50% of Bankroll): ${context['max_active_exposure_50pct']:.2f}
+   - Total combined 'rec_stake' across all recommended plays today MUST NOT exceed ${context['max_active_exposure_50pct']:.2f}.
+   - Individual play sizing in Tier 1 (1U = $4.00):
+     * High-Conviction Core Plays (Straight Spreads, Straight Totals, or 2-Leg Correlated SGPs): $6.00 to $12.00 (1.5U to 3.0U) depending on edge and number of windows active today.
+     * Multi-Leg Parlays / Window Action Plays: $3.00 to $6.00 (0.75U to 1.5U).
+3. DYNAMIC BET STRUCTURES (NEVER FORCE FIXED SLOTS):
+   - Choose the highest-edge structure for each time window: Straight Spread, Straight Over/Under, 2-Leg Correlated SGP (Favorite ML/Spread + Alternate Over or Alternate Under with +6.0 to +7.5 pts cushion in CFB/NFL or +8.0 to +10.0 pts in NBA/NCAAM), or 2-to-3 Leg Moneyline/Spread Parlay.
+4. WATCHABILITY & OVERS AS SOFT TIEBREAKER (PROFIT IS #1 GOAL):
+   - Primary goal is growing the bankroll to $1,000 via objective mathematical edge (records, home/away splits, scoring efficiency, rest, injuries).
+   - Soft Tiebreaker: When two plays have similar +EV, prefer games with high watchability (nationally televised ABC/ESPN/FOX/CBS games, ranked matchups, SEC/Florida Gators, marquee NBA/NFL matchups) and look for high-scoring Over setups (or Alternate Over cushions in SGPs). However, NEVER force an Over if the Under or another matchup has a clearly superior edge.
+5. 30-DAY BASELINE DATA COLLECTION & MARKET HYGIENE:
+   - Do NOT apply arbitrary historical trend bans or home/road biases.
+   - Rule 3 (No Team Stacking): Never include the same team across multiple tickets.
+   - For Soccer, always specify 'Draw No Bet (DNB)', 'Double Chance', or 'Over/Under Goals' (avoid raw 3-way 90-min ties in parlays). For NHL, specify '2-Way ML (Inc. OT/SO)'.
+
+Number the 'bet_id' field sequentially starting at BET-{start_num:03d} (e.g., BET-{start_num:03d}, BET-{start_num+1:03d}, BET-{start_num+2:03d}...).
 
 POST-SETTLEMENT CONTEXT:
 {json.dumps(context, indent=2)}
 
-TODAY'S ENRICHED ESPN SLATE:
+TODAY'S LIVE ESPN SLATE (WITH EST TIME WINDOWS):
 {json.dumps(slate, indent=2)}
 
 Respond ONLY with valid JSON matching this exact schema:
 {{
   "recommendations": [
     {{
-      "bet_id": "{context['next_bet_ids'][0]}",
-      "kickoff_utc": "2026-11-14 00:00 UTC",
-      "matchup": "Away Team @ Home Team",
-      "play_type": "Core Tier 1 (Straight Spread / Straight Total / Correlated SGP)",
-      "consensus_total": "48.5",
-      "target_under": "Under 55.5 (or N/A for straight spread/ML)",
-      "favorite": "Exact Selection & Line (e.g. Pittsburgh -3.5 or UCLA ML + Alt Under 54.5)",
+      "bet_id": "BET-{start_num:03d}",
+      "kickoff_utc": "2026-11-13 19:00 EST (Window 3: Primetime)",
+      "matchup": "Away Team @ Home Team (TV Network)",
+      "play_type": "Window 3 Core (Straight / SGP / Parlay)",
+      "consensus_total": "54.5",
+      "target_under": "Alt Over 47.5 or Alt Under 61.5 or N/A",
+      "favorite": "Exact Selection & Line",
       "favorite_ml": "-110",
-      "target_combined_odds": "-110",
-      "rec_stake": 7,
-      "rationale": "Cite specific splits, injuries, rest, pace/efficiency edge, and why this bet structure beats alternative structures today."
+      "target_combined_odds": "-125",
+      "rec_stake": 8,
+      "rationale": "Time window, TV watchability, objective statistical/injury edge, and why Over/Under/Spread/SGP was chosen."
     }}
   ]
 }}
@@ -271,14 +265,12 @@ Respond ONLY with valid JSON matching this exact schema:
 
     models_to_try = [
         "gemini-2.5-flash",
-        "gemini-2.5-pro",
         "gemini-2.0-flash"
     ]
 
-    response = None
     for attempt, model_name in enumerate(models_to_try, start=1):
+        # Attempt A: With Google Search grounding for live injury/lineup checks
         try:
-            # First try with live Google Search grounding enabled
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -287,56 +279,55 @@ Respond ONLY with valid JSON matching this exact schema:
                     temperature=0.2
                 )
             )
-            break
-        except errors.ServerError as e:
-            print(f"Attempt {attempt} ({model_name}) hit 503 overload: {e}. Retrying in 15s...", flush=True)
-            time.sleep(15)
+            parsed = extract_json_payload(response.text)
+            if "recommendations" in parsed:
+                return parsed["recommendations"]
         except Exception as e:
-            print(f"Attempt {attempt} ({model_name} with Search) fallback due to: {e}", flush=True)
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.2
-                    )
+            print(f"Attempt {attempt} ({model_name} + Search) fallback: {e}", flush=True)
+
+        # Attempt B: Strict JSON MIME mode (Guaranteed valid JSON)
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2
                 )
-                break
-            except Exception as e2:
-                print(f"Fallback attempt failed: {e2}", flush=True)
-                time.sleep(10)
+            )
+            parsed = extract_json_payload(response.text)
+            if "recommendations" in parsed:
+                return parsed["recommendations"]
+        except Exception as e2:
+            print(f"Attempt {attempt} ({model_name} strict JSON) failed: {e2}", flush=True)
+            time.sleep(10)
 
-    if response is None:
-        raise RuntimeError("All Gemini model attempts failed.")
+    raise RuntimeError("All Gemini model attempts failed.")
 
-    raw_text = response.text.strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```")[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:].strip()
-
-    return json.loads(raw_text).get("recommendations", [])
-
-# --- 4. EXECUTION ENTRYPOINT ---
+# --- 5. EXECUTION ENTRYPOINT ---
 if __name__ == "__main__":
-    print("Step 2: Starting Enriched Dynamic Curation Engine...", flush=True)
+    print("Step 2: Starting Multi-Window Dynamic Curation Engine...", flush=True)
     workbook = get_workbook()
     context = load_post_settlement_context(workbook)
-    print(f"Verified Post-Settlement Bankroll: ${context['current_bankroll']:.2f} | Pending Bets Left: {context['pending_bets_remaining']}", flush=True)
+    print(
+        f"Bankroll: ${context['current_bankroll']:.2f} | "
+        f"50% Max Exposure Budget: ${context['max_active_exposure_50pct']:.2f} | "
+        f"Next ID: BET-{context['next_bet_num']:03d}",
+        flush=True
+    )
 
     slate = fetch_daily_slate()
-    print(f"Scraped & enriched {len(slate)} matchups for today from ESPN.", flush=True)
+    print(f"Scraped {len(slate)} upcoming matchups for today (EST) from ESPN.", flush=True)
 
     if not slate:
         print("No pre-game matchups found on ESPN for today's date. Exiting.", flush=True)
         exit(0)
 
     recommendations = run_ai_curation(slate, context)
-    print(f"Generated {len(recommendations)} dynamic play(s) for today.", flush=True)
+    print(f"Generated {len(recommendations)} multi-window play(s) for today.", flush=True)
 
     feed_ws = workbook.worksheet("Curator Feed")
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
     rows_to_append = []
     for rec in recommendations:
