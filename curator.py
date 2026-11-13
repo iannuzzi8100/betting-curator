@@ -43,6 +43,58 @@ def get_workbook():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
+def get_tier_parameters(bankroll):
+    if bankroll < 50.0:
+        return {
+            "tier_name": "Survival Tier (<$50)",
+            "base_unit": 2.00,
+            "core_min": 3.00,
+            "core_max": 6.00,
+            "parlay_min": 1.50,
+            "parlay_max": 3.00,
+            "max_active_exposure": round(bankroll * 0.50, 2)
+        }
+    elif bankroll < 250.0:
+        return {
+            "tier_name": "Tier 1 ($50-$249.99)",
+            "base_unit": 4.00,
+            "core_min": 6.00,
+            "core_max": 12.00,
+            "parlay_min": 3.00,
+            "parlay_max": 6.00,
+            "max_active_exposure": round(bankroll * 0.50, 2)
+        }
+    elif bankroll < 500.0:
+        return {
+            "tier_name": "Tier 2 ($250-$499.99)",
+            "base_unit": 10.00,
+            "core_min": 15.00,
+            "core_max": 30.00,
+            "parlay_min": 7.50,
+            "parlay_max": 15.00,
+            "max_active_exposure": round(bankroll * 0.50, 2)
+        }
+    elif bankroll < 750.0:
+        return {
+            "tier_name": "Tier 3 ($500-$749.99)",
+            "base_unit": 20.00,
+            "core_min": 30.00,
+            "core_max": 60.00,
+            "parlay_min": 15.00,
+            "parlay_max": 30.00,
+            "max_active_exposure": round(bankroll * 0.50, 2)
+        }
+    else:
+        return {
+            "tier_name": "Tier 4 ($750-$1,000+)",
+            "base_unit": 30.00,
+            "core_min": 45.00,
+            "core_max": 90.00,
+            "parlay_min": 22.50,
+            "parlay_max": 45.00,
+            "max_active_exposure": round(bankroll * 0.50, 2)
+        }
+
 def load_post_settlement_context(workbook):
     tracker_ws = workbook.worksheet("Challenge Tracker ($100-$1k)")
     tracker_rows = tracker_ws.get_all_values()
@@ -79,11 +131,11 @@ def load_post_settlement_context(workbook):
         print(f"Warning: Could not read Unit & Tier Rules tab: {e}", flush=True)
         rules_rows = []
 
-    max_active_budget = round(current_bankroll * 0.50, 2)
+    tier_params = get_tier_parameters(current_bankroll)
 
     return {
         "current_bankroll": current_bankroll,
-        "max_active_exposure_50pct": max_active_budget,
+        "tier_parameters": tier_params,
         "pending_bets_remaining": pending_count,
         "next_bet_num": next_bet_num,
         "unit_tier_rules": rules_rows
@@ -207,32 +259,34 @@ def run_ai_curation(slate, context):
 
     client = genai.Client(api_key=GEMINI_API_KEY)
     start_num = context["next_bet_num"]
+    tp = context["tier_parameters"]
 
     prompt = f"""
 You are the quantitative sports betting curator for a $100-to-$1,000 challenge.
 Yesterday's bets have been settled by settler.py, and today's live ESPN slate (grouped into EST broadcast time windows with splits, stats, rankings, TV networks, and odds) is loaded below.
 
 OPERATIONAL MANDATES:
-1. MULTI-WINDOW TIME-SLOT ACTION (NO 2-BET RESTRICTION):
-   - You are NOT restricted to 2 bets a day.
+1. MULTI-WINDOW TIME-SLOT ACTION (NO 2-BET RESTRICTION & NO LOSS FREEZES):
    - Spread action across today's available broadcast time windows ('Window 1: Early / Noon', 'Window 2: Afternoon', 'Window 3: Primetime', 'Window 4: Late Night') whenever multiple windows have games on the slate.
-   - On full slates (like CFB Saturdays or NFL Sundays), recommend 3 to 5 plays covering each active time window (e.g., Noon, 3:30/4:30 PM, 7:30 PM, 10:00 PM EST). On lighter weekday slates, recommend 2 to 4 plays across the active evening/late windows.
-2. BANKROLL & 50% MAX ACTIVE EXPOSURE RULE:
-   - Current Settled Bankroll: ${context['current_bankroll']:.2f}
-   - Maximum Active Exposure (50% of Bankroll): ${context['max_active_exposure_50pct']:.2f}
-   - Total combined 'rec_stake' across all recommended plays today MUST NOT exceed ${context['max_active_exposure_50pct']:.2f}.
-   - Individual play sizing in Tier 1 (1U = $4.00):
-     * High-Conviction Core Plays (Straight Spreads, Straight Totals, or 2-Leg Correlated SGPs): $6.00 to $12.00 (1.5U to 3.0U) depending on edge and number of windows active today.
-     * Multi-Leg Parlays / Window Action Plays: $3.00 to $6.00 (0.75U to 1.5U).
-3. DYNAMIC BET STRUCTURES (NEVER FORCE FIXED SLOTS):
+   - On full slates (like CFB Saturdays or NFL Sundays), recommend 3 to 5 plays covering each active time window (Noon, 3:30/4:30 PM, 7:30 PM, 10:00 PM EST). On lighter weekday slates, recommend 2 to 4 plays across active windows.
+2. BANKROLL, TIER & 50% MAX ACTIVE EXPOSURE RULE:
+   - Active Tier: {tp['tier_name']} | Settled Bankroll: ${context['current_bankroll']:.2f} | 1U = ${tp['base_unit']:.2f}
+   - Maximum Active Exposure (50% of Bankroll): ${tp['max_active_exposure']:.2f}
+   - Total combined 'rec_stake' across all recommended plays today MUST NOT exceed ${tp['max_active_exposure']:.2f}.
+   - Core Plays (Straight Spreads, Straight Totals, or 2-Leg Correlated SGPs): ${tp['core_min']:.2f} to ${tp['core_max']:.2f} (1.5U to 3.0U).
+   - Parlays / Window Action Plays: ${tp['parlay_min']:.2f} to ${tp['parlay_max']:.2f} (0.75U to 1.5U).
+3. RULE 8 (MAX JUICE & PARLAY LEG CAP):
+   - Straight bets MUST have odds of -140 or better (e.g., -135, -110, +105; NEVER recommend a -180 or -300 straight ML).
+   - Individual legs inside a Parlay or SGP MUST have odds of -450 or better (NEVER include -500 or -700 heavy favorites), and parlays are capped at a maximum of 3 legs.
+4. DYNAMIC BET STRUCTURES (NEVER FORCE FIXED SLOTS):
    - Choose the highest-edge structure for each time window: Straight Spread, Straight Over/Under, 2-Leg Correlated SGP (Favorite ML/Spread + Alternate Over or Alternate Under with +6.0 to +7.5 pts cushion in CFB/NFL or +8.0 to +10.0 pts in NBA/NCAAM), or 2-to-3 Leg Moneyline/Spread Parlay.
-4. WATCHABILITY & OVERS AS SOFT TIEBREAKER (PROFIT IS #1 GOAL):
+5. WATCHABILITY & OVERS AS SOFT TIEBREAKER (PROFIT IS #1 GOAL):
    - Primary goal is growing the bankroll to $1,000 via objective mathematical edge (records, home/away splits, scoring efficiency, rest, injuries).
-   - Soft Tiebreaker: When two plays have similar +EV, prefer games with high watchability (nationally televised ABC/ESPN/FOX/CBS games, ranked matchups, SEC/Florida Gators, marquee NBA/NFL matchups) and look for high-scoring Over setups (or Alternate Over cushions in SGPs). However, NEVER force an Over if the Under or another matchup has a clearly superior edge.
-5. 30-DAY BASELINE DATA COLLECTION & MARKET HYGIENE:
+   - Soft Tiebreaker: When two plays have similar +EV, prefer games with high watchability (nationally televised ABC/ESPN/FOX/CBS games, ranked matchups, SEC/Florida Gators, marquee NBA/NFL matchups) and look for high-scoring Over setups (or Alternate Over cushions in SGPs). Never force an Over if the Under or another matchup has a clearly superior edge.
+6. 30-DAY BASELINE DATA COLLECTION & MARKET HYGIENE:
    - Do NOT apply arbitrary historical trend bans or home/road biases.
    - Rule 3 (No Team Stacking): Never include the same team across multiple tickets.
-   - For Soccer, always specify 'Draw No Bet (DNB)', 'Double Chance', or 'Over/Under Goals' (avoid raw 3-way 90-min ties in parlays). For NHL, specify '2-Way ML (Inc. OT/SO)'.
+   - For Soccer, always specify 'Draw No Bet (DNB)', 'Double Chance', or 'Over/Under Goals'. For NHL, specify '2-Way ML (Inc. OT/SO)'.
 
 Number the 'bet_id' field sequentially starting at BET-{start_num:03d} (e.g., BET-{start_num:03d}, BET-{start_num+1:03d}, BET-{start_num+2:03d}...).
 
@@ -254,7 +308,7 @@ Respond ONLY with valid JSON matching this exact schema:
       "target_under": "Alt Over 47.5 or Alt Under 61.5 or N/A",
       "favorite": "Exact Selection & Line",
       "favorite_ml": "-110",
-      "target_combined_odds": "-125",
+      "target_combined_odds": "-110",
       "rec_stake": 8,
       "rationale": "Time window, TV watchability, objective statistical/injury edge, and why Over/Under/Spread/SGP was chosen."
     }}
@@ -297,9 +351,10 @@ if __name__ == "__main__":
     print("Step 2: Starting Multi-Window Dynamic Curation Engine...", flush=True)
     workbook = get_workbook()
     context = load_post_settlement_context(workbook)
+    tp = context["tier_parameters"]
     print(
-        f"Bankroll: ${context['current_bankroll']:.2f} | "
-        f"50% Max Exposure Budget: ${context['max_active_exposure_50pct']:.2f} | "
+        f"Tier: {tp['tier_name']} | Bankroll: ${context['current_bankroll']:.2f} | "
+        f"50% Max Exposure Budget: ${tp['max_active_exposure']:.2f} | "
         f"Next ID: BET-{context['next_bet_num']:03d}",
         flush=True
     )
