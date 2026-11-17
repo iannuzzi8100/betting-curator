@@ -9,7 +9,7 @@ from google import genai
 
 # Environment / GitHub Secrets
 GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
-SHEET_ID = os.environ.get("MASTER_SHEET_ID", "1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8")
+SHEET_ID = os.environ.get("MASTER_SHEET_ID", "")
 INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -49,15 +49,10 @@ def read_tracker_context(gc):
     rules_rows = rules_ws.get_all_values()
     audit_rows = audit_ws.get_all_values()
 
-    # Extract current settled bankroll & active exposure from summary header (rows 5-7)
-    summary_block = "
-".join([" | ".join(r[:15]) for r in tracker_rows[:12]])
-    recent_bets = "
-".join([" | ".join(r[:16]) for r in tracker_rows[-15:]])
-    rules_text = "
-".join([" | ".join(r[:8]) for r in rules_rows])
-    audit_text = "
-".join([" | ".join(r[:8]) for r in audit_rows])
+    summary_block = "\n".join([" | ".join(r[:15]) for r in tracker_rows[:12]])
+    recent_bets = "\n".join([" | ".join(r[:16]) for r in tracker_rows[-15:]])
+    rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
+    audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 
     return summary_block, recent_bets, rules_text, audit_text
 
@@ -133,8 +128,7 @@ def append_to_curator_feed(gc, today_str, curated_message):
 
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram credentials missing. Alert text:
-", message)
+        print("Telegram credentials missing. Alert text:\n", message)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {

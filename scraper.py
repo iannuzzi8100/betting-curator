@@ -3,8 +3,6 @@ import re
 import json
 import datetime
 import requests
-import feedparser
-from dateutil import parser as date_parser
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -49,7 +47,6 @@ ESPN_ENDPOINTS = {
     },
 }
 
-# 14 Target YouTube Channels (Name -> Search/Handle URL for yt-dlp recent upload lookup)
 YOUTUBE_CHANNELS = [
     {"name": "SportsLine", "url": "https://www.youtube.com/@SportsLine/videos"},
     {"name": "BettingPros", "url": "https://www.youtube.com/@BettingPros/videos"},
@@ -124,7 +121,6 @@ def fetch_hardrock_odds():
 def fetch_espn_intel():
     intel_lines = []
     for league, urls in ESPN_ENDPOINTS.items():
-        # Breaking News
         try:
             news_resp = requests.get(urls["news"], timeout=12).json()
             articles = news_resp.get("articles", [])[:6]
@@ -136,7 +132,6 @@ def fetch_espn_intel():
         except Exception:
             pass
 
-        # Injuries
         if "injuries" in urls:
             try:
                 inj_resp = requests.get(urls["injuries"], timeout=12).json()
@@ -176,7 +171,7 @@ def fetch_youtube_transcripts():
                         continue
                     vid_id = vid.get("id")
                     title = vid.get("title", "")
-                    upload_date = vid.get("upload_date")  # YYYYMMDD if available
+                    upload_date = vid.get("upload_date")
                     if upload_date:
                         dt = datetime.datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=datetime.timezone.utc)
                         if dt < cutoff - datetime.timedelta(days=1):
@@ -185,8 +180,7 @@ def fetch_youtube_transcripts():
                         transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
                         full_text = " ".join(chunk["text"] for chunk in transcript_list)
                         condensed = re.sub(r"\s+", " ", full_text)[:3500]
-                        yt_lines.append(f"- [{ch['name']}] {title} (https://youtu.be/{vid_id})
-  Transcript Extract: {condensed}")
+                        yt_lines.append(f"- [{ch['name']}] {title} (https://youtu.be/{vid_id})\n  Transcript Extract: {condensed}")
                     except Exception:
                         yt_lines.append(f"- [{ch['name']}] {title} (https://youtu.be/{vid_id}) [No captions available]")
         except Exception as exc:
@@ -204,28 +198,21 @@ def update_rolling_google_doc(today_str, section_body):
     doc = service.documents().get(documentId=INTEL_DOC_ID).execute()
     content = doc.get("body", {}).get("content", [])
 
-    # Locate Rolling Daily Slate Entries anchor and prune sections older than 7 days
     cutoff_date = (datetime.date.fromisoformat(today_str) - datetime.timedelta(days=7)).isoformat()
     full_text = ""
-    anchor_index = 1
 
     for elem in content:
         para = elem.get("paragraph")
         if not para:
             continue
-        start_idx = elem.get("startIndex", 1)
         text = "".join(r.get("textRun", {}).get("content", "") for r in para.get("elements", []))
         full_text += text
-        if "Rolling Daily Slate Entries" in text:
-            anchor_index = elem.get("endIndex", start_idx)
 
-    # Find any dated headers older than 7 days to delete
     requests_batch = []
     date_headers = list(re.finditer(r"(\d{4}-\d{2}-\d{2}) Slate Intel", full_text))
-    for i, match in enumerate(date_headers):
+    for match in date_headers:
         sec_date = match.group(1)
         if sec_date < cutoff_date:
-            # Locate exact document indices for pruning
             sec_start = None
             sec_end = content[-1].get("endIndex", 1) - 1
             for elem in content:
@@ -246,13 +233,11 @@ def update_rolling_google_doc(today_str, section_body):
                 })
 
     if requests_batch:
-        # Execute deletions in reverse order so indices stay valid
         requests_batch.reverse()
         service.documents().batchUpdate(
             documentId=INTEL_DOC_ID, body={"requests": requests_batch}
         ).execute()
 
-    # Re-fetch anchor after pruning and insert today's fresh slate intel at the top
     doc = service.documents().get(documentId=INTEL_DOC_ID).execute()
     insert_idx = 1
     for elem in doc.get("body", {}).get("content", []):
@@ -270,9 +255,7 @@ def update_rolling_google_doc(today_str, section_body):
                 {
                     "insertText": {
                         "location": {"index": insert_idx},
-                        "text": f"
-{section_body}
-",
+                        "text": f"\n{section_body}\n",
                     }
                 }
             ]
@@ -288,27 +271,14 @@ def main():
     yt_lines = fetch_youtube_transcripts()
 
     section_body = (
-        f"## {today_str} Slate Intel
-
-"
-        f"### 1. Hard Rock Bet vs. Sharp Market Odds
-"
-        + "
-".join(odds_lines)
-        + "
-
-### 2. ESPN Breaking News & Injury Alerts
-"
-        + "
-".join(espn_lines)
-        + "
-
-### 3. Curated YouTube Channel Transcripts & Angles
-"
-        + "
-".join(yt_lines)
-        + "
-"
+        f"## {today_str} Slate Intel\n\n"
+        f"### 1. Hard Rock Bet vs. Sharp Market Odds\n"
+        + "\n".join(odds_lines)
+        + "\n\n### 2. ESPN Breaking News & Injury Alerts\n"
+        + "\n".join(espn_lines)
+        + "\n\n### 3. Curated YouTube Channel Transcripts & Angles\n"
+        + "\n".join(yt_lines)
+        + "\n"
     )
     update_rolling_google_doc(today_str, section_body)
 
