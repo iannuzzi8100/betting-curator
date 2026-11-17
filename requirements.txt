@@ -1,4 +1,9 @@
-requests
-gspread
-google-auth
-scipy
+requests>=2.31.0
+gspread>=6.1.2
+google-auth>=2.35.0
+google-api-python-client>=2.149.0
+google-genai>=1.0.0
+yt-dlp>=2024.11.4
+youtube-transcript-api>=0.6.2
+feedparser>=6.0.11
+python-dateutil>=2.9.0
