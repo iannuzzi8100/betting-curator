@@ -51,7 +51,7 @@ def read_tracker_context(gc):
     audit_rows = audit_ws.get_all_values()
 
     summary_block = "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
-    recent_bets = "\n".join([" | ".join(r[:20]) for r in tracker_rows[-15:]])
+    recent_bets = "\n".join([" | ".join(r[:20]) for r in tracker_rows[-18:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 
@@ -64,7 +64,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         http_options=types.HttpOptions(api_version="v1beta"),
     )
     prompt = f"""
-You are the Argon Quantitative Sports Betting Curation Engine for the $100 to $1,000 Hard Rock Bet Challenge.
+You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using Fractional Kelly staking.
 Today's Date: {today_str}
 
 ### 1. LIVE BANKROLL & RECENT LEDGER
@@ -73,42 +73,48 @@ Today's Date: {today_str}
 Recent Bets:
 {recent_bets}
 
-### 2. UNIT & TIER RULES (STRICT ENFORCEMENT)
-{rules_text}
-
-### 3. STRATEGY EDGE & MISTAKE AUDIT
+### 2. HISTORICAL MISTAKE AUDIT
 {audit_text}
 
-### 4. ROLLING 7-DAY SCRAPED SLATE INTEL
-{intel_text[:28000]}
+### 3. SCRAPED SLATE INTEL (GAME ODDS + 1H LINES + NO-VIG +EV% + PLAYER PROPS + INJURIES + YOUTUBE CONSENSUS)
+{intel_text[:32000]}
 
-### TASK & HARD CONSTRAINTS:
-1. Determine exact Settled Bankroll and Active Tier from the ledger:
-   - Settled Bankroll < $50.00 -> SURVIVAL TIER ($2.00 unit, straight bets only, ZERO parlays).
-   - Settled Bankroll $50.00-$249.99 -> TIER 1 ($4.00 unit, Core straights $6.00-$12.00).
-2. Enforce Rule 1: Total active exposure MUST NOT exceed 50% of settled bankroll minus pending bets.
-3. Enforce Rule 8: Max juice -140 on straights; avoid .5 hooks on key numbers 3, 7, 10.
-4. Enforce Rule 5: Max 2 correlated legs on any SGP/parlay.
+### OBJECTIVE & ALLOCATION ENGINE (MAXIMIZE BANKROLL GROWTH VELOCITY):
+1. Calculate exact **Available Bankroll** (Settled Balance minus Pending Wagers).
+2. Scan ALL markets across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
+   - **Pre-Computed `[+EV: ...]` Straights & 1st-Half Lines** (prioritize lines with verified positive mathematical EV vs Pinnacle/DraftKings).
+   - **+EV Player Props** (line discrepancies or +2%+ EV vs sharp books).
+   - **Correlated Same-Game Parlays (2 legs):**
+     * NBA/CBB Favorite -7.5 or higher + Game Over (blowout pace correlation) OR Underdog +8.5 + Game Under.
+     * NHL Underdog Moneyline + Game Under 5.5 (low-scoring goalie upset correlation).
+   - **Cross-Sport Multi-Leg Parlays (2 to 4 legs):** Combine highest-conviction +EV picks or dominant mismatches across different leagues/teams.
+3. Rank the **Top 1 to 4 Best Bets of the Day** and size stakes via **Fractional Kelly** based on edge quality:
+   - **A+ Single Play (>6% mathematical EV or massive injury mismatch):** Stake **15%–25%** of Available Bankroll.
+   - **A Core Play / Player Prop (2.5%–6% EV):** Stake **8%–15%** of Available Bankroll.
+   - **Correlated SGP / Cross-Sport Parlay (2–4 legs):** Stake **5%–10%** of Available Bankroll for asymmetric growth.
+   - Total deployed across today's slate can reach up to **75% of Available Bankroll** when multiple strong edges exist simultaneously (or **0%** if Available Bankroll < $4.00).
+4. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]` so the user confirms active status before locking it in on Hard Rock Bet.
 
-### STRICT TELEGRAM FORMATTING RULES (CLEAN & MINIMAL):
-- Output ONLY the compact template below. ZERO extra commentary, NO paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
-- Use short team names (e.g., "Spurs", "Sharks", "Knicks").
-- For every parlay/SGP (both Pending and New), list each pick on its own clean sub-line (`  - Pick (Odds)`).
+### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
+- Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
+- Use short team/player names.
+- Every parlay/SGP (both Pending and New) MUST list each pick on its own indented sub-line (`  - Pick (Odds)`).
 
 🎯 *{today_str} Hard Rock Bet Slate*
-Bankroll: $XX.XX | Tier: [Tier] | Available: $X.XX
+Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
-*Pending ($XX.XX / $XX.XX Cap):*
+*Pending ($XX.XX):*
 • *BET-XXX* ($X.XX) — [Straight Pick (Odds)]
 • *BET-XXX* ($X.XX) — [Parlay Title (Total Odds)]
   - [Pick 1 (Odds)]
   - [Pick 2 (Odds)]
 
-*Today's Plays:*
-• *[League] Selection (Odds)* — *$X.XX* (X.XU)
-  - Edge: [1 short sentence max]
+*Today's Best EV Plays:*
+1. *[Play Type] Selection (Odds)* — *$X.XX*
+   - [If Parlay/SGP: list each leg on its own sub-line]
+   - Edge: [1 short line: No-Vig EV%, sharp delta, or injury edge]
 
-(If no new plays qualify, write ONLY: `• None — exposure near 50% cap.` with zero extra sentences.)
+(If Available Bankroll < $4.00, output ONLY: `• Holding — waiting for pending slate to settle before deploying capital.`)
 """
     candidate_models = [
         "gemini-3.1-flash-lite",

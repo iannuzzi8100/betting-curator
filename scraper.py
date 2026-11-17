@@ -13,13 +13,36 @@ ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "")
 INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID", "")
 GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
 
+# Expanded to include high-edge niche leagues (EPL, UCL, ATP/WTA) alongside core US sports
 SPORTS_ODDS_KEYS = [
     "basketball_nba",
     "icehockey_nhl",
     "basketball_ncaab",
     "americanfootball_ncaaf",
     "americanfootball_nfl",
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "tennis_atp_finals",
+    "tennis_wta_finals",
 ]
+
+# Markets with 1st-Half lines enabled for NBA & CBB (softer than full-game lines)
+MARKETS_BY_SPORT = {
+    "basketball_nba": "h2h,spreads,totals,spreads_h1,totals_h1",
+    "basketball_ncaab": "h2h,spreads,totals,spreads_h1,totals_h1",
+    "icehockey_nhl": "h2h,spreads,totals",
+    "americanfootball_ncaaf": "h2h,spreads,totals,spreads_h1",
+    "americanfootball_nfl": "h2h,spreads,totals,spreads_h1",
+    "soccer_epl": "h2h,totals",
+    "soccer_uefa_champs_league": "h2h,totals",
+    "tennis_atp_finals": "h2h",
+    "tennis_wta_finals": "h2h",
+}
+
+PROP_MARKETS_BY_SPORT = {
+    "basketball_nba": "player_points,player_rebounds,player_assists,player_points_rebounds_assists",
+    "icehockey_nhl": "player_points,player_shots_on_goal",
+}
 
 ESPN_ENDPOINTS = {
     "NBA": {
@@ -60,9 +83,39 @@ YOUTUBE_CHANNELS = [
     {"name": "Deep Dive Podcast", "url": "https://www.youtube.com/@TheDeepDivePodcast/videos"},
     {"name": "Shane Huang", "url": "https://www.youtube.com/@ShaneHuang/videos"},
     {"name": "OddsJam", "url": "https://www.youtube.com/@OddsJam/videos"},
-    {"name": "Late Kick with Josh Pate", "url": "https://www.youtube.com/@LateKickJosh/videos"},
+    {"name": "Josh Pate CFB", "url": "https://www.youtube.com/@JoshPateCFB/videos"},
     {"name": "Land Your Bets", "url": "https://www.youtube.com/@LandYourBets/videos"},
 ]
+
+
+def american_to_implied(odds):
+    if odds < 0:
+        return abs(odds) / (abs(odds) + 100.0)
+    return 100.0 / (odds + 100.0)
+
+
+def american_to_decimal(odds):
+    if odds < 0:
+        return 1.0 + (100.0 / abs(odds))
+    return 1.0 + (odds / 100.0)
+
+
+def compute_novig_ev(hr_price, sharp_price_target, sharp_price_opp):
+    """Strips vig from sharp 2-way line and calculates exact EV% and Quarter-Kelly% for Hard Rock price."""
+    imp_target = american_to_implied(sharp_price_target)
+    imp_opp = american_to_implied(sharp_price_opp)
+    total_imp = imp_target + imp_opp
+    if total_imp <= 0:
+        return 0.0, 0.0, 0.0
+    fair_prob = imp_target / total_imp
+    hr_dec = american_to_decimal(hr_price)
+    ev_pct = ((fair_prob * hr_dec) - 1.0) * 100.0
+    # Quarter Kelly fraction: 0.25 * ((b * p - q) / b)
+    b = hr_dec - 1.0
+    q = 1.0 - fair_prob
+    full_kelly = ((b * fair_prob) - q) / b if b > 0 else 0.0
+    q_kelly_pct = max(0.0, full_kelly * 0.25 * 100.0)
+    return round(fair_prob * 100.0, 1), round(ev_pct, 2), round(q_kelly_pct, 1)
 
 
 def get_docs_service():
@@ -73,16 +126,21 @@ def get_docs_service():
     return build("docs", "v1", credentials=creds)
 
 
-def fetch_hardrock_odds():
+def fetch_hardrock_odds_and_props():
     if not ODDS_API_KEY:
-        return ["[WARNING] ODDS_API_KEY not configured."]
-    lines = []
+        return ["[WARNING] ODDS_API_KEY not configured."], ["- No prop data retrieved."]
+
+    game_lines = []
+    prop_lines = []
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    cutoff_utc = now_utc + datetime.timedelta(hours=30)
+
     for sport_key in SPORTS_ODDS_KEYS:
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
         params = {
             "apiKey": ODDS_API_KEY,
-            "regions": "us",
-            "markets": "h2h,spreads,totals",
+            "regions": "us,eu",
+            "markets": MARKETS_BY_SPORT.get(sport_key, "h2h,spreads,totals"),
             "oddsFormat": "american",
             "bookmakers": "hardrockbet,pinnacle,draftkings",
         }
@@ -91,31 +149,132 @@ def fetch_hardrock_odds():
             if resp.status_code != 200:
                 continue
             games = resp.json()
+            todays_event_ids = []
+
             for g in games:
                 home = g.get("home_team")
                 away = g.get("away_team")
                 commence = g.get("commence_time", "")
+                event_id = g.get("id")
+
                 hr_book = next((b for b in g.get("bookmakers", []) if b["key"] == "hardrockbet"), None)
-                pin_book = next((b for b in g.get("bookmakers", []) if b["key"] in ("pinnacle", "draftkings")), None)
+                # Prefer Pinnacle as sharpest global book, fallback to DraftKings
+                sharp_book = next((b for b in g.get("bookmakers", []) if b["key"] == "pinnacle"), None) or next(
+                    (b for b in g.get("bookmakers", []) if b["key"] == "draftkings"), None
+                )
                 if not hr_book:
                     continue
+
+                if commence and event_id:
+                    try:
+                        c_dt = datetime.datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                        if now_utc <= c_dt <= cutoff_utc:
+                            todays_event_ids.append((event_id, f"{away} @ {home}"))
+                    except Exception:
+                        pass
+
+                # Build sharp lookup for exact No-Vig devigging
+                sharp_markets = {}
+                if sharp_book:
+                    for m in sharp_book.get("markets", []):
+                        sharp_markets[m["key"]] = m.get("outcomes", [])
+
                 hr_summary = []
+                ev_tags = []
                 for m in hr_book.get("markets", []):
-                    outcomes = ", ".join(
-                        f"{o['name']} {o.get('point', '')} ({o['price']:+d})".strip()
-                        for o in m.get("outcomes", [])
-                    )
-                    hr_summary.append(f"{m['key'].upper()}: [{outcomes}]")
-                pin_note = ""
-                if pin_book:
-                    pin_spread = next((m for m in pin_book.get("markets", []) if m["key"] == "spreads"), None)
-                    if pin_spread:
-                        p_out = ", ".join(f"{o['name']} {o.get('point')} ({o['price']:+d})" for o in pin_spread["outcomes"])
-                        pin_note = f" | Sharp Ref ({pin_book['key']}): {p_out}"
-                lines.append(f"- [{sport_key}] {away} @ {home} ({commence}) -> Hard Rock: {' ; '.join(hr_summary)}{pin_note}")
+                    m_key = m["key"]
+                    outcomes_str = []
+                    s_outs = sharp_markets.get(m_key, [])
+
+                    for o in m.get("outcomes", []):
+                        o_name = o["name"]
+                        o_pt = o.get("point")
+                        o_price = o["price"]
+                        outcomes_str.append(f"{o_name} {o_pt if o_pt is not None else ''} ({o_price:+d})".strip())
+
+                        # Compute exact No-Vig EV if sharp book has matching 2-way line
+                        if len(s_outs) == 2:
+                            s_match = next((x for x in s_outs if x["name"] == o_name and x.get("point") == o_pt), None)
+                            s_other = next((x for x in s_outs if x["name"] != o_name), None)
+                            if s_match and s_other:
+                                fair_p, ev_pct, q_kelly = compute_novig_ev(o_price, s_match["price"], s_other["price"])
+                                if ev_pct >= 1.5:
+                                    ev_tags.append(
+                                        f"[+EV: {m_key.upper()} {o_name} {o_pt if o_pt is not None else ''} @ {o_price:+d} | "
+                                        f"FairWin: {fair_p}% | EV: +{ev_pct}% | 1/4-Kelly: {q_kelly}%]"
+                                    )
+
+                    hr_summary.append(f"{m_key.upper()}: [{', '.join(outcomes_str)}]")
+
+                ev_banner = (" -> " + " ".join(ev_tags)) if ev_tags else ""
+                sharp_label = sharp_book["key"] if sharp_book else "none"
+                game_lines.append(
+                    f"- [{sport_key}] {away} @ {home} ({commence}) [SharpRef: {sharp_label}] -> {' ; '.join(hr_summary)}{ev_banner}"
+                )
+
+            # Fetch Player Props for up to 5 today-slate games in NBA & NHL
+            if sport_key in PROP_MARKETS_BY_SPORT and todays_event_ids:
+                for ev_id, matchup in todays_event_ids[:5]:
+                    ev_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{ev_id}/odds"
+                    ev_params = {
+                        "apiKey": ODDS_API_KEY,
+                        "regions": "us,eu",
+                        "markets": PROP_MARKETS_BY_SPORT[sport_key],
+                        "oddsFormat": "american",
+                        "bookmakers": "hardrockbet,pinnacle,draftkings",
+                    }
+                    try:
+                        p_resp = requests.get(ev_url, params=ev_params, timeout=15)
+                        if p_resp.status_code != 200:
+                            continue
+                        p_data = p_resp.json()
+                        hr_p = next((b for b in p_data.get("bookmakers", []) if b["key"] == "hardrockbet"), None)
+                        ref_p = next((b for b in p_data.get("bookmakers", []) if b["key"] == "pinnacle"), None) or next(
+                            (b for b in p_data.get("bookmakers", []) if b["key"] == "draftkings"), None
+                        )
+                        if not hr_p or not ref_p:
+                            continue
+
+                        ref_lookup = {}
+                        for m in ref_p.get("markets", []):
+                            for o in m.get("outcomes", []):
+                                key = (m["key"], o.get("description", ""), o.get("name", ""))
+                                ref_lookup[key] = (o.get("point"), o.get("price"))
+
+                        for m in hr_p.get("markets", []):
+                            for o in m.get("outcomes", []):
+                                player = o.get("description", "")
+                                side = o.get("name", "")
+                                opp_side = "Under" if side == "Over" else "Over"
+                                hr_pt = o.get("point")
+                                hr_price = o.get("price")
+                                ref_val = ref_lookup.get((m["key"], player, side))
+                                ref_opp = ref_lookup.get((m["key"], player, opp_side))
+                                if not ref_val or hr_pt is None:
+                                    continue
+                                ref_pt, ref_price = ref_val
+
+                                has_line_edge = (side == "Over" and hr_pt < ref_pt) or (side == "Under" and hr_pt > ref_pt)
+                                ev_str = ""
+                                if hr_pt == ref_pt and ref_opp and ref_opp[0] == hr_pt:
+                                    fair_p, ev_pct, q_kelly = compute_novig_ev(hr_price, ref_price, ref_opp[1])
+                                    if ev_pct >= 2.0:
+                                        ev_str = f" | FairWin: {fair_p}% | EV: +{ev_pct}% | 1/4-Kelly: {q_kelly}%"
+
+                                if has_line_edge or ev_str:
+                                    prop_lines.append(
+                                        f"- [{sport_key} PROP] {player} ({matchup}) {m['key']} {side} {hr_pt} ({hr_price:+d}) "
+                                        f"vs {ref_p['key']} {ref_pt} ({ref_price:+d}){ev_str}"
+                                    )
+                    except Exception:
+                        continue
         except Exception as exc:
-            lines.append(f"- [{sport_key}] Odds fetch error: {exc}")
-    return lines or ["- No Hard Rock Bet lines active for target sports."]
+            game_lines.append(f"- [{sport_key}] Odds fetch error: {exc}")
+
+    return (
+        game_lines or ["- No Hard Rock Bet lines active for target sports."],
+        prop_lines or ["- No positive-EV player prop discrepancies detected on today's slate."],
+    )
 
 
 def fetch_espn_intel():
@@ -266,17 +425,19 @@ def update_rolling_google_doc(today_str, section_body):
 
 def main():
     today_str = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5))).strftime("%Y-%m-%d")
-    odds_lines = fetch_hardrock_odds()
+    odds_lines, prop_lines = fetch_hardrock_odds_and_props()
     espn_lines = fetch_espn_intel()
     yt_lines = fetch_youtube_transcripts()
 
     section_body = (
         f"## {today_str} Slate Intel\n\n"
-        f"### 1. Hard Rock Bet vs. Sharp Market Odds\n"
+        f"### 1. Hard Rock Bet vs. Sharp Market Odds (Includes 1H & No-Vig +EV%)\n"
         + "\n".join(odds_lines)
-        + "\n\n### 2. ESPN Breaking News & Injury Alerts\n"
+        + "\n\n### 2. +EV Player Prop Discrepancies (Hard Rock vs. Sharp Books)\n"
+        + "\n".join(prop_lines)
+        + "\n\n### 3. ESPN Breaking News & Injury Alerts\n"
         + "\n".join(espn_lines)
-        + "\n\n### 3. Curated YouTube Channel Transcripts & Angles\n"
+        + "\n\n### 4. Curated YouTube Channel Transcripts & Angles\n"
         + "\n".join(yt_lines)
         + "\n"
     )
