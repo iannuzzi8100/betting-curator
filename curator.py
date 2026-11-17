@@ -6,6 +6,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from google import genai
+from google.genai import types
 
 # Environment / GitHub Secrets
 GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
@@ -58,7 +59,10 @@ def read_tracker_context(gc):
 
 
 def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text):
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(api_version="v1beta"),
+    )
     prompt = f"""
 You are the Argon Quantitative Sports Betting Curation Engine for the $100 to $1,000 Hard Rock Bet Challenge.
 Today's Date: {today_str}
@@ -100,17 +104,45 @@ Return ONLY a crisp, scannable plain-text/Markdown bulleted message (under 1,500
 
 (If no plays meet strict edge & rule criteria today, output: "No plays meet strict edge criteria today — capital preserved.")
 """
-    # Try Gemini 4 Argon first, with automatic fallback to Gemini 3.1 Pro Preview
-    for model_id in ("gemini-4-argon", "gemini-3.1-pro-preview"):
+    # Dynamically discover all available generateContent models on this API key
+    candidate_models = [
+        "gemini-4-hydrogen",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+    ]
+    try:
+        live_models = [
+            m.name.replace("models/", "")
+            for m in client.models.list()
+            if "generateContent" in (m.supported_actions or [])
+            and "gemini" in m.name.lower()
+            and "embedding" not in m.name.lower()
+            and "image" not in m.name.lower()
+            and "audio" not in m.name.lower()
+        ]
+        # Prioritize highest-capability models available on this key
+        live_models.sort(reverse=True)
+        for m in live_models:
+            if m not in candidate_models:
+                candidate_models.insert(0, m)
+    except Exception as list_exc:
+        print(f"Model listing warning: {list_exc}")
+
+    for model_id in candidate_models:
         try:
+            print(f"Attempting curation with model: {model_id}")
             response = client.models.generate_content(
                 model=model_id,
                 contents=prompt,
             )
-            return response.text.strip()
+            if response and response.text:
+                print(f"Succeeded with model: {model_id}")
+                return response.text.strip()
         except Exception as exc:
-            print(f"Model {model_id} fallback triggered: {exc}")
-    raise RuntimeError("All configured Gemini models failed.")
+            print(f"Model {model_id} skipped: {exc}")
+    raise RuntimeError("All discovered Gemini models failed.")
 
 
 def append_to_curator_feed(gc, today_str, curated_message):
