@@ -25,10 +25,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run Multi-Source Scraper & Rolling 7-Day Doc Updater
-        env:
+      env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
-          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
         run: python scraper.py
 
   curate-and-alert:
@@ -43,7 +43,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run Argon Analysis & Send 9:12 AM Telegram Alert
         env:
-          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
           MASTER_SHEET_ID: ${{ secrets.MASTER_SHEET_ID }}
           INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
