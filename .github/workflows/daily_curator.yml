@@ -15,7 +15,7 @@ on:
 
 jobs:
   scrape-intel:
-    if: github.event.schedule == '30 13 * * *' || github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scrape'
+    if: github.event.schedule == '30 13 * * *' || github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scrape' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +25,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run Multi-Source Scraper & Rolling 7-Day Doc Updater
-      env:
+        env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
           GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
         run: python scraper.py
 
   curate-and-alert:
-    if: github.event.schedule == '12 14 * * *' || github.event.inputs.mode == 'all' || github.event.inputs.mode == 'curate'
+    if: github.event.schedule == '12 14 * * *' || github.event.inputs.mode == 'all' || github.event.inputs.mode == 'curate' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
