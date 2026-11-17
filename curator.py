@@ -50,8 +50,9 @@ def read_tracker_context(gc):
     rules_rows = rules_ws.get_all_values()
     audit_rows = audit_ws.get_all_values()
 
-    summary_block = "\n".join([" | ".join(r[:15]) for r in tracker_rows[:12]])
-    recent_bets = "\n".join([" | ".join(r[:16]) for r in tracker_rows[-15:]])
+    # Include full row width (up to col 20) so Selection + Notes with parlay legs are captured
+    summary_block = "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
+    recent_bets = "\n".join([" | ".join(r[:20]) for r in tracker_rows[-15:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 
@@ -70,7 +71,7 @@ Today's Date: {today_str}
 ### 1. LIVE BANKROLL & RECENT LEDGER
 {summary_block}
 
-Recent Bets:
+Recent Bets (check Selection AND Notes columns for individual parlay/SGP leg details):
 {recent_bets}
 
 ### 2. UNIT & TIER RULES (STRICT ENFORCEMENT)
@@ -90,24 +91,30 @@ Analyze today's Hard Rock Bet lines against sharp market books, ESPN injury/news
 2. Enforce Rule 1: Total recommended slate exposure MUST NOT exceed 50% of settled bankroll minus any still-pending bets.
 3. Enforce Rule 8: Max juice -140 on straights. Avoid .5 hooks around key numbers (3, 7, 10); target whole numbers or moneylines/totals.
 4. Enforce Rule 5: Max 2 correlated legs on any SGP/parlay (and zero parlays if in Survival Tier).
-5. Prioritize home-field advantage, +EV discrepancies vs Pinnacle/DraftKings, and injury mismatches.
+5. **PARLAY / SGP LEG BREAKDOWN REQUIREMENT:** Whenever listing ANY multi-leg bet (either an existing PENDING parlay/SGP from the ledger OR a newly recommended parlay/SGP), you MUST list every individual leg on indented sub-bullets showing the matchup, pick, individual leg odds (if known), and tip/puck-drop time. Never collapse a parlay into a generic label.
 
 ### OUTPUT FORMAT (STRICTLY FOR 9:12 AM MOBILE TELEGRAM ALERT):
-Return ONLY a crisp, scannable plain-text/Markdown bulleted message (under 1,500 characters) formatted as:
+Return ONLY a crisp, scannable plain-text/Markdown bulleted message (under 2,200 characters) formatted as:
 
 🎯 *{today_str} Hard Rock Bet Slate*
 • Bankroll: $XX.XX | Tier: [Tier Name] | 50% Cap: $XX.XX
 
+*Pending Liability:*
+• *BET-XXX: $X.XX — [Bet Title] ([Total Odds])*
+  ◦ Leg 1: [Team/Pick] ([Odds]) — [Matchup, Time]
+  ◦ Leg 2: [Team/Pick] ([Odds]) — [Matchup, Time]
+• Total Active Exposure: $XX.XX | Remaining Available: $X.XX
+
 *Curated Plays:*
-1. *[League] Selection (Odds)* — Wager: *$X.XX* (X.XU)
+1. *[League] Selection (Total Odds)* — Wager: *$X.XX* (X.XU)
+   ◦ Leg 1: [Team/Pick] ([Odds]) — [Matchup, Time]
+   ◦ Leg 2: [Team/Pick] ([Odds]) — [Matchup, Time]
    • Edge: [1-sentence sharp/injury/line rationale]
 
-(If no plays meet strict edge & rule criteria today, output: "No plays meet strict edge criteria today — capital preserved.")
+(If no new plays meet strict edge & exposure criteria today, state: "No new plays meet strict edge/exposure criteria today — capital preserved.")
 """
-    # Dynamically discover all available generateContent models on this API key
     candidate_models = [
-        "gemini-4-hydrogen",
-        "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite",
         "gemini-3-flash-preview",
         "gemini-3.5-flash-lite",
         "gemini-2.5-flash",
@@ -121,12 +128,11 @@ Return ONLY a crisp, scannable plain-text/Markdown bulleted message (under 1,500
             and "embedding" not in m.name.lower()
             and "image" not in m.name.lower()
             and "audio" not in m.name.lower()
+            and "tts" not in m.name.lower()
         ]
-        # Prioritize highest-capability models available on this key
-        live_models.sort(reverse=True)
         for m in live_models:
             if m not in candidate_models:
-                candidate_models.insert(0, m)
+                candidate_models.append(m)
     except Exception as list_exc:
         print(f"Model listing warning: {list_exc}")
 
