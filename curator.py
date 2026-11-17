@@ -50,7 +50,6 @@ def read_tracker_context(gc):
     rules_rows = rules_ws.get_all_values()
     audit_rows = audit_ws.get_all_values()
 
-    # Include full row width (up to col 20) so Selection + Notes with parlay legs are captured
     summary_block = "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
     recent_bets = "\n".join([" | ".join(r[:20]) for r in tracker_rows[-15:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
@@ -71,7 +70,7 @@ Today's Date: {today_str}
 ### 1. LIVE BANKROLL & RECENT LEDGER
 {summary_block}
 
-Recent Bets (check Selection AND Notes columns for individual parlay/SGP leg details):
+Recent Bets:
 {recent_bets}
 
 ### 2. UNIT & TIER RULES (STRICT ENFORCEMENT)
@@ -80,38 +79,36 @@ Recent Bets (check Selection AND Notes columns for individual parlay/SGP leg det
 ### 3. STRATEGY EDGE & MISTAKE AUDIT
 {audit_text}
 
-### 4. ROLLING 7-DAY SCRAPED SLATE INTEL (ODDS, ESPN INJURIES, YOUTUBE TRANSCRIPTS)
+### 4. ROLLING 7-DAY SCRAPED SLATE INTEL
 {intel_text[:28000]}
 
 ### TASK & HARD CONSTRAINTS:
-Analyze today's Hard Rock Bet lines against sharp market books, ESPN injury/news alerts, and YouTube sharp consensus to curate ONLY the highest-conviction plays for today's slate.
 1. Determine exact Settled Bankroll and Active Tier from the ledger:
-   - If Settled Bankroll < $50.00 -> SURVIVAL TIER ($2.00 base unit, 100% straight bets crossing key numbers 3/7/10, ZERO parlays/flyers).
-   - If Settled Bankroll $50.00-$249.99 -> TIER 1 ($4.00 base unit, Core straights $6.00-$12.00 up to 20-25% single-bet cap).
-2. Enforce Rule 1: Total recommended slate exposure MUST NOT exceed 50% of settled bankroll minus any still-pending bets.
-3. Enforce Rule 8: Max juice -140 on straights. Avoid .5 hooks around key numbers (3, 7, 10); target whole numbers or moneylines/totals.
-4. Enforce Rule 5: Max 2 correlated legs on any SGP/parlay (and zero parlays if in Survival Tier).
-5. **PARLAY / SGP LEG BREAKDOWN REQUIREMENT:** Whenever listing ANY multi-leg bet (either an existing PENDING parlay/SGP from the ledger OR a newly recommended parlay/SGP), you MUST list every individual leg on indented sub-bullets showing the matchup, pick, individual leg odds (if known), and tip/puck-drop time. Never collapse a parlay into a generic label.
+   - Settled Bankroll < $50.00 -> SURVIVAL TIER ($2.00 unit, straight bets only, ZERO parlays).
+   - Settled Bankroll $50.00-$249.99 -> TIER 1 ($4.00 unit, Core straights $6.00-$12.00).
+2. Enforce Rule 1: Total active exposure MUST NOT exceed 50% of settled bankroll minus pending bets.
+3. Enforce Rule 8: Max juice -140 on straights; avoid .5 hooks on key numbers 3, 7, 10.
+4. Enforce Rule 5: Max 2 correlated legs on any SGP/parlay.
 
-### OUTPUT FORMAT (STRICTLY FOR 9:12 AM MOBILE TELEGRAM ALERT):
-Return ONLY a crisp, scannable plain-text/Markdown bulleted message (under 2,200 characters) formatted as:
+### STRICT TELEGRAM FORMATTING RULES (CLEAN & MINIMAL):
+- Output ONLY the compact template below. ZERO extra commentary, NO paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
+- Use short team names (e.g., "Spurs", "Sharks", "Knicks").
+- For every parlay/SGP (both Pending and New), list each pick on its own clean sub-line (`  - Pick (Odds)`).
 
 🎯 *{today_str} Hard Rock Bet Slate*
-• Bankroll: $XX.XX | Tier: [Tier Name] | 50% Cap: $XX.XX
+Bankroll: $XX.XX | Tier: [Tier] | Available: $X.XX
 
-*Pending Liability:*
-• *BET-XXX: $X.XX — [Bet Title] ([Total Odds])*
-  ◦ Leg 1: [Team/Pick] ([Odds]) — [Matchup, Time]
-  ◦ Leg 2: [Team/Pick] ([Odds]) — [Matchup, Time]
-• Total Active Exposure: $XX.XX | Remaining Available: $X.XX
+*Pending ($XX.XX / $XX.XX Cap):*
+• *BET-XXX* ($X.XX) — [Straight Pick (Odds)]
+• *BET-XXX* ($X.XX) — [Parlay Title (Total Odds)]
+  - [Pick 1 (Odds)]
+  - [Pick 2 (Odds)]
 
-*Curated Plays:*
-1. *[League] Selection (Total Odds)* — Wager: *$X.XX* (X.XU)
-   ◦ Leg 1: [Team/Pick] ([Odds]) — [Matchup, Time]
-   ◦ Leg 2: [Team/Pick] ([Odds]) — [Matchup, Time]
-   • Edge: [1-sentence sharp/injury/line rationale]
+*Today's Plays:*
+• *[League] Selection (Odds)* — *$X.XX* (X.XU)
+  - Edge: [1 short sentence max]
 
-(If no new plays meet strict edge & exposure criteria today, state: "No new plays meet strict edge/exposure criteria today — capital preserved.")
+(If no new plays qualify, write ONLY: `• None — exposure near 50% cap.` with zero extra sentences.)
 """
     candidate_models = [
         "gemini-3.1-flash-lite",
@@ -138,13 +135,11 @@ Return ONLY a crisp, scannable plain-text/Markdown bulleted message (under 2,200
 
     for model_id in candidate_models:
         try:
-            print(f"Attempting curation with model: {model_id}")
             response = client.models.generate_content(
                 model=model_id,
                 contents=prompt,
             )
             if response and response.text:
-                print(f"Succeeded with model: {model_id}")
                 return response.text.strip()
         except Exception as exc:
             print(f"Model {model_id} skipped: {exc}")
