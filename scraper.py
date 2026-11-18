@@ -148,10 +148,27 @@ def fetch_hardrock_odds_and_props():
 
     if ODDS_API_KEY:
         for sport_key in SPORTS_ODDS_KEYS:
+            # 0-credit pre-check: /v4/sports/{sport}/events is FREE in The Odds API and prevents spending credits on off-days
+            try:
+                ev_check_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
+                ev_check_resp = requests.get(ev_check_url, params={"apiKey": ODDS_API_KEY}, timeout=10)
+                if ev_check_resp.status_code == 200:
+                    upcoming = [
+                        e
+                        for e in ev_check_resp.json()
+                        if e.get("commence_time")
+                        and now_utc
+                        <= datetime.datetime.fromisoformat(e["commence_time"].replace("Z", "+00:00"))
+                        <= cutoff_utc
+                    ]
+                    if not upcoming:
+                        continue
+            except Exception:
+                pass
+
             url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
             params = {
                 "apiKey": ODDS_API_KEY,
-                "regions": "us,eu",
                 "markets": MARKETS_BY_SPORT.get(sport_key, "h2h,spreads,totals"),
                 "oddsFormat": "american",
                 "bookmakers": "hardrockbet," + ",".join(SHARP_BOOK_KEYS),
@@ -260,13 +277,12 @@ def fetch_hardrock_odds_and_props():
                         f"- [{sport_key}] {away} @ {home} ({commence}) [SharpRef: {sharp_label}] -> {' ; '.join(hr_summary)}{ev_banner}"
                     )
 
-                # Fetch Player Props & 1H lines for up to 8 today-slate games (if quota permits)
-                if sport_key in PROP_MARKETS_BY_SPORT and todays_event_ids and rem_quota > 15:
-                    for ev_id, matchup in todays_event_ids[:8]:
+                # Fetch Player Props & 1H lines for up to 4 today-slate games (only on morning run or when quota > 60)
+                if sport_key in PROP_MARKETS_BY_SPORT and todays_event_ids and rem_quota > 60:
+                    for ev_id, matchup in todays_event_ids[:4]:
                         ev_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{ev_id}/odds"
                         ev_params = {
                             "apiKey": ODDS_API_KEY,
-                            "regions": "us,eu",
                             "markets": PROP_MARKETS_BY_SPORT[sport_key],
                             "oddsFormat": "american",
                             "bookmakers": "hardrockbet,pinnacle,fanduel,draftkings",
