@@ -3,30 +3,52 @@ import json
 import datetime
 import requests
 import gspread
+from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from google import genai
 from google.genai import types
 
+load_dotenv()
+
 # Environment / GitHub Secrets
-GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
-SHEET_ID = os.environ.get("MASTER_SHEET_ID", "")
-INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID", "")
+GCP_SA_KEY = os.environ.get("GCP_SA_KEY") or os.environ.get("GCP_SERVICE_ACCOUNT_JSON") or ""
+SHEET_ID = (
+    os.environ.get("SHEET_ID")
+    or os.environ.get("MASTER_SHEET_ID")
+    or os.environ.get("SPREADSHEET_ID")
+    or os.environ.get("TRACKER_SHEET_ID")
+    or os.environ.get("GOOGLE_SHEET_ID")
+    or "1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8"
+)
+SHEET_NAME = "Betting Tracker & Strategy Log - $100 to $1,000 Challenge"
+INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID") or "1vTMvUyr_DABrrzVBU7ah1A8RYn9-sfO1Uu-0Syk2jnU"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
 def get_google_clients():
-    creds_dict = json.loads(GCP_SA_JSON)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/documents",
     ]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    if GCP_SA_KEY:
+        creds_dict = json.loads(GCP_SA_KEY)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
     gc = gspread.authorize(creds)
     docs_service = build("docs", "v1", credentials=creds)
     return gc, docs_service
+
+
+def open_tracker_workbook(gc):
+    try:
+        return gc.open(SHEET_NAME)
+    except Exception:
+        return gc.open_by_key(SHEET_ID)
 
 
 def read_google_doc_text(docs_service, doc_id):
@@ -41,7 +63,7 @@ def read_google_doc_text(docs_service, doc_id):
 
 
 def read_tracker_context(gc):
-    sh = gc.open_by_key(SHEET_ID)
+    sh = open_tracker_workbook(gc)
     tracker_ws = sh.worksheet("Challenge Tracker ($100-$1k)")
     rules_ws = sh.worksheet("Unit & Tier Rules")
     audit_ws = sh.worksheet("Strategy Edge & Mistake Audit")
@@ -118,9 +140,10 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 """
     candidate_models = [
         "gemini-3.1-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-3.5-flash-lite",
         "gemini-2.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
     ]
     try:
         live_models = [
@@ -153,7 +176,7 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 
 def append_to_curator_feed(gc, today_str, curated_message):
-    sh = gc.open_by_key(SHEET_ID)
+    sh = open_tracker_workbook(gc)
     feed_ws = sh.worksheet("Curator Feed")
     feed_ws.append_row([
         today_str,

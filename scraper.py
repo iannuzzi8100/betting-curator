@@ -3,15 +3,18 @@ import re
 import json
 import datetime
 import requests
+from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
 import yt_dlp
 
+load_dotenv()
+
 # Configuration from Environment / GitHub Secrets
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "")
-INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID", "")
-GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
+INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID") or "1vTMvUyr_DABrrzVBU7ah1A8RYn9-sfO1Uu-0Syk2jnU"
+GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON") or os.environ.get("GCP_SA_KEY") or ""
 
 # Expanded to include high-edge niche leagues (EPL, UCL, ATP/WTA) alongside core US sports
 SPORTS_ODDS_KEYS = [
@@ -119,10 +122,15 @@ def compute_novig_ev(hr_price, sharp_price_target, sharp_price_opp):
 
 
 def get_docs_service():
-    creds_dict = json.loads(GCP_SA_JSON)
-    creds = Credentials.from_service_account_info(
-        creds_dict, scopes=["https://www.googleapis.com/auth/documents"]
-    )
+    scopes = [
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    if GCP_SA_JSON:
+        creds_dict = json.loads(GCP_SA_JSON)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
     return build("docs", "v1", credentials=creds)
 
 
@@ -336,8 +344,15 @@ def fetch_youtube_transcripts():
                         if dt < cutoff - datetime.timedelta(days=1):
                             continue
                     try:
-                        transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
-                        full_text = " ".join(chunk["text"] for chunk in transcript_list)
+                        if hasattr(YouTubeTranscriptApi, "get_transcript"):
+                            transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
+                            full_text = " ".join(chunk["text"] for chunk in transcript_list)
+                        else:
+                            fetched = YouTubeTranscriptApi().fetch(vid_id)
+                            full_text = " ".join(
+                                (chunk.text if hasattr(chunk, "text") else chunk["text"])
+                                for chunk in fetched
+                            )
                         condensed = re.sub(r"\s+", " ", full_text)[:3500]
                         yt_lines.append(f"- [{ch['name']}] {title} (https://youtu.be/{vid_id})\n  Transcript Extract: {condensed}")
                     except Exception:
@@ -348,8 +363,8 @@ def fetch_youtube_transcripts():
 
 
 def update_rolling_google_doc(today_str, section_body):
-    if not INTEL_DOC_ID or not GCP_SA_JSON:
-        print("Missing INTEL_DOC_ID or GCP_SERVICE_ACCOUNT_JSON; printing output locally.")
+    if not INTEL_DOC_ID or (not GCP_SA_JSON and not os.path.exists("credentials.json")):
+        print("Missing INTEL_DOC_ID or Google Service Account credentials; printing output locally.")
         print(section_body)
         return
 

@@ -4,13 +4,24 @@ import time
 import requests
 import gspread
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from google import genai
 from google.genai import types, errors
 
+load_dotenv()
+
 # --- CONFIGURATION ---
-GCP_SA_KEY = os.environ.get("GCP_SA_KEY")
+GCP_SA_KEY = os.environ.get("GCP_SA_KEY") or os.environ.get("GCP_SERVICE_ACCOUNT_JSON")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+SHEET_ID = (
+    os.environ.get("SHEET_ID")
+    or os.environ.get("MASTER_SHEET_ID")
+    or os.environ.get("SPREADSHEET_ID")
+    or os.environ.get("TRACKER_SHEET_ID")
+    or os.environ.get("GOOGLE_SHEET_ID")
+    or "1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8"
+)
 SHEET_NAME = "Betting Tracker & Strategy Log - $100 to $1,000 Challenge"
 TRACKER_TAB_NAME = "Challenge Tracker ($100-$1k)"
 
@@ -47,7 +58,10 @@ def get_tracker_sheet():
         creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
 
     client = gspread.authorize(creds)
-    workbook = client.open(SHEET_NAME)
+    try:
+        workbook = client.open(SHEET_NAME)
+    except Exception:
+        workbook = client.open_by_key(SHEET_ID)
     return workbook.worksheet(TRACKER_TAB_NAME)
 
 # --- 2. FETCH FINAL SCORES FROM ESPN ---
@@ -156,10 +170,11 @@ Respond ONLY with valid JSON matching this exact schema:
 """
 
     models_to_try = [
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash"
+        "gemini-3.5-flash-lite",
     ]
 
     response = None
@@ -173,10 +188,11 @@ Respond ONLY with valid JSON matching this exact schema:
                     temperature=0.0
                 )
             )
-            break
-        except errors.ServerError as e:
-            print(f"Attempt {attempt} ({model_name}) hit 503 overload: {e}. Retrying in 15s...", flush=True)
-            time.sleep(15)
+            if response and response.text:
+                break
+        except Exception as e:
+            print(f"Attempt {attempt} ({model_name}) failed: {e}. Trying next model...", flush=True)
+            time.sleep(2)
 
     if response is None:
         print("All model attempts experienced 503 overload. Skipping settlement until next run.", flush=True)

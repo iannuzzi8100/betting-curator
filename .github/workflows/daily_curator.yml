@@ -14,12 +14,14 @@ jobs:
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
-      SHEET_ID: ${{ secrets.SHEET_ID || secrets.SPREADSHEET_ID || secrets.TRACKER_SHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
-      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID || secrets.SHEET_ID || secrets.TRACKER_SHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
-      TRACKER_SHEET_ID: ${{ secrets.TRACKER_SHEET_ID || secrets.SHEET_ID || secrets.SPREADSHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
-      GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID || secrets.SHEET_ID || secrets.SPREADSHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
-      GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
+      INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID || '1vTMvUyr_DABrrzVBU7ah1A8RYn9-sfO1Uu-0Syk2jnU' }}
+      MASTER_SHEET_ID: ${{ secrets.MASTER_SHEET_ID || secrets.SHEET_ID || secrets.SPREADSHEET_ID || secrets.TRACKER_SHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
+      SHEET_ID: ${{ secrets.SHEET_ID || secrets.MASTER_SHEET_ID || secrets.SPREADSHEET_ID || secrets.TRACKER_SHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID || secrets.MASTER_SHEET_ID || secrets.SHEET_ID || secrets.TRACKER_SHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
+      TRACKER_SHEET_ID: ${{ secrets.TRACKER_SHEET_ID || secrets.MASTER_SHEET_ID || secrets.SHEET_ID || secrets.SPREADSHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
+      GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID || secrets.MASTER_SHEET_ID || secrets.SHEET_ID || secrets.SPREADSHEET_ID || '1TClaBQb82kDz1ddgileMesO3IZ3ePrAp-8G-ScxYkP8' }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY || secrets.GCP_SERVICE_ACCOUNT_JSON }}
+      GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY || secrets.GCP_SERVICE_ACCOUNT_JSON }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
