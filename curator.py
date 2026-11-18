@@ -167,9 +167,13 @@ Recent Bets:
 
 ### OBJECTIVE & ALLOCATION ENGINE (ALIGNED WITH SHEET UNIT & TIER RULES):
 1. Use the exact **VERIFIED LEDGER NUMBERS** above (`Settled Bankroll`, `Pending Wagers Total`, `Available Unstaked Bankroll`, and `Active Tier`).
-2. Scan ALL markets across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
-   - **Pre-Computed `[+EV: ...]` Straights & 1st-Half Lines** (prioritize lines with verified positive mathematical EV vs Pinnacle/DraftKings and juice >= -140, crossing key numbers 3, 7, 10 where applicable).
-   - **+EV Player Props** (verified +2%+ EV vs sharp books with juice >= -165; never recommend -200+ heavy-juice traps).
+2. Scan ALL quantitative signals across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
+   - **Multi-Book Sharp Consensus `[+EV]` & `[🔥 STALE LINE]` Outliers:** Prioritize lines where Hard Rock Bet lags behind Pinnacle/FanDuel/DraftKings consensus or offers verified positive No-Vig EV (juice >= -140, crossing key numbers 3, 7, 10).
+   - **ESPN BPI / FPI Model Discrepancies (`[📊 BPI/FPI +EV]`):** High-conviction straight plays where ESPN BPI/FPI win probability exceeds the no-vig market implied probability by 4%+.
+   - **Situational & Line Movement Edges (`[⚠️ FATIGUE EDGE]` & `[🔥 STEAM]` & `[🥅 NHL GOALIES]`):**
+     * Fade teams on Road Back-to-Backs (0 days rest) against rested home opponents (`WIN: Fatigue / Back-to-Back Fade`).
+     * Follow sharp opening-to-current steam moves (`[🔥 SPREAD/TOTAL/ML STEAM]`) and exploit NHL starting goalie SV%/GAA mismatches.
+   - **+EV & Steamed Player Props (`[PROP]` & `[PROP STEAM]`):** Verified +2%+ EV vs sharp books or heavy opening-to-current prop steam with juice >= -165 (never recommend -200+ heavy-juice traps).
    - **Correlated Same-Game Parlays / 2-Leg Parlays (ONLY if Settled Bankroll >= $50.00; STRICTLY ZERO 3+ leg parlays):**
      * If in Survival Tier (< $50.00), recommend **100% Straight Bets / Player Props only** (zero parlays/SGPs).
      * If >= $50.00, parlays/SGPs are strictly capped at **maximum 2 correlated legs** (never 3+ legs, and never stack the same team across multiple tickets per Rule 3).
