@@ -10,7 +10,7 @@ on:
     inputs:
       mode:
         description: 'Run mode (all, scrape, curate)'
-        required: true
+        required: FALSE
         default: 'all'
 
 jobs:
