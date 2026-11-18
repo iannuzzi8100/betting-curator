@@ -2,51 +2,37 @@ name: Daily Betting Intel Scrape & 9:12 AM Telegram Curator
 
 on:
   schedule:
-    # Step 1: Scrape Odds, ESPN & YouTube at 8:30 AM EST (13:30 UTC)
+    # Overnight / Morning Runs (3:12 AM, 8:30 AM, and 9:12 AM EST)
+    - cron: '12 8 * * *'
     - cron: '30 13 * * *'
-    # Step 2: Run Argon Analysis & Send Telegram Text at 9:12 AM EST (14:12 UTC)
     - cron: '12 14 * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode (all, scrape, curate)'
-        required: FALSE
+        description: 'Run mode (all, settle, scrape, curate)'
+        required: false
         default: 'all'
 
 jobs:
-  scrape-intel:
-    if: github.event.schedule == '30 13 * * *' || github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scrape' || github.event_name == 'workflow_dispatch'
+  run-betting-pipeline:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run Multi-Source Scraper & Rolling 7-Day Doc Updater
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
-          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
-        run: python scraper.py
+    env:
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
+      SHEET_ID: ${{ secrets.SHEET_ID }}
+      GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-  curate-and-alert:
-    if: github.event.schedule == '12 14 * * *' || github.event.inputs.mode == 'all' || github.event.inputs.mode == 'curate' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run Argon Analysis & Send 9:12 AM Telegram Alert
-        env:
-          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SA_KEY }}
-          MASTER_SHEET_ID: ${{ secrets.MASTER_SHEET_ID }}
-          INTEL_DOC_ID: ${{ secrets.INTEL_DOC_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python curator.py
