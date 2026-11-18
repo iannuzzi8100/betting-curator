@@ -2,9 +2,11 @@ name: Daily Betting Intel Scrape & 9:12 AM Telegram Curator
 
 on:
   schedule:
-    - cron: '12 8 * * *'   # 03:12 AM EST — Step 1: Settle yesterday's pending bets
-    - cron: '30 13 * * *'  # 08:30 AM EST — Step 2: Scrape today's odds, props, news & YouTube intel
-    - cron: '12 14 * * *'  # 09:12 AM EST — Step 3: Curate best bets & deliver Telegram slip
+    - cron: '12 8 * * *'   # 03:12 AM EST — Stage 1: Settle yesterday's pending bets
+    - cron: '30 13 * * *'  # 08:30 AM EST — Stage 2: Morning scrape (odds, props, news & YouTube intel)
+    - cron: '12 14 * * *'  # 09:12 AM EST — Stage 3: Morning curate & deliver Telegram slip
+    - cron: '0 22 * * *'   # 05:00 PM EST — Stage 4a: Primetime pre-tipoff scrape (late injuries & sharp moves)
+    - cron: '30 22 * * *'  # 05:30 PM EST — Stage 4b: Primetime curator refresh & Telegram slip
   workflow_dispatch:
     inputs:
       stage:
@@ -52,15 +54,15 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Step 1 - Run Settler (03:12 AM EST + Pre-Scrape Safety Check)
-        if: github.event.schedule == '12 8 * * *' || github.event.schedule == '30 13 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'settler' || inputs.stage == ''))
+        if: github.event.schedule == '12 8 * * *' || github.event.schedule == '30 13 * * *' || github.event.schedule == '0 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'settler' || inputs.stage == ''))
         run: python settler.py
 
-      - name: Step 2 - Run Scraper (08:30 AM EST)
-        if: github.event.schedule == '30 13 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'scraper' || inputs.stage == ''))
+      - name: Step 2 - Run Scraper (08:30 AM EST & 05:00 PM EST Primetime Refresh)
+        if: github.event.schedule == '30 13 * * *' || github.event.schedule == '0 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'scraper' || inputs.stage == ''))
         run: python scraper.py
 
-      - name: Step 3 - Run Curator (09:12 AM EST)
-        if: github.event.schedule == '12 14 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'curator' || inputs.stage == ''))
+      - name: Step 3 - Run Curator (09:12 AM EST & 05:30 PM EST Primetime Refresh)
+        if: github.event.schedule == '12 14 * * *' || github.event.schedule == '30 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'curator' || inputs.stage == ''))
         run: python curator.py
 
       - name: Send Telegram alert on failure

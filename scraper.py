@@ -85,10 +85,10 @@ YOUTUBE_CHANNELS = [
     {"name": "OddsShopper Sports Betting", "url": "https://www.youtube.com/@OddsShopper/videos"},
     {"name": "VSiN", "url": "https://www.youtube.com/@VSiNLive/videos"},
     {"name": "CashKeg", "url": "https://www.youtube.com/@CashKeg/videos"},
-    {"name": "Circles Off", "url": "https://www.youtube.com/@CirclesOff/videos"},
+    {"name": "Circles Off", "url": "https://www.youtube.com/@CirclesOffHQ/videos"},
     {"name": "Bet the Process", "url": "https://www.youtube.com/@BetTheProcess/videos"},
-    {"name": "Deep Dive Podcast", "url": "https://www.youtube.com/@TheDeepDivePodcast/videos"},
-    {"name": "Shane Huang", "url": "https://www.youtube.com/@ShaneHuang/videos"},
+    {"name": "Deep Dive Podcast", "url": "https://www.youtube.com/@DeepDivePodcast/videos"},
+    {"name": "Shane Huang", "url": "https://www.youtube.com/@ShaneHuang88/videos"},
     {"name": "OddsJam", "url": "https://www.youtube.com/@OddsJam/videos"},
     {"name": "Josh Pate CFB", "url": "https://www.youtube.com/@JoshPateCFB/videos"},
     {"name": "Land Your Bets", "url": "https://www.youtube.com/@LandYourBets/videos"},
@@ -145,7 +145,7 @@ def fetch_hardrock_odds_and_props():
     game_lines = []
     prop_lines = []
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    cutoff_utc = now_utc + datetime.timedelta(hours=30)
+    cutoff_utc = now_utc + datetime.timedelta(hours=36)
 
     for sport_key in SPORTS_ODDS_KEYS:
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
@@ -177,10 +177,12 @@ def fetch_hardrock_odds_and_props():
                 if not hr_book:
                     continue
 
+                is_today_slate = False
                 if commence and event_id:
                     try:
                         c_dt = datetime.datetime.fromisoformat(commence.replace("Z", "+00:00"))
                         if now_utc <= c_dt <= cutoff_utc:
+                            is_today_slate = True
                             todays_event_ids.append((event_id, f"{away} @ {home}"))
                     except Exception:
                         pass
@@ -204,8 +206,8 @@ def fetch_hardrock_odds_and_props():
                         o_price = o["price"]
                         outcomes_str.append(f"{o_name} {o_pt if o_pt is not None else ''} ({o_price:+d})".strip())
 
-                        # Compute exact No-Vig EV if sharp book has matching 2-way line
-                        if len(s_outs) == 2:
+                        # Compute exact No-Vig EV if sharp book has matching 2-way line and playable juice (>= -160)
+                        if len(s_outs) == 2 and o_price >= -160:
                             s_match = next((x for x in s_outs if x["name"] == o_name and x.get("point") == o_pt), None)
                             s_other = next((x for x in s_outs if x["name"] != o_name), None)
                             if s_match and s_other:
@@ -217,6 +219,10 @@ def fetch_hardrock_odds_and_props():
                                     )
 
                     hr_summary.append(f"{m_key.upper()}: [{', '.join(outcomes_str)}]")
+
+                # Only include games in the active 36-hour window OR future games with verified +EV
+                if not is_today_slate and not ev_tags:
+                    continue
 
                 ev_banner = (" -> " + " ".join(ev_tags)) if ev_tags else ""
                 sharp_label = sharp_book["key"] if sharp_book else "none"
@@ -288,11 +294,19 @@ def fetch_hardrock_odds_and_props():
                                 hr_price = o.get("price")
                                 ref_val = ref_lookup.get((m_key, player, side))
                                 ref_opp = ref_lookup.get((m_key, player, opp_side))
-                                if not ref_val or hr_pt is None:
+                                if not ref_val or hr_pt is None or hr_price is None:
+                                    continue
+                                # Filter out heavy-juice traps (> -165 juice)
+                                if hr_price < -165:
                                     continue
                                 ref_pt, ref_price = ref_val
 
-                                has_line_edge = (side == "Over" and hr_pt < ref_pt) or (side == "Under" and hr_pt > ref_pt)
+                                # Require comparable juice (within 25 cents and >= -155) before flagging a line delta
+                                has_line_edge = (
+                                    ((side == "Over" and hr_pt < ref_pt) or (side == "Under" and hr_pt > ref_pt))
+                                    and hr_price >= -155
+                                    and hr_price >= (ref_price - 25)
+                                )
                                 ev_str = ""
                                 if hr_pt == ref_pt and ref_opp and ref_opp[0] == hr_pt:
                                     fair_p, ev_pct, q_kelly = compute_novig_ev(hr_price, ref_price, ref_opp[1])
@@ -383,7 +397,7 @@ def fetch_youtube_transcripts():
                                 (chunk.text if hasattr(chunk, "text") else chunk["text"])
                                 for chunk in fetched
                             )
-                        condensed = re.sub(r"\s+", " ", full_text)[:3500]
+                        condensed = re.sub(r"\s+", " ", full_text)[:1500]
                         yt_lines.append(f"- [{ch['name']}] {title} (https://youtu.be/{vid_id})\n  Transcript Extract: {condensed}")
                     except Exception:
                         yt_lines.append(f"- [{ch['name']}] {title} (https://youtu.be/{vid_id}) [No captions available]")

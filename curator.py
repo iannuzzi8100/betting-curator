@@ -51,7 +51,7 @@ def open_tracker_workbook(gc):
         return gc.open_by_key(SHEET_ID)
 
 
-def read_google_doc_text(docs_service, doc_id):
+def read_google_doc_text(docs_service, doc_id, today_str=None):
     doc = docs_service.documents().get(documentId=doc_id).execute()
     chunks = []
     for elem in doc.get("body", {}).get("content", []):
@@ -59,7 +59,11 @@ def read_google_doc_text(docs_service, doc_id):
         if para:
             text = "".join(r.get("textRun", {}).get("content", "") for r in para.get("elements", []))
             chunks.append(text)
-    return "".join(chunks)
+    full_text = "".join(chunks)
+    if today_str and f"## {today_str} Slate Intel" in full_text:
+        start_pos = full_text.index(f"## {today_str} Slate Intel")
+        return full_text[start_pos:]
+    return full_text
 
 
 def _parse_dollar(val):
@@ -105,11 +109,27 @@ def read_tracker_context(gc):
                 settled_bankroll = rb
 
     available_bankroll = max(0.0, round(settled_bankroll - pending_total, 2))
+    max_exposure_cap = round(settled_bankroll * 0.50, 2)
+    remaining_50pct_cap = max(0.0, round(max_exposure_cap - pending_total, 2))
+
+    if settled_bankroll < 50.0:
+        active_tier = "Survival Tier (< $50.00 | 1U = $2.00 | 100% Straight Bets Only, Zero Parlays)"
+    elif settled_bankroll < 250.0:
+        active_tier = "Tier 1: Foundation ($50.00–$249.99 | 1U = $4.00 | Max 2-Leg Correlated SGP/Parlay)"
+    elif settled_bankroll < 500.0:
+        active_tier = "Tier 2: Acceleration ($250.00–$499.99 | 1U = $10.00 | Max 2-Leg Correlated SGP/Parlay)"
+    elif settled_bankroll < 750.0:
+        active_tier = "Tier 3: Expansion ($500.00–$749.99 | 1U = $20.00 | Max 2-Leg Correlated SGP/Parlay)"
+    else:
+        active_tier = "Tier 4: Final Sprint ($750.00+ | 1U = $30.00 | Max 2-Leg Correlated SGP/Parlay)"
+
     verified_bankroll_banner = (
         f"VERIFIED LEDGER NUMBERS (USE EXACTLY THESE IN OUTPUT HEADER):\n"
         f"- Settled Bankroll: ${settled_bankroll:.2f}\n"
+        f"- Active Tier: {active_tier}\n"
         f"- Pending Wagers Total: ${pending_total:.2f} ({len(pending_lines)} active ticket(s))\n"
-        f"- Available Bankroll: ${available_bankroll:.2f}\n"
+        f"- Available Unstaked Bankroll: ${available_bankroll:.2f}\n"
+        f"- 50% Max Active Exposure Cap: ${max_exposure_cap:.2f} (Remaining 50% Exposure Headroom: ${remaining_50pct_cap:.2f})\n"
         f"- Active Pending Tickets:\n"
         + ("\n".join(pending_lines) if pending_lines else "  * None")
     )
@@ -145,20 +165,19 @@ Recent Bets:
 ### 3. SCRAPED SLATE INTEL (GAME ODDS + 1H LINES + NO-VIG +EV% + PLAYER PROPS + INJURIES + YOUTUBE CONSENSUS)
 {intel_text[:32000]}
 
-### OBJECTIVE & ALLOCATION ENGINE (MAXIMIZE BANKROLL GROWTH VELOCITY):
-1. Calculate exact **Available Bankroll** (Settled Balance minus Pending Wagers).
+### OBJECTIVE & ALLOCATION ENGINE (ALIGNED WITH SHEET UNIT & TIER RULES):
+1. Use the exact **VERIFIED LEDGER NUMBERS** above (`Settled Bankroll`, `Pending Wagers Total`, `Available Unstaked Bankroll`, and `Active Tier`).
 2. Scan ALL markets across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
-   - **Pre-Computed `[+EV: ...]` Straights & 1st-Half Lines** (prioritize lines with verified positive mathematical EV vs Pinnacle/DraftKings).
-   - **+EV Player Props** (line discrepancies or +2%+ EV vs sharp books).
-   - **Correlated Same-Game Parlays (2 legs):**
-     * NBA/CBB Favorite -7.5 or higher + Game Over (blowout pace correlation) OR Underdog +8.5 + Game Under.
-     * NHL Underdog Moneyline + Game Under 5.5 (low-scoring goalie upset correlation).
-   - **Cross-Sport Multi-Leg Parlays (2 to 4 legs):** Combine highest-conviction +EV picks or dominant mismatches across different leagues/teams.
-3. Rank the **Top 1 to 4 Best Bets of the Day** and size stakes via **Fractional Kelly** based on edge quality:
-   - **A+ Single Play (>6% mathematical EV or massive injury mismatch):** Stake **15%–25%** of Available Bankroll.
-   - **A Core Play / Player Prop (2.5%–6% EV):** Stake **8%–15%** of Available Bankroll.
-   - **Correlated SGP / Cross-Sport Parlay (2–4 legs):** Stake **5%–10%** of Available Bankroll for asymmetric growth.
-   - Total deployed across today's slate can reach up to **75% of Available Bankroll** when multiple strong edges exist simultaneously (or **0%** if Available Bankroll < $4.00).
+   - **Pre-Computed `[+EV: ...]` Straights & 1st-Half Lines** (prioritize lines with verified positive mathematical EV vs Pinnacle/DraftKings and juice >= -140, crossing key numbers 3, 7, 10 where applicable).
+   - **+EV Player Props** (verified +2%+ EV vs sharp books with juice >= -165; never recommend -200+ heavy-juice traps).
+   - **Correlated Same-Game Parlays / 2-Leg Parlays (ONLY if Settled Bankroll >= $50.00; STRICTLY ZERO 3+ leg parlays):**
+     * If in Survival Tier (< $50.00), recommend **100% Straight Bets / Player Props only** (zero parlays/SGPs).
+     * If >= $50.00, parlays/SGPs are strictly capped at **maximum 2 correlated legs** (never 3+ legs, and never stack the same team across multiple tickets per Rule 3).
+3. Rank the **Top 1 to 4 Best Bets of the Day** and size stakes via **Fractional Kelly** & Active Tier rules:
+   - **A+ Single Play (>5% mathematical EV or major injury mismatch):** Stake **15%–25%** of Available Bankroll.
+   - **A Core Play / Player Prop (2.5%–5% EV):** Stake **10%–18%** of Available Bankroll.
+   - **2-Leg Correlated SGP/Parlay (only when Bankroll >= $50):** Stake **5%–10%** of Available Bankroll.
+   - If `Available Unstaked Bankroll < $2.00`, do not recommend new wagers (`• Holding — waiting for pending slate to settle before deploying capital.`).
 4. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]` so the user confirms active status before locking it in on Hard Rock Bet.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
@@ -183,9 +202,8 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 (If Available Bankroll < $4.00, output ONLY: `• Holding — waiting for pending slate to settle before deploying capital.`)
 """
     candidate_models = [
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
     ]
@@ -255,10 +273,11 @@ def send_telegram_alert(message):
 
 
 def main():
-    today_str = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5))).strftime("%Y-%m-%d")
+    est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
+    today_str = est_now.strftime("%Y-%m-%d")
     gc, docs_service = get_google_clients()
     summary_block, recent_bets, rules_text, audit_text = read_tracker_context(gc)
-    intel_text = read_google_doc_text(docs_service, INTEL_DOC_ID) if INTEL_DOC_ID else "No Intel Doc ID set."
+    intel_text = read_google_doc_text(docs_service, INTEL_DOC_ID, today_str=today_str) if INTEL_DOC_ID else "No Intel Doc ID set."
     curated_message = run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text)
     append_to_curator_feed(gc, today_str, curated_message)
     send_telegram_alert(curated_message)

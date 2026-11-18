@@ -14,6 +14,8 @@ load_dotenv()
 # --- CONFIGURATION ---
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY") or os.environ.get("GCP_SERVICE_ACCOUNT_JSON")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SHEET_ID = (
     os.environ.get("SHEET_ID")
     or os.environ.get("MASTER_SHEET_ID")
@@ -241,11 +243,10 @@ Respond ONLY with valid JSON matching this exact schema:
 """
 
     models_to_try = [
+        "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
-        "gemini-2.5-flash",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
     ]
 
     response = None
@@ -346,6 +347,11 @@ if __name__ == "__main__":
     settlements = grade_pending_bets(pending_bets, final_games)
 
     updated_count = 0
+    settled_lines = []
+    wins_cnt = 0
+    losses_cnt = 0
+    pushes_cnt = 0
+
     for s in settlements:
         row_num = s.get("row_index")
         bet_id = s.get("bet_id")
@@ -366,6 +372,48 @@ if __name__ == "__main__":
             if col_tag is not None and edge_tag in ALLOWED_EDGE_TAGS:
                 sheet.update_cell(row_num, col_tag + 1, edge_tag)
 
+            if new_result == "Won":
+                wins_cnt += 1
+                icon = "🟢"
+            elif new_result == "Lost":
+                losses_cnt += 1
+                icon = "🔴"
+            else:
+                pushes_cnt += 1
+                icon = "⚪"
+
+            settled_lines.append(f"{icon} *{bet_id}* ({new_result}) — {note}")
             updated_count += 1
 
     print(f"Settlement run complete. Updated {updated_count} ticket(s).", flush=True)
+
+    if updated_count > 0 and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            refreshed = sheet.get_all_values()
+            new_bankroll = refreshed[4][0] if len(refreshed) > 4 and refreshed[4] else "N/A"
+            still_pending = sum(
+                1
+                for r in refreshed[header_row_idx + 1 :]
+                if len(r) > col_result and r[col_bet_id].strip() and r[col_result].strip().lower() == "pending"
+            )
+            receipt_msg = (
+                f"✅ *Settlement & Edge Audit Complete*\n"
+                f"Graded: {updated_count} ticket(s) ({wins_cnt}W - {losses_cnt}L"
+                + (f" - {pushes_cnt}P" if pushes_cnt else "")
+                + ")\n\n"
+                + "\n".join(settled_lines)
+                + f"\n\n💰 *Settled Bankroll:* {new_bankroll} | *Remaining Pending:* {still_pending}"
+            )
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": receipt_msg,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": True,
+                },
+                timeout=15,
+            )
+            print("Delivered Telegram settlement receipt.", flush=True)
+        except Exception as tg_exc:
+            print(f"Warning: Could not send Telegram settlement receipt: {tg_exc}", flush=True)
