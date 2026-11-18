@@ -29,21 +29,25 @@ SPORTS_ODDS_KEYS = [
     "tennis_wta_finals",
 ]
 
-# Markets with 1st-Half lines enabled for NBA & CBB (softer than full-game lines)
+# Bulk endpoint (/v4/sports/{sport}/odds) supports core full-game markets (h2h, spreads, totals)
 MARKETS_BY_SPORT = {
-    "basketball_nba": "h2h,spreads,totals,spreads_h1,totals_h1",
-    "basketball_ncaab": "h2h,spreads,totals,spreads_h1,totals_h1",
+    "basketball_nba": "h2h,spreads,totals",
+    "basketball_ncaab": "h2h,spreads,totals",
     "icehockey_nhl": "h2h,spreads,totals",
-    "americanfootball_ncaaf": "h2h,spreads,totals,spreads_h1",
-    "americanfootball_nfl": "h2h,spreads,totals,spreads_h1",
+    "americanfootball_ncaaf": "h2h,spreads,totals",
+    "americanfootball_nfl": "h2h,spreads,totals",
     "soccer_epl": "h2h,totals",
     "soccer_uefa_champs_league": "h2h,totals",
     "tennis_atp_finals": "h2h",
     "tennis_wta_finals": "h2h",
 }
 
+# Per-event endpoint (/v4/sports/{sport}/events/{eventId}/odds) supports 1st-Half lines & Player Props
 PROP_MARKETS_BY_SPORT = {
-    "basketball_nba": "player_points,player_rebounds,player_assists,player_points_rebounds_assists",
+    "basketball_nba": "spreads_h1,totals_h1,player_points,player_rebounds,player_assists,player_points_rebounds_assists",
+    "basketball_ncaab": "spreads_h1,totals_h1",
+    "americanfootball_ncaaf": "spreads_h1,totals_h1",
+    "americanfootball_nfl": "spreads_h1,totals_h1",
     "icehockey_nhl": "player_points,player_shots_on_goal",
 }
 
@@ -250,14 +254,40 @@ def fetch_hardrock_odds_and_props():
                                 ref_lookup[key] = (o.get("point"), o.get("price"))
 
                         for m in hr_p.get("markets", []):
+                            m_key = m["key"]
+                            if m_key in ("spreads_h1", "totals_h1"):
+                                s_outs = [
+                                    o for rm in ref_p.get("markets", []) if rm["key"] == m_key for o in rm.get("outcomes", [])
+                                ]
+                                for o in m.get("outcomes", []):
+                                    o_name = o.get("name", "")
+                                    o_pt = o.get("point")
+                                    o_price = o.get("price")
+                                    if len(s_outs) == 2 and o_pt is not None and o_price is not None:
+                                        s_match = next(
+                                            (x for x in s_outs if x.get("name") == o_name and x.get("point") == o_pt),
+                                            None,
+                                        )
+                                        s_other = next((x for x in s_outs if x.get("name") != o_name), None)
+                                        if s_match and s_other:
+                                            fair_p, ev_pct, q_kelly = compute_novig_ev(
+                                                o_price, s_match["price"], s_other["price"]
+                                            )
+                                            if ev_pct >= 1.5:
+                                                game_lines.append(
+                                                    f"- [{sport_key} 1H] {matchup} -> {m_key.upper()} {o_name} {o_pt} ({o_price:+d}) "
+                                                    f"vs {ref_p['key']} ({s_match['price']:+d}) | FairWin: {fair_p}% | EV: +{ev_pct}% | 1/4-Kelly: {q_kelly}%"
+                                                )
+                                continue
+
                             for o in m.get("outcomes", []):
                                 player = o.get("description", "")
                                 side = o.get("name", "")
                                 opp_side = "Under" if side == "Over" else "Over"
                                 hr_pt = o.get("point")
                                 hr_price = o.get("price")
-                                ref_val = ref_lookup.get((m["key"], player, side))
-                                ref_opp = ref_lookup.get((m["key"], player, opp_side))
+                                ref_val = ref_lookup.get((m_key, player, side))
+                                ref_opp = ref_lookup.get((m_key, player, opp_side))
                                 if not ref_val or hr_pt is None:
                                     continue
                                 ref_pt, ref_price = ref_val
@@ -271,7 +301,7 @@ def fetch_hardrock_odds_and_props():
 
                                 if has_line_edge or ev_str:
                                     prop_lines.append(
-                                        f"- [{sport_key} PROP] {player} ({matchup}) {m['key']} {side} {hr_pt} ({hr_price:+d}) "
+                                        f"- [{sport_key} PROP] {player} ({matchup}) {m_key} {side} {hr_pt} ({hr_price:+d}) "
                                         f"vs {ref_p['key']} {ref_pt} ({ref_price:+d}){ev_str}"
                                     )
                     except Exception:
@@ -386,7 +416,7 @@ def update_rolling_google_doc(today_str, section_body):
     date_headers = list(re.finditer(r"(\d{4}-\d{2}-\d{2}) Slate Intel", full_text))
     for match in date_headers:
         sec_date = match.group(1)
-        if sec_date < cutoff_date:
+        if sec_date < cutoff_date or sec_date == today_str:
             sec_start = None
             sec_end = content[-1].get("endIndex", 1) - 1
             for elem in content:

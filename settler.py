@@ -31,7 +31,9 @@ ESPN_LEAGUES = {
     "NBA": {"path": "basketball/nba", "groups": None},
     "NCAAM": {"path": "basketball/mens-college-basketball", "groups": "50"},
     "NHL": {"path": "hockey/nhl", "groups": None},
-    "MLB": {"path": "baseball/mlb", "groups": None}
+    "MLB": {"path": "baseball/mlb", "groups": None},
+    "EPL": {"path": "soccer/eng.1", "groups": None},
+    "UCL": {"path": "soccer/uefa.champions", "groups": None},
 }
 
 ALLOWED_EDGE_TAGS = [
@@ -64,9 +66,57 @@ def get_tracker_sheet():
         workbook = client.open_by_key(SHEET_ID)
     return workbook.worksheet(TRACKER_TAB_NAME)
 
-# --- 2. FETCH FINAL SCORES FROM ESPN ---
-def fetch_final_scores(target_dates):
+# --- 2. FETCH FINAL SCORES & PLAYER BOX SCORES FROM ESPN ---
+def fetch_boxscore_players(path, event_id, league_name):
+    """Fetches player box-score stats for completed games to grade player props (NHL G/A/PTS/SOG, NBA PTS/REB/AST/PRA)."""
+    url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/summary?event={event_id}"
+    players_out = {}
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code != 200:
+            return players_out
+        box = res.json().get("boxscore", {})
+        for team_block in box.get("players", []):
+            for stat_group in team_block.get("statistics", []):
+                labels = [lbl.upper() for lbl in stat_group.get("labels", [])]
+                for ath_entry in stat_group.get("athletes", []):
+                    ath_name = ath_entry.get("athlete", {}).get("displayName", "")
+                    stats_vals = ath_entry.get("stats", [])
+                    if not ath_name or not stats_vals or len(stats_vals) != len(labels):
+                        continue
+                    stat_map = dict(zip(labels, stats_vals))
+                    if league_name == "NHL" and ("G" in stat_map or "S" in stat_map):
+                        try:
+                            g = int(stat_map.get("G", 0) or 0)
+                            a = int(stat_map.get("A", 0) or 0)
+                            sog = int(stat_map.get("S", stat_map.get("SOG", 0)) or 0)
+                            players_out[ath_name] = {"G": g, "A": a, "PTS": g + a, "SOG": sog}
+                        except Exception:
+                            pass
+                    elif league_name in ("NBA", "NCAAM") and "PTS" in stat_map:
+                        try:
+                            pts = int(stat_map.get("PTS", 0) or 0)
+                            reb = int(stat_map.get("REB", 0) or 0)
+                            ast = int(stat_map.get("AST", 0) or 0)
+                            players_out[ath_name] = {
+                                "PTS": pts,
+                                "REB": reb,
+                                "AST": ast,
+                                "PRA": pts + reb + ast,
+                            }
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+    return players_out
+
+
+def fetch_final_scores(target_dates, pending_bets=None):
     final_games = []
+    pending_text = " ".join(
+        f"{b.get('sport', '')} {b.get('selections', '')} {b.get('notes', '')}"
+        for b in (pending_bets or [])
+    ).lower()
 
     for league_name, league_info in ESPN_LEAGUES.items():
         path = league_info["path"]
@@ -85,6 +135,7 @@ def fetch_final_scores(target_dates):
                 continue
 
             for event in events:
+                event_id = event.get("id", "")
                 status_type = event.get("status", {}).get("type", {})
                 is_completed = status_type.get("completed", False)
                 state = status_type.get("state", "")
@@ -103,10 +154,12 @@ def fetch_final_scores(target_dates):
 
                 home_name = home.get("team", {}).get("displayName", "")
                 away_name = away.get("team", {}).get("displayName", "")
-                home_score = int(home.get("score", 0) or 0)
-                away_score = int(away.get("score", 0) or 0)
+                home_short = home.get("team", {}).get("shortDisplayName", "").lower()
+                away_short = away.get("team", {}).get("shortDisplayName", "").lower()
+                home_score = int(float(home.get("score", 0) or 0))
+                away_score = int(float(away.get("score", 0) or 0))
 
-                final_games.append({
+                game_record = {
                     "league": league_name,
                     "date": d,
                     "matchup": f"{away_name} @ {home_name}",
@@ -117,7 +170,24 @@ def fetch_final_scores(target_dates):
                     "total_points": home_score + away_score,
                     "completed": is_completed,
                     "status": status_type.get("description", state)
-                })
+                }
+
+                # Attach player box-score stats for completed NBA/NHL/NCAAM games mentioned in pending bets
+                if (
+                    is_completed
+                    and event_id
+                    and league_name in ("NHL", "NBA", "NCAAM")
+                    and (
+                        (home_short and home_short in pending_text)
+                        or (away_short and away_short in pending_text)
+                        or league_name.lower() in pending_text
+                    )
+                ):
+                    player_stats = fetch_boxscore_players(path, event_id, league_name)
+                    if player_stats:
+                        game_record["player_boxscore"] = player_stats
+
+                final_games.append(game_record)
 
     return final_games
 
@@ -140,6 +210,7 @@ GRADING RULES:
 5. Match short team names (e.g., "Celtics", "Thunder", "Lakers", "Magic", "Pennsylvania") to ESPN full display names (e.g., "Boston Celtics", "Oklahoma City Thunder", "Los Angeles Lakers", "Orlando Magic", "Pennsylvania Quakers").
 6. For totals (e.g., "Under 57.5"), compare "total_points" (away_score + home_score) strictly against the line.
 7. For moneylines (e.g., "Toledo ML", "Thunder ML"), verify the selected team's score is strictly greater than the opponent's score.
+8. For player props (e.g., "Over 0.5 Points", "Under 0.5 Points", "Over 1.5 Shots", "Over 22.5 Points"), check the player's entry in "player_boxscore" on the completed game (NHL: PTS = G + A, Shots = SOG; NBA/NCAAM: PTS, REB, AST, PRA). If the game is completed and the player is in "player_boxscore", grade strictly against the prop line.
 
 TAGGING RULES:
 - If result is "Won", select the single best matching "WIN: ..." tag from ALLOWED_EDGE_TAGS based on the bet's notes and structure.
@@ -269,7 +340,7 @@ if __name__ == "__main__":
     dates_needed.add((now_utc - timedelta(days=1)).strftime("%Y%m%d"))
 
     print(f"Found {len(pending_bets)} pending bet(s). Fetching ESPN scores for {sorted(dates_needed)}...", flush=True)
-    final_games = fetch_final_scores(sorted(dates_needed))
+    final_games = fetch_final_scores(sorted(dates_needed), pending_bets=pending_bets)
     print(f"Retrieved {len(final_games)} scoreboard records from ESPN.", flush=True)
 
     settlements = grade_pending_bets(pending_bets, final_games)

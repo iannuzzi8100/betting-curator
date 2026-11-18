@@ -62,6 +62,18 @@ def read_google_doc_text(docs_service, doc_id):
     return "".join(chunks)
 
 
+def _parse_dollar(val):
+    if not val:
+        return 0.0
+    cleaned = str(val).replace("$", "").replace(",", "").strip()
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = "-" + cleaned[1:-1]
+    try:
+        return float(cleaned)
+    except Exception:
+        return 0.0
+
+
 def read_tracker_context(gc):
     sh = open_tracker_workbook(gc)
     tracker_ws = sh.worksheet("Challenge Tracker ($100-$1k)")
@@ -72,7 +84,37 @@ def read_tracker_context(gc):
     rules_rows = rules_ws.get_all_values()
     audit_rows = audit_ws.get_all_values()
 
-    summary_block = "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
+    # Deterministic calculation of Settled Bankroll, Pending Wagers, and Available Bankroll
+    settled_bankroll = _parse_dollar(tracker_rows[4][0]) if len(tracker_rows) > 4 and tracker_rows[4] else 0.0
+    pending_lines = []
+    pending_total = 0.0
+
+    header_idx = next((i for i, r in enumerate(tracker_rows) if "Bet ID" in r and "Result" in r), 12)
+    for r in tracker_rows[header_idx + 1 :]:
+        if len(r) > 10 and r[0].strip() and r[10].strip().lower() == "pending":
+            bet_id = r[0].strip()
+            bet_type = r[3].strip() if len(r) > 3 else ""
+            selection = r[5].strip() if len(r) > 5 else ""
+            odds = r[6].strip() if len(r) > 6 else ""
+            stake_val = _parse_dollar(r[8]) if len(r) > 8 else 0.0
+            pending_total += stake_val
+            pending_lines.append(f"- {bet_id} (${stake_val:.2f}) [{bet_type}]: {selection} ({odds})")
+        elif len(r) > 13 and r[0].strip() and r[10].strip().lower() in ("won", "lost", "push"):
+            rb = _parse_dollar(r[13])
+            if rb > 0:
+                settled_bankroll = rb
+
+    available_bankroll = max(0.0, round(settled_bankroll - pending_total, 2))
+    verified_bankroll_banner = (
+        f"VERIFIED LEDGER NUMBERS (USE EXACTLY THESE IN OUTPUT HEADER):\n"
+        f"- Settled Bankroll: ${settled_bankroll:.2f}\n"
+        f"- Pending Wagers Total: ${pending_total:.2f} ({len(pending_lines)} active ticket(s))\n"
+        f"- Available Bankroll: ${available_bankroll:.2f}\n"
+        f"- Active Pending Tickets:\n"
+        + ("\n".join(pending_lines) if pending_lines else "  * None")
+    )
+
+    summary_block = verified_bankroll_banner + "\n\n" + "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
     recent_bets = "\n".join([" | ".join(r[:20]) for r in tracker_rows[-18:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
@@ -95,7 +137,9 @@ Today's Date: {today_str}
 Recent Bets:
 {recent_bets}
 
-### 2. HISTORICAL MISTAKE AUDIT
+### 2. UNIT & TIER RULES + HISTORICAL MISTAKE AUDIT
+{rules_text}
+
 {audit_text}
 
 ### 3. SCRAPED SLATE INTEL (GAME ODDS + 1H LINES + NO-VIG +EV% + PLAYER PROPS + INJURIES + YOUTUBE CONSENSUS)
