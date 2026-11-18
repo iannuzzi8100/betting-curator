@@ -22,14 +22,30 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: python settler.py
-      - run: python scraper.py
-      - run: python curator.py
-      - if: failure()
+
+      - name: Write Google Service Account credentials.json
+        run: |
+          echo "$GCP_SERVICE_ACCOUNT_JSON" > credentials.json
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Settler
+        continue-on-error: true
+        run: python settler.py
+
+      - name: Run Scraper
+        run: python scraper.py
+
+      - name: Run Curator
+        run: python curator.py
+
+      - name: Send Telegram alert on failure
+        if: failure()
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \
