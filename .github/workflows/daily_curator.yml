@@ -2,6 +2,7 @@ name: Daily Betting Intel Scrape & 9:12 AM Telegram Curator
 
 on:
   schedule:
+    - cron: '*/30 * * * *' # Every 30 min — Stage 0: Sync any new Telegram bet screenshots/messages to Google Sheet
     - cron: '12 8 * * *'   # 03:12 AM EST — Stage 1: Settle yesterday's pending bets
     - cron: '30 13 * * *'  # 08:30 AM EST — Stage 2: Morning scrape (odds, props, news & YouTube intel)
     - cron: '12 14 * * *'  # 09:12 AM EST — Stage 3: Morning curate & deliver Telegram slip
