@@ -248,6 +248,15 @@ def main():
             all_extracted.extend(extracted)
 
     set_last_update_id(feed_ws, max_update_id)
+    # Acknowledge offset on Telegram server so consumed updates are never re-delivered
+    try:
+        requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+            params={"offset": max_update_id + 1, "timeout": 1},
+            timeout=6,
+        )
+    except Exception:
+        pass
 
     if not all_extracted:
         print("Processed updates; no new sportsbook tickets detected.")
