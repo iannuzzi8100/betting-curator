@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import json
 import datetime
 import requests
@@ -58,45 +60,109 @@ def set_last_update_id(feed_ws, update_id):
         pass
 
 
-def parse_bet_from_telegram(text_msg=None, image_bytes=None):
+def get_current_sheet_state(tracker_ws):
+    all_vals = tracker_ws.get_all_values()
+    header_idx = next((i for i, r in enumerate(all_vals) if "Bet ID" in r and "Result" in r), 15)
+    pending_rows = []
+    recent_rows = []
+    for idx in range(header_idx + 1, len(all_vals)):
+        r = all_vals[idx]
+        if not r or not r[0].strip().startswith("BET-"):
+            continue
+        item = {
+            "row_index": idx + 1,
+            "bet_id": r[0].strip(),
+            "date": r[1].strip() if len(r) > 1 else "",
+            "sport": r[2].strip() if len(r) > 2 else "",
+            "bet_type": r[3].strip() if len(r) > 3 else "",
+            "selections": r[5].strip() if len(r) > 5 else "",
+            "odds": r[6].strip() if len(r) > 6 else "",
+            "stake": r[8].strip() if len(r) > 8 else "",
+            "result": r[10].strip() if len(r) > 10 else "",
+        }
+        recent_rows.append(item)
+        if item["result"].lower() == "pending":
+            pending_rows.append(item)
+    return all_vals, header_idx, pending_rows, recent_rows[-10:]
+
+
+def parse_telegram_reply(text_msg=None, image_bytes=None, pending_rows=None, recent_rows=None):
     client = genai.Client(api_key=GEMINI_API_KEY)
     est_today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5))).strftime("%Y-%m-%d")
 
     prompt = f"""
-You are a deterministic sportsbook ticket parser for a Hard Rock Bet tracker.
-Extract every sports bet shown in the user's message or Hard Rock Bet screenshot.
+You are a deterministic sportsbook ledger controller for a Hard Rock Bet tracker.
+Interpret the user's Telegram reply (text, caption, and/or screenshot) and determine all spreadsheet actions needed:
+1. New tickets placed (from screenshots or text like "put $4 on Ducks ML +110").
+2. Full-refund cashouts or removals of existing pending bets (e.g., "Cashed out the Portland bet for a full refund", "remove BET-042", "void Temple bet").
+3. Partial cashouts or edits to existing bets (e.g., "cashed out BET-038 for $5.14", "changed Blues stake to $5.00", "Temple is CFB not NCAAM", "BET-043 won").
+
 Today's Date: {est_today}
 
-RULES:
-1. For "sport": use one of ["NBA", "NHL", "NCAAM", "CFB", "NFL", "EPL", "UCL", "ATP", "WTA", "MLB", "Multi-Sport"]. (College basketball = "NCAAM", College football = "CFB").
-2. For "bet_type": use one of ["Straight", "SGP", "Parlay"].
-3. For "selections": format cleanly as "<Pick> (<Matchup>)" e.g. "Howard Bison ML (Howard @ Duquesne)" or "Devon Toews Over 1.5 Shots (Avalanche @ Mammoth)".
-4. For "odds": integer American odds (e.g. -115, 190, 100).
-5. For "stake": numeric dollar wager amount (e.g. 2.50, 1.50).
-6. For "ticket_id": string Hard Rock Bet ID if visible on screenshot (e.g. "4311946676851048722"), else "".
+CURRENT ACTIVE PENDING BETS ON SPREADSHEET:
+{json.dumps(pending_rows or [], indent=2)}
 
-Respond ONLY with valid JSON matching this schema:
+RECENT BETS ON SPREADSHEET:
+{json.dumps(recent_rows or [], indent=2)}
+
+RULES:
+1. For "sport": use one of ["NBA", "NHL", "NCAAM", "CFB", "NFL", "EPL", "UCL", "ATP", "WTA", "MLB", "Multi-Sport"].
+   - Note: Rice @ Temple, MACtion, FBS games = "CFB". College basketball = "NCAAM".
+2. For "bet_type": use one of ["Straight", "SGP", "Parlay"].
+3. For "selections": format cleanly as "<Pick> (<Matchup>)" e.g. "Anaheim Ducks ML (Ducks @ Avalanche)" or "Julian Champagnie Over 5.5 Rebounds (Clippers @ Spurs)".
+4. If the user says they cashed out a pending bet for a full refund (or wants to remove/replace a pending bet), list that pending bet's exact "bet_id" and "row_index" in "removals_or_cashouts" with "is_full_refund": true.
+5. If the user says they cashed out a pending bet for a partial amount (less than stake), set "is_full_refund": false and "cashout_return": <dollar amount>.
+6. If the user asks to edit an existing row's sport, stake, odds, selection, or result, include an entry in "updates".
+
+Respond ONLY with valid JSON matching this exact schema:
 {{
+  "removals_or_cashouts": [
+    {{
+      "row_index": 59,
+      "bet_id": "BET-042",
+      "is_full_refund": true,
+      "cashout_return": 4.00,
+      "reason": "Cashed out Portland Trail Blazers -9.5 for full refund"
+    }}
+  ],
+  "updates": [
+    {{
+      "row_index": 62,
+      "bet_id": "BET-045",
+      "sport": "CFB",
+      "selections": null,
+      "odds": null,
+      "stake": null,
+      "result": null
+    }}
+  ],
   "tickets": [
     {{
       "date": "{est_today}",
-      "sport": "NCAAM",
+      "sport": "NHL",
       "bet_type": "Straight",
-      "selections": "Howard Bison ML (Howard @ Duquesne)",
-      "odds": 190,
-      "stake": 1.50,
-      "ticket_id": "4311946676851048722"
+      "selections": "Anaheim Ducks ML (Ducks @ Avalanche)",
+      "odds": 110,
+      "stake": 4.00,
+      "ticket_id": "1825834922064085270"
     }}
   ]
 }}
 """
     contents = [prompt]
     if text_msg:
-        contents.append(f"User message: {text_msg}")
+        contents.append(f"User Telegram reply text/caption: {text_msg}")
     if image_bytes:
         contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
 
-    for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]:
+    for model_id in [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+    ]:
         try:
             resp = client.models.generate_content(
                 model=model_id,
@@ -104,10 +170,10 @@ Respond ONLY with valid JSON matching this schema:
                 config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
             )
             if resp and resp.text:
-                return json.loads(resp.text).get("tickets", [])
+                return json.loads(resp.text)
         except Exception as exc:
             print(f"Model {model_id} skipped: {exc}")
-    return []
+    return {"removals_or_cashouts": [], "updates": [], "tickets": []}
 
 
 def download_telegram_photo(file_id):
@@ -123,27 +189,128 @@ def download_telegram_photo(file_id):
     return r2.content if r2.status_code == 200 else None
 
 
-def log_tickets_to_sheet(tracker_ws, tickets):
-    all_vals = tracker_ws.get_all_values()
-    header_idx = next((i for i, r in enumerate(all_vals) if "Bet ID" in r and "Result" in r), 12)
+def build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, stake, t_id="", extra_note=""):
+    prev_row = cur_row - 1
+    units_str = f"{stake / 4.0:.2f}U"
+    tier_label = "Core Tier 1" if bet_type == "Straight" else "Flyer Tier 3"
+    note_str = f"Hard Rock Bet Ticket: {sel} ({odds:+d}) | Stake: ${stake:.2f}"
+    if t_id:
+        note_str += f" (Hard Rock ID: {t_id})"
+    if extra_note:
+        note_str += f" [{extra_note}]"
 
+    return [
+        bet_id,
+        date_str,
+        sport,
+        bet_type,
+        tier_label,
+        sel,
+        odds,
+        units_str,
+        stake,
+        f'=IF(OR(ISBLANK(I{cur_row}), ISBLANK(G{cur_row}), I{cur_row}="", G{cur_row}=""), "", IF(G{cur_row}>0, ROUND(I{cur_row}*(1+G{cur_row}/100), 2), ROUND(I{cur_row}*(1+100/ABS(G{cur_row})), 2)))',
+        "Pending",
+        f'=IF(K{cur_row}="Won", J{cur_row}, IF(K{cur_row}="Lost", 0, ""))',
+        f'=IF(OR(K{cur_row}="", K{cur_row}="Pending"), "", IF(K{cur_row}="Lost", -I{cur_row}, IF(ISNUMBER(L{cur_row}), L{cur_row}-I{cur_row}, "")))',
+        f'=IF(OR(ISBLANK(I{cur_row}), I{cur_row}=""), "", IF(ISNUMBER(M{cur_row}), N{prev_row}+M{cur_row}, N{prev_row}))',
+        note_str,
+        "",
+    ]
+
+
+def apply_actions_to_sheet(tracker_ws, actions):
+    all_vals, header_idx, _, _ = get_current_sheet_state(tracker_ws)
     existing_text = "\n".join(" | ".join(r) for r in all_vals[header_idx + 1 :])
-    last_bet_num = 0
-    last_bet_row = header_idx + 2
 
-    for idx in range(header_idx + 1, len(all_vals)):
-        r = all_vals[idx]
-        if r and r[0].strip().startswith("BET-"):
-            try:
-                num = int(r[0].strip().split("-")[1])
-                if num > last_bet_num:
-                    last_bet_num = num
-                    last_bet_row = idx + 1
-            except Exception:
-                pass
+    removals = actions.get("removals_or_cashouts", []) or []
+    updates = actions.get("updates", []) or []
+    new_tickets = actions.get("tickets", []) or []
 
-    logged = []
-    for t in tickets:
+    action_notes = []
+    freed_slots = []  # (row_index, bet_id, reason)
+
+    # 1. Process removals / cashouts
+    for rem in removals:
+        r_idx = rem.get("row_index")
+        b_id = str(rem.get("bet_id", "")).strip()
+        is_full = bool(rem.get("is_full_refund", True))
+        c_ret = rem.get("cashout_return")
+        reason = str(rem.get("reason", "Cashed out")).strip()
+
+        if not r_idx and b_id:
+            for i in range(header_idx + 1, len(all_vals)):
+                if all_vals[i] and all_vals[i][0].strip() == b_id:
+                    r_idx = i + 1
+                    break
+        if not r_idx:
+            continue
+
+        if is_full:
+            freed_slots.append((r_idx, b_id, reason))
+        else:
+            # Partial cashout: record actual return & mark Cashed Out / Lost
+            tracker_ws.update_acell(f"K{r_idx}", "Lost")
+            if c_ret is not None:
+                tracker_ws.update_acell(f"L{r_idx}", float(c_ret))
+                stake_cell = all_vals[r_idx - 1][8].replace("$", "").strip() if len(all_vals[r_idx - 1]) > 8 else "0"
+                try:
+                    net_pl = round(float(c_ret) - float(stake_cell), 2)
+                    tracker_ws.update_acell(f"M{r_idx}", net_pl)
+                except Exception:
+                    pass
+            action_notes.append(f"🔄 *Partial Cashout on {b_id}* (Row {r_idx}): Returned ${float(c_ret or 0):.2f}")
+
+    # 2. Process in-place field updates
+    for upd in updates:
+        r_idx = upd.get("row_index")
+        b_id = str(upd.get("bet_id", "")).strip()
+        if not r_idx and b_id:
+            for i in range(header_idx + 1, len(all_vals)):
+                if all_vals[i] and all_vals[i][0].strip() == b_id:
+                    r_idx = i + 1
+                    break
+        if not r_idx:
+            continue
+
+        changed_fields = []
+        if upd.get("sport"):
+            tracker_ws.update_acell(f"C{r_idx}", str(upd["sport"]).strip())
+            changed_fields.append(f"Sport={upd['sport']}")
+        if upd.get("selections"):
+            tracker_ws.update_acell(f"F{r_idx}", str(upd["selections"]).strip())
+            changed_fields.append(f"Selection={upd['selections']}")
+        if upd.get("odds") is not None:
+            tracker_ws.update_acell(f"G{r_idx}", int(upd["odds"]))
+            changed_fields.append(f"Odds={int(upd['odds']):+d}")
+        if upd.get("stake") is not None:
+            st = float(upd["stake"])
+            tracker_ws.update_acell(f"H{r_idx}", f"{st/4.0:.2f}U")
+            tracker_ws.update_acell(f"I{r_idx}", st)
+            changed_fields.append(f"Stake=${st:.2f}")
+        if upd.get("result"):
+            tracker_ws.update_acell(f"K{r_idx}", str(upd["result"]).strip())
+            changed_fields.append(f"Result={upd['result']}")
+        if changed_fields:
+            action_notes.append(f"✏️ *Updated {b_id}* (Row {r_idx}): {', '.join(changed_fields)}")
+
+    # 3. Filter new tickets for duplicates
+    valid_new_tickets = []
+    for t in new_tickets:
+        t_id = str(t.get("ticket_id", "")).strip()
+        sel = str(t.get("selections", "")).strip()
+        stake = float(t.get("stake", 0.0) or 0.0)
+        if not sel or stake <= 0:
+            continue
+        if t_id and t_id in existing_text:
+            print(f"Skipping duplicate ticket ID {t_id} ({sel})")
+            continue
+        valid_new_tickets.append(t)
+
+    # 4. If we have freed_slots from full-refund cashouts, fill them with replacement tickets first!
+    while freed_slots and valid_new_tickets:
+        r_idx, b_id, reason = freed_slots.pop(0)
+        t = valid_new_tickets.pop(0)
         t_id = str(t.get("ticket_id", "")).strip()
         sel = str(t.get("selections", "")).strip()
         stake = float(t.get("stake", 0.0) or 0.0)
@@ -152,52 +319,60 @@ def log_tickets_to_sheet(tracker_ws, tickets):
         bet_type = str(t.get("bet_type", "Straight")).strip()
         date_str = str(t.get("date", "")).strip()
 
-        if not sel or stake <= 0:
-            continue
-        if t_id and t_id in existing_text:
-            print(f"Skipping duplicate ticket ID {t_id} ({sel})")
-            continue
-
-        last_bet_num += 1
-        last_bet_row += 1
-        bet_id = f"BET-{last_bet_num:03d}"
-        prev_row = last_bet_row - 1
-        cur_row = last_bet_row
-        units_str = f"{stake / 4.0:.2f}U"
-        tier_label = "Core Tier 1" if bet_type == "Straight" else "Flyer Tier 3"
-        note_str = f"Hard Rock Bet Ticket: {sel} ({odds:+d}) | Stake: ${stake:.2f}" + (
-            f" (Hard Rock ID: {t_id})" if t_id else ""
+        row_payload = build_row_payload(
+            b_id, r_idx, date_str, sport, bet_type, sel, odds, stake, t_id=t_id, extra_note=f"Replaced cashed-out ticket: {reason}"
         )
+        tracker_ws.update(range_name=f"A{r_idx}:P{r_idx}", values=[row_payload], value_input_option="USER_ENTERED")
+        action_notes.append(f"🔄 *Replaced {b_id}* (Row {r_idx} full refund) -> *{sel} ({odds:+d})* — *${stake:.2f}*")
 
-        row_payload = [
-            bet_id,
-            date_str,
-            sport,
-            bet_type,
-            tier_label,
-            sel,
-            odds,
-            units_str,
-            stake,
-            f'=IF(OR(ISBLANK(I{cur_row}), ISBLANK(G{cur_row}), I{cur_row}="", G{cur_row}=""), "", IF(G{cur_row}>0, ROUND(I{cur_row}*(1+G{cur_row}/100), 2), ROUND(I{cur_row}*(1+100/ABS(G{cur_row})), 2)))',
-            "Pending",
-            f'=IF(K{cur_row}="Won", J{cur_row}, IF(K{cur_row}="Lost", 0, ""))',
-            f'=IF(OR(K{cur_row}="", K{cur_row}="Pending"), "", IF(K{cur_row}="Lost", -I{cur_row}, IF(ISNUMBER(L{cur_row}), L{cur_row}-I{cur_row}, "")))',
-            f'=IF(OR(ISBLANK(I{cur_row}), I{cur_row}=""), "", IF(ISNUMBER(M{cur_row}), N{prev_row}+M{cur_row}, N{prev_row}))',
-            note_str,
-            "",
-        ]
+    # 5. If any freed_slots remain without replacement tickets, clear/shift remaining pending rows up
+    for r_idx, b_id, reason in freed_slots:
         tracker_ws.update(
-            range_name=f"A{cur_row}:P{cur_row}",
-            values=[row_payload],
+            range_name=f"A{r_idx}:I{r_idx}",
+            values=[["", "", "", "", "", "", "", "", ""]],
             value_input_option="USER_ENTERED",
         )
-        logged.append((bet_id, sel, odds, stake))
+        tracker_ws.update_acell(f"K{r_idx}", "")
+        tracker_ws.update(range_name=f"O{r_idx}:P{r_idx}", values=[["", ""]], value_input_option="USER_ENTERED")
+        action_notes.append(f"🗑️ *Removed Cashed-Out {b_id}* (Row {r_idx} — {reason})")
 
-    return logged
+    # 6. Append any remaining new tickets to the next available BET-XXX row
+    if valid_new_tickets:
+        all_vals, header_idx, _, _ = get_current_sheet_state(tracker_ws)
+        last_bet_num = 0
+        last_bet_row = header_idx + 1
+        for idx in range(header_idx + 1, len(all_vals)):
+            r = all_vals[idx]
+            if r and r[0].strip().startswith("BET-"):
+                try:
+                    num = int(r[0].strip().split("-")[1])
+                    if num > last_bet_num:
+                        last_bet_num = num
+                        last_bet_row = idx + 1
+                except Exception:
+                    pass
+
+        for t in valid_new_tickets:
+            t_id = str(t.get("ticket_id", "")).strip()
+            sel = str(t.get("selections", "")).strip()
+            stake = float(t.get("stake", 0.0) or 0.0)
+            odds = int(t.get("odds", -110) or -110)
+            sport = str(t.get("sport", "NBA")).strip()
+            bet_type = str(t.get("bet_type", "Straight")).strip()
+            date_str = str(t.get("date", "")).strip()
+
+            last_bet_num += 1
+            last_bet_row += 1
+            bet_id = f"BET-{last_bet_num:03d}"
+            cur_row = last_bet_row
+            row_payload = build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, stake, t_id=t_id)
+            tracker_ws.update(range_name=f"A{cur_row}:P{cur_row}", values=[row_payload], value_input_option="USER_ENTERED")
+            action_notes.append(f"✅ *Logged {bet_id}* (${stake:.2f}) — {sel} ({odds:+d})")
+
+    return action_notes
 
 
-def main():
+def process_once(poll_timeout=5):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials not configured.")
         return
@@ -209,17 +384,16 @@ def main():
 
     resp = requests.get(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
-        params={"offset": last_offset + 1, "timeout": 5},
-        timeout=12,
+        params={"offset": last_offset + 1, "timeout": poll_timeout},
+        timeout=poll_timeout + 10,
     ).json()
 
     updates = resp.get("result", [])
     if not updates:
-        print("No new Telegram bet messages or screenshots to log.")
         return
 
     max_update_id = last_offset
-    all_extracted = []
+    all_action_notes = []
 
     for u in updates:
         u_id = u.get("update_id", 0)
@@ -233,22 +407,43 @@ def main():
         if TELEGRAM_CHAT_ID and chat_id != str(TELEGRAM_CHAT_ID):
             continue
 
-        text = msg.get("text") or msg.get("caption") or ""
+        text = (msg.get("text") or msg.get("caption") or "").strip()
         photos = msg.get("photo", [])
-        img_bytes = None
-        if photos:
-            best_photo = photos[-1]
-            img_bytes = download_telegram_photo(best_photo["file_id"])
+        img_bytes = download_telegram_photo(photos[-1]["file_id"]) if photos else None
 
-        if text.strip().lower() in ("/start", "hi", "hello", "status"):
+        if not img_bytes and text.lower() in ("/start", "hi", "hello"):
+            continue
+
+        if not img_bytes and text.lower() in ("status", "/status", "bankroll", "/bankroll"):
+            all_vals, _, pending_rows, _ = get_current_sheet_state(tracker_ws)
+            bankroll_str = all_vals[4][0] if len(all_vals) > 4 and all_vals[4] else "$0.00"
+            avail_str = all_vals[5][0] if len(all_vals) > 5 and all_vals[5] else ""
+            p_lines = [f"• *{p['bet_id']}* ({p['stake']}) — {p['selections']} ({p['odds']})" for p in pending_rows]
+            status_reply = (
+                f"📊 *Live Challenge Tracker Status*\n"
+                f"Settled Bankroll: *{bankroll_str}* ({avail_str})\n\n"
+                f"*Active Pending ({len(pending_rows)}):*\n"
+                + ("\n".join(p_lines) if p_lines else "• None")
+            )
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": status_reply, "parse_mode": "Markdown"},
+                timeout=10,
+            )
             continue
 
         if img_bytes or text:
-            extracted = parse_bet_from_telegram(text_msg=text, image_bytes=img_bytes)
-            all_extracted.extend(extracted)
+            _, _, pending_rows, recent_rows = get_current_sheet_state(tracker_ws)
+            parsed = parse_telegram_reply(
+                text_msg=text,
+                image_bytes=img_bytes,
+                pending_rows=pending_rows,
+                recent_rows=recent_rows,
+            )
+            notes = apply_actions_to_sheet(tracker_ws, parsed)
+            all_action_notes.extend(notes)
 
     set_last_update_id(feed_ws, max_update_id)
-    # Acknowledge offset on Telegram server so consumed updates are never re-delivered
     try:
         requests.get(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
@@ -258,25 +453,34 @@ def main():
     except Exception:
         pass
 
-    if not all_extracted:
-        print("Processed updates; no new sportsbook tickets detected.")
-        return
-
-    logged = log_tickets_to_sheet(tracker_ws, all_extracted)
-    if logged:
-        lines = [f"✅ *Logged {len(logged)} Ticket(s) to Challenge Tracker:*"]
-        for bid, sel, odds, stake in logged:
-            lines.append(f"• *{bid}* (${stake:.2f}) — {sel} ({odds:+d})")
+    if all_action_notes:
+        all_vals, _, pending_rows, _ = get_current_sheet_state(tracker_ws)
+        bankroll_str = all_vals[4][0] if len(all_vals) > 4 and all_vals[4] else "$0.00"
+        avail_str = all_vals[5][0] if len(all_vals) > 5 and all_vals[5] else ""
+        reply_text = (
+            "📋 *Spreadsheet Synced from Telegram Reply:*\n"
+            + "\n".join(all_action_notes)
+            + f"\n\n💰 *Bankroll:* {bankroll_str} | {avail_str} | *Active Tickets:* {len(pending_rows)}"
+        )
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": "\n".join(lines),
-                "parse_mode": "Markdown",
-            },
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": reply_text, "parse_mode": "Markdown"},
             timeout=10,
         )
-        print(f"Successfully logged {len(logged)} ticket(s) from Telegram.")
+        print(f"Synced {len(all_action_notes)} action(s) from Telegram to Google Sheet.", flush=True)
+
+
+def main():
+    if "--watch" in sys.argv:
+        print("Starting real-time Telegram-to-Spreadsheet Watcher daemon...", flush=True)
+        while True:
+            try:
+                process_once(poll_timeout=15)
+            except Exception as exc:
+                print(f"Watcher cycle warning: {exc}", flush=True)
+            time.sleep(3)
+    else:
+        process_once(poll_timeout=4)
 
 
 if __name__ == "__main__":
