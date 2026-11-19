@@ -135,14 +135,15 @@ def read_tracker_context(gc):
     )
 
     summary_block = verified_bankroll_banner + "\n\n" + "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
-    recent_bets = "\n".join([" | ".join(r[:20]) for r in tracker_rows[-18:]])
+    non_empty_rows = [r for r in tracker_rows[header_idx + 1 :] if r and r[0].strip()]
+    recent_bets = "\n".join([" | ".join(r[:20]) for r in non_empty_rows[-15:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 
-    return summary_block, recent_bets, rules_text, audit_text
+    return summary_block, recent_bets, rules_text, audit_text, available_bankroll
 
 
-def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text):
+def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, available_bankroll=10.0):
     client = genai.Client(
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
@@ -165,47 +166,47 @@ Recent Bets:
 ### 3. SCRAPED SLATE INTEL (GAME ODDS + 1H LINES + NO-VIG +EV% + PLAYER PROPS + INJURIES + YOUTUBE CONSENSUS)
 {intel_text[:32000]}
 
-### OBJECTIVE & ALLOCATION ENGINE (ALIGNED WITH SHEET UNIT & TIER RULES):
+### OBJECTIVE & ALLOCATION ENGINE (MANDATORY DAILY DEPLOYMENT WHEN AVAILABLE BANKROLL >= $2.00):
 1. Use the exact **VERIFIED LEDGER NUMBERS** above (`Settled Bankroll`, `Pending Wagers Total`, `Available Unstaked Bankroll`, and `Active Tier`).
-2. Scan ALL quantitative signals across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
-   - **Multi-Book Sharp Consensus `[+EV]` & `[🔥 STALE LINE]` Outliers:** Prioritize lines where Hard Rock Bet lags behind Pinnacle/FanDuel/DraftKings consensus or offers verified positive No-Vig EV (juice >= -140, crossing key numbers 3, 7, 10).
-   - **ESPN BPI / FPI Model Discrepancies (`[📊 BPI/FPI +EV]`):** High-conviction straight plays where ESPN BPI/FPI win probability exceeds the no-vig market implied probability by 4%+.
+2. Because Available Unstaked Bankroll is **${available_bankroll:.2f}** (>= $2.00), you **MUST recommend 3 to 4 concrete Best EV Plays** from today's scraped slate below. NEVER output "Holding" or "None" when Available Unstaked Bankroll >= $2.00.
+3. Scan ALL quantitative signals across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
+   - **ESPN BPI / FPI Model Discrepancies (`[📊 BPI/FPI +EV]`):** Straight Moneylines or Spreads where ESPN BPI/FPI win probability exceeds the no-vig market implied probability by 4%+.
    - **Situational & Line Movement Edges (`[⚠️ FATIGUE EDGE]` & `[🔥 STEAM]` & `[🥅 NHL GOALIES]`):**
-     * Fade teams on Road Back-to-Backs (0 days rest) against rested home opponents (`WIN: Fatigue / Back-to-Back Fade`).
-     * Follow sharp opening-to-current steam moves (`[🔥 SPREAD/TOTAL/ML STEAM]`) and exploit NHL starting goalie SV%/GAA mismatches.
-   - **+EV & Steamed Player Props (`[PROP]` & `[PROP STEAM]`):** Verified +2%+ EV vs sharp books or heavy opening-to-current prop steam with juice >= -165 (never recommend -200+ heavy-juice traps).
-   - **Correlated Same-Game Parlays / 2-Leg Parlays (ONLY if Settled Bankroll >= $50.00; STRICTLY ZERO 3+ leg parlays):**
-     * If in Survival Tier (< $50.00), recommend **100% Straight Bets / Player Props only** (zero parlays/SGPs).
-     * If >= $50.00, parlays/SGPs are strictly capped at **maximum 2 correlated legs** (never 3+ legs, and never stack the same team across multiple tickets per Rule 3).
-3. Rank the **Top 1 to 4 Best Bets of the Day** and size stakes via **Fractional Kelly** & Active Tier rules:
-   - **A+ Single Play (>5% mathematical EV or major injury mismatch):** Stake **15%–25%** of Available Bankroll.
-   - **A Core Play / Player Prop (2.5%–5% EV):** Stake **10%–18%** of Available Bankroll.
-   - **2-Leg Correlated SGP/Parlay (only when Bankroll >= $50):** Stake **5%–10%** of Available Bankroll.
-   - If `Available Unstaked Bankroll < $2.00`, do not recommend new wagers (`• Holding — waiting for pending slate to settle before deploying capital.`).
-4. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]` so the user confirms active status before locking it in on Hard Rock Bet.
+     * Fade teams on Back-to-Backs (0 days rest) against rested opponents (`WIN: Fatigue / Back-to-Back Fade`).
+     * Exploit large NHL starting goalie SV%/GAA mismatches (e.g. a .920+ SV% starter facing a sub-.885 SV% starter at playable moneyline/puckline odds).
+     * Follow sharp opening-to-current steam moves (`[🔥 SPREAD/TOTAL/ML STEAM]`).
+   - **+EV & Steamed Player Props (`[PROP]` & `[PROP STEAM]`):** Straight Player Props (Points, Rebounds, Assists, 3PM, Shots on Goal) with verified +EV or strong opening-to-current prop steam and playable juice (>= -155).
+   - **Multi-Book Sharp Consensus `[+EV]` & `[🔥 STALE LINE]` Outliers:** Lines where Hard Rock Bet lags behind sharp consensus.
+   - **Tier Structure Rule:**
+     * In **Survival Tier (< $50.00)**: All **Straight Bets** (Moneylines, Spreads, Totals, and Straight Player Props) are 100% eligible! Only multi-leg Parlays/SGPs are suppressed below $50.00.
+     * In **Tier 1+ (>= $50.00)**: Straight bets + max 2-leg correlated SGPs/Parlays are eligible (strictly zero 3+ leg parlays).
+4. Rank the **Top 3 to 4 Best Bets of the Day** and size stakes via **Fractional Kelly** & Active Tier rules:
+   - **A+ Single Play (>5% EV, major goalie mismatch, or B2B fatigue mismatch):** Stake **$3.50–$6.00** (or 12%–20% of Available Bankroll).
+   - **A Core Play / Steamed Player Prop:** Stake **$2.50–$4.50** (or 8%–15% of Available Bankroll).
+   - Keep total new recommended stakes within **50% of Available Unstaked Bankroll** (roughly **$10.00–$15.00 total** across the 3–4 plays when Available Bankroll is ~$30.00).
+5. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]` so the user confirms active status before locking it in on Hard Rock Bet.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
 - Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
 - Use short team/player names.
-- Every parlay/SGP (both Pending and New) MUST list each pick on its own indented sub-line (`  - Pick (Odds)`).
 
 🎯 *{today_str} Hard Rock Bet Slate*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 *Pending ($XX.XX):*
-• *BET-XXX* ($X.XX) — [Straight Pick (Odds)]
-• *BET-XXX* ($X.XX) — [Parlay Title (Total Odds)]
-  - [Pick 1 (Odds)]
-  - [Pick 2 (Odds)]
+• *None* (or list active pending BET-XXX rows if any)
 
 *Today's Best EV Plays:*
-1. *[Play Type] Selection (Odds)* — *$X.XX*
-   - [If Parlay/SGP: list each leg on its own sub-line]
-   - Edge: [1 short line: No-Vig EV%, sharp delta, or injury edge]
-
-(If Available Bankroll < $4.00, output ONLY: `• Holding — waiting for pending slate to settle before deploying capital.`)
+1. *[Straight] Selection (Odds)* — *$X.XX*
+   - Edge: [1 short line: BPI/FPI EV%, goalie SV%/GAA delta, B2B fatigue edge, or prop steam move]
+2. *[Straight] Selection (Odds)* — *$X.XX*
+   - Edge: [1 short line: BPI/FPI EV%, goalie SV%/GAA delta, B2B fatigue edge, or prop steam move]
+3. *[Straight] Selection (Odds)* — *$X.XX*
+   - Edge: [1 short line: BPI/FPI EV%, goalie SV%/GAA delta, B2B fatigue edge, or prop steam move]
 """
     candidate_models = [
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
@@ -235,7 +236,11 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
                 contents=prompt,
             )
             if response and response.text:
-                return response.text.strip()
+                txt = response.text.strip()
+                if available_bankroll >= 2.0 and ("Holding —" in txt or "1." not in txt):
+                    print(f"Model {model_id} returned a Holding stub despite ${available_bankroll:.2f} available; retrying next model...")
+                    continue
+                return txt
         except Exception as exc:
             print(f"Model {model_id} skipped: {exc}")
     raise RuntimeError("All discovered Gemini models failed.")
@@ -280,9 +285,11 @@ def main():
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
     today_str = est_now.strftime("%Y-%m-%d")
     gc, docs_service = get_google_clients()
-    summary_block, recent_bets, rules_text, audit_text = read_tracker_context(gc)
+    summary_block, recent_bets, rules_text, audit_text, available_bankroll = read_tracker_context(gc)
     intel_text = read_google_doc_text(docs_service, INTEL_DOC_ID, today_str=today_str) if INTEL_DOC_ID else "No Intel Doc ID set."
-    curated_message = run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text)
+    curated_message = run_argon_curation(
+        today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, available_bankroll=available_bankroll
+    )
     append_to_curator_feed(gc, today_str, curated_message)
     send_telegram_alert(curated_message)
 
