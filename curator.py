@@ -176,7 +176,7 @@ Recent Bets:
      * Exploit large NHL starting goalie SV%/GAA mismatches (e.g. a .920+ SV% starter facing a sub-.885 SV% starter at playable moneyline/puckline odds).
      * Follow sharp opening-to-current steam moves (`[🔥 SPREAD/TOTAL/ML STEAM]`).
    - **+EV & Steamed Player Props (`[PROP]` & `[PROP STEAM]`):** Straight Player Props (Points, Rebounds, Assists, 3PM, Shots on Goal) with verified +EV or strong opening-to-current prop steam and playable juice (>= -155).
-   - **Multi-Book Sharp Consensus `[+EV]` & `[🔥 STALE LINE]` Outliers:** Lines where Hard Rock Bet lags behind sharp consensus.
+   - **Multi-Book Sharp Consensus `[+EV]` & `[🔥 STALE LINE]` Outliers:** Prioritize lines where Hard Rock Bet lags behind Pinnacle/FanDuel/DraftKings consensus or offers verified positive No-Vig EV (standard half-point spreads like -3.5, -7.5, -9.5 are completely fine; do NOT require buying half-points or whole-number spreads).
    - **Tier Structure Rule:**
      * In **Survival Tier (< $50.00)**: All **Straight Bets** (Moneylines, Spreads, Totals, and Straight Player Props) are 100% eligible! Only multi-leg Parlays/SGPs are suppressed below $50.00.
      * In **Tier 1+ (>= $50.00)**: Straight bets + max 2-leg correlated SGPs/Parlays are eligible (strictly zero 3+ leg parlays).
