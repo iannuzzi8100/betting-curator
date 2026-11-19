@@ -55,6 +55,8 @@ def get_last_update_id(feed_ws):
 
 def set_last_update_id(feed_ws, update_id):
     try:
+        if feed_ws.col_count < 13:
+            feed_ws.add_cols(13 - feed_ws.col_count)
         feed_ws.update_acell("M1", f"TG_OFFSET:{update_id}")
     except Exception:
         pass
