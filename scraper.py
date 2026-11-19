@@ -109,14 +109,33 @@ def american_to_decimal(odds):
     return 1.0 + (odds / 100.0)
 
 
+def power_devig_prob(imp_target, imp_opp):
+    """
+    Power (Shin-style) devigging: solves for exponent k >= 1.0 such that imp_target^k + imp_opp^k = 1.0.
+    Corrects for the Favorite-Longshot Bias where bookmakers pack disproportionate vig into underdogs.
+    """
+    if imp_target <= 0 or imp_opp <= 0 or (imp_target + imp_opp) <= 1.0:
+        tot = imp_target + imp_opp
+        return (imp_target / tot) if tot > 0 else 0.0
+    lo, hi = 1.0, 5.0
+    for _ in range(25):
+        mid = (lo + hi) / 2.0
+        val = (imp_target ** mid) + (imp_opp ** mid)
+        if val > 1.0:
+            lo = mid
+        else:
+            hi = mid
+    k = (lo + hi) / 2.0
+    return imp_target ** k
+
+
 def compute_novig_ev(hr_price, sharp_price_target, sharp_price_opp):
-    """Strips vig from sharp 2-way line and calculates exact EV% and Quarter-Kelly% for Hard Rock price."""
+    """Strips vig from sharp 2-way line via Power Devigging and calculates exact EV% and Quarter-Kelly%."""
     imp_target = american_to_implied(sharp_price_target)
     imp_opp = american_to_implied(sharp_price_opp)
-    total_imp = imp_target + imp_opp
-    if total_imp <= 0:
+    if (imp_target + imp_opp) <= 0:
         return 0.0, 0.0, 0.0
-    fair_prob = imp_target / total_imp
+    fair_prob = power_devig_prob(imp_target, imp_opp)
     hr_dec = american_to_decimal(hr_price)
     ev_pct = ((fair_prob * hr_dec) - 1.0) * 100.0
     # Quarter Kelly fraction: 0.25 * ((b * p - q) / b)
@@ -550,7 +569,8 @@ def fetch_espn_quant_matchups_and_props():
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=10).json()
 
-                # ESPN BPI / FPI Model Win Probability vs Market Implied Probability
+                # ESPN BPI / FPI Model Win Probability vs Power-Devigged Market Implied Probability
+                # Enforce Sweet-Spot Odds (-155 to +135) and ensure sharp steam is NOT moving against the pick
                 pred = sum_data.get("predictor", {})
                 h_proj = pred.get("homeTeam", {}).get("gameProjection")
                 a_proj = pred.get("awayTeam", {}).get("gameProjection")
@@ -561,26 +581,34 @@ def fetch_espn_quant_matchups_and_props():
                     if h_ml_close is not None and a_ml_close is not None:
                         imp_h = american_to_implied(h_ml_close)
                         imp_a = american_to_implied(a_ml_close)
-                        tot_imp = imp_h + imp_a
-                        if tot_imp > 0:
-                            mkt_h = (imp_h / tot_imp) * 100.0
-                            mkt_a = (imp_a / tot_imp) * 100.0
-                            if (h_bpi - mkt_h) >= 4.0 and h_ml_close >= -160:
+                        if (imp_h + imp_a) > 0:
+                            mkt_h = power_devig_prob(imp_h, imp_a) * 100.0
+                            mkt_a = power_devig_prob(imp_a, imp_h) * 100.0
+                            steam_str = " ".join(tags)
+                            if (
+                                3.5 <= (h_bpi - mkt_h) <= 18.0
+                                and -155 <= h_ml_close <= 135
+                                and f"toward {a_abbr}" not in steam_str
+                            ):
                                 dec_h = american_to_decimal(h_ml_close)
                                 ev_h = round(((h_bpi / 100.0) * dec_h - 1.0) * 100.0, 2)
-                                if ev_h >= 2.0:
+                                if ev_h >= 2.5:
                                     tags.append(
-                                        f"[📊 BPI/FPI +EV: {h_abbr} ML ({h_ml_close:+d}) | BPI Win: {h_bpi:.1f}% vs Mkt NoVig: {mkt_h:.1f}% | EV: +{ev_h}%]"
+                                        f"[📊 BPI/FPI +EV (Sweet-Spot): {h_abbr} ML ({h_ml_close:+d}) | BPI Win: {h_bpi:.1f}% vs PowerNoVig: {mkt_h:.1f}% | EV: +{ev_h}%]"
                                     )
-                            elif (a_bpi - mkt_a) >= 4.0 and a_ml_close >= -160:
+                            elif (
+                                3.5 <= (a_bpi - mkt_a) <= 18.0
+                                and -155 <= a_ml_close <= 135
+                                and f"toward {h_abbr}" not in steam_str
+                            ):
                                 dec_a = american_to_decimal(a_ml_close)
                                 ev_a = round(((a_bpi / 100.0) * dec_a - 1.0) * 100.0, 2)
-                                if ev_a >= 2.0:
+                                if ev_a >= 2.5:
                                     tags.append(
-                                        f"[📊 BPI/FPI +EV: {a_abbr} ML ({a_ml_close:+d}) | BPI Win: {a_bpi:.1f}% vs Mkt NoVig: {mkt_a:.1f}% | EV: +{ev_a}%]"
+                                        f"[📊 BPI/FPI +EV (Sweet-Spot): {a_abbr} ML ({a_ml_close:+d}) | BPI Win: {a_bpi:.1f}% vs PowerNoVig: {mkt_a:.1f}% | EV: +{ev_a}%]"
                                     )
 
-                # NHL Probable / Confirmed Starting Goalies + Season SV% & GAA
+                # NHL Probable / Confirmed Starting Goalies + Season SV% & GAA + Goalie Mismatch Edge Detector
                 if label == "NHL":
                     goalie_stats_lookup = {}
                     g_block = sum_data.get("goalies", {})
@@ -595,7 +623,8 @@ def fetch_espn_quant_matchups_and_props():
                             )
 
                     goalie_notes = []
-                    for side_comp, side_abbr in ((away, a_abbr), (home, h_abbr)):
+                    parsed_goalies = {}
+                    for side_comp, side_abbr, side_ml in ((away, a_abbr, a_ml_close), (home, h_abbr, h_ml_close)):
                         probs = side_comp.get("probables", [])
                         if probs:
                             p0 = probs[0]
@@ -604,8 +633,31 @@ def fetch_espn_quant_matchups_and_props():
                             p_status = p0.get("status", {}).get("name", "Probable")
                             _, sv_pct, gaa = goalie_stats_lookup.get(pid, (p_name, "N/A", "N/A"))
                             goalie_notes.append(f"{side_abbr}: {p_name} ({p_status}, {sv_pct} SV%, {gaa} GAA)")
+                            try:
+                                sv_f = float(sv_pct) if sv_pct != "N/A" else None
+                                gaa_f = float(gaa) if gaa != "N/A" else None
+                                if sv_f and gaa_f:
+                                    parsed_goalies[side_abbr] = (p_name, sv_f, gaa_f, side_ml)
+                            except Exception:
+                                pass
                     if goalie_notes:
                         tags.append(f"[🥅 NHL GOALIES: {' vs '.join(goalie_notes)}]")
+                    if len(parsed_goalies) == 2:
+                        a_g, h_g = parsed_goalies.get(a_abbr), parsed_goalies.get(h_abbr)
+                        if a_g and h_g:
+                            if (a_g[1] - h_g[1]) >= 0.025 and a_g[3] is not None and -160 <= a_g[3] <= 135:
+                                tags.append(
+                                    f"[🎯 GOALIE MISMATCH EDGE: {a_abbr} ML ({a_g[3]:+d}) — {a_g[0]} ({a_g[1]:.3f} SV%, {a_g[2]:.2f} GAA) vs {h_g[0]} ({h_g[1]:.3f} SV%, {h_g[2]:.2f} GAA)]"
+                                )
+                            elif (h_g[1] - a_g[1]) >= 0.025 and h_g[3] is not None and -160 <= h_g[3] <= 135:
+                                tags.append(
+                                    f"[🎯 GOALIE MISMATCH EDGE: {h_abbr} ML ({h_g[3]:+d}) — {h_g[0]} ({h_g[1]:.3f} SV%, {h_g[2]:.2f} GAA) vs {a_g[0]} ({a_g[1]:.3f} SV%, {a_g[2]:.2f} GAA)]"
+                                )
+
+                # Multi-Signal Confluence Detector (2+ independent signals on the same game)
+                edge_signals = [t for t in tags if any(k in t for k in ("FATIGUE EDGE", "STEAM", "BPI/FPI +EV", "GOALIE MISMATCH"))]
+                if len(edge_signals) >= 2:
+                    tags.append(f"[🏆 A+ CONFLUENCE ({len(edge_signals)} Signals Aligned)]")
             except Exception:
                 pass
 
@@ -662,7 +714,10 @@ def fetch_espn_quant_matchups_and_props():
                         p_name = athlete_cache[ath_ref]
                         if p_name == "Player":
                             continue
-                        dir_side = "Over" if (cur_line > (open_line or cur_line) or cur_odds < (open_odds or cur_odds)) else "Under"
+                        if open_line is not None and cur_line != open_line:
+                            dir_side = "Over" if cur_line > open_line else "Under"
+                        else:
+                            dir_side = "Over" if cur_odds < (open_odds or cur_odds) else "Under"
                         quant_props.append(
                             f"- [{label} PROP STEAM] {p_name} ({a_abbr} @ {h_abbr}) {prop_name} {dir_side} {cur_line} ({cur_odds:+d}) "
                             f"[Steamed from Open {open_line} ({open_odds:+d}) -> Now {cur_line} ({cur_odds:+d})]"

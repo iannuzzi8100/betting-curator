@@ -148,8 +148,14 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
     )
+    # Simultaneous Multi-Bet Fractional Kelly Stakes (45%-50% max simultaneous slate deployment)
+    stake_a_plus = max(1.50, round(available_bankroll * 0.145, 2))
+    stake_a_core = max(1.50, round(available_bankroll * 0.115, 2))
+    stake_b_prop = max(1.50, round(available_bankroll * 0.095, 2))
+    max_new_budget = round(available_bankroll * 0.48, 2)
+
     prompt = f"""
-You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using Fractional Kelly staking.
+You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using Simultaneous Multi-Bet Fractional Kelly staking and Top-Down Sharp Devigging.
 Today's Date: {today_str}
 
 ### 1. LIVE BANKROLL & RECENT LEDGER
@@ -163,28 +169,33 @@ Recent Bets:
 
 {audit_text}
 
-### 3. SCRAPED SLATE INTEL (GAME ODDS + 1H LINES + NO-VIG +EV% + PLAYER PROPS + INJURIES + YOUTUBE CONSENSUS)
+### 3. SCRAPED SLATE INTEL (POWER-DEVIGGED +EV% + GOALIE MISMATCHES + B2B FATIGUE + BPI/FPI + PROP STEAM + INJURIES)
 {intel_text[:32000]}
 
-### OBJECTIVE & ALLOCATION ENGINE (MANDATORY DAILY DEPLOYMENT WHEN AVAILABLE BANKROLL >= $2.00):
-1. Use the exact **VERIFIED LEDGER NUMBERS** above (`Settled Bankroll`, `Pending Wagers Total`, `Available Unstaked Bankroll`, and `Active Tier`).
-2. Because Available Unstaked Bankroll is **${available_bankroll:.2f}** (>= $2.00), you **MUST recommend 3 to 4 concrete Best EV Plays** from today's scraped slate below. NEVER output "Holding" or "None" when Available Unstaked Bankroll >= $2.00.
-3. Scan ALL quantitative signals across NBA, NHL, CBB, CFB, NFL, EPL/UCL Soccer, and ATP/WTA Tennis:
-   - **ESPN BPI / FPI Model Discrepancies (`[📊 BPI/FPI +EV]`):** Straight Moneylines or Spreads where ESPN BPI/FPI win probability exceeds the no-vig market implied probability by 4%+.
-   - **Situational & Line Movement Edges (`[⚠️ FATIGUE EDGE]` & `[🔥 STEAM]` & `[🥅 NHL GOALIES]`):**
-     * Fade teams on Back-to-Backs (0 days rest) against rested opponents (`WIN: Fatigue / Back-to-Back Fade`).
-     * Exploit large NHL starting goalie SV%/GAA mismatches (e.g. a .920+ SV% starter facing a sub-.885 SV% starter at playable moneyline/puckline odds).
-     * Follow sharp opening-to-current steam moves (`[🔥 SPREAD/TOTAL/ML STEAM]`).
-   - **+EV & Steamed Player Props (`[PROP]` & `[PROP STEAM]`):** Straight Player Props (Points, Rebounds, Assists, 3PM, Shots on Goal) with verified +EV or strong opening-to-current prop steam and playable juice (>= -155).
-   - **Multi-Book Sharp Consensus `[+EV]` & `[🔥 STALE LINE]` Outliers:** Prioritize lines where Hard Rock Bet lags behind Pinnacle/FanDuel/DraftKings consensus or offers verified positive No-Vig EV (standard half-point spreads like -3.5, -7.5, -9.5 are completely fine; do NOT require buying half-points or whole-number spreads).
-   - **Tier Structure Rule:**
-     * In **Survival Tier (< $50.00)**: All **Straight Bets** (Moneylines, Spreads, Totals, and Straight Player Props) are 100% eligible! Only multi-leg Parlays/SGPs are suppressed below $50.00.
-     * In **Tier 1+ (>= $50.00)**: Straight bets + max 2-leg correlated SGPs/Parlays are eligible (strictly zero 3+ leg parlays).
-4. Rank the **Top 3 to 4 Best Bets of the Day** and size stakes via **Fractional Kelly** & Active Tier rules:
-   - **A+ Single Play (>5% EV, major goalie mismatch, or B2B fatigue mismatch):** Stake **$3.50–$6.00** (or 12%–20% of Available Bankroll).
-   - **A Core Play / Steamed Player Prop:** Stake **$2.50–$4.50** (or 8%–15% of Available Bankroll).
-   - Keep total new recommended stakes within **50% of Available Unstaked Bankroll** (roughly **$10.00–$15.00 total** across the 3–4 plays when Available Bankroll is ~$30.00).
-5. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]` so the user confirms active status before locking it in on Hard Rock Bet.
+### 4. INSTITUTIONAL QUANTITATIVE STRATEGY ENGINE (7 HARD MANDATES FROM EMPIRICAL LEDGER AUDIT):
+1. **MANDATORY DAILY DEPLOYMENT:** Because Available Unstaked Bankroll is **${available_bankroll:.2f}** (>= $2.00), you **MUST recommend 3 to 4 concrete Best EV Plays** from today's scraped slate. NEVER output "Holding" or "None".
+2. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
+   - Historical ledger audit proved SGPs (14.3% win rate, -74.6% ROI) and Parlays (16.7% win rate, -44.7% ROI) lose to synthetic vig compounding (~22% house hold on SGPs), while Sweet-Spot Straights & Props win at **71.4% (+37.69 net)**.
+   - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop).
+3. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
+   - Ledger audit showed 0W-4L (-$40.00) on big favorite spreads (-7.5 to -16.5) due to 4th-quarter garbage-time benching.
+   - **NEVER recommend laying more than -6.5 points on a full-game favorite spread** (-7.5 max in college). If a matchup has a heavy favorite (-8.5 to -16.5) with a strong fatigue or talent edge (e.g., resting home team vs B2B opponent), pivot to a **Player Prop**, **1st-Half Spread**, **Game Total**, or skip the full-game spread!
+4. **THE "-155 TO +135 ODDS SWEET-SPOT BAND":**
+   - Restrict all recommended straight plays to American odds between **`-155` and `+135`** (`42.5%` to `60.8%` implied win probability).
+   - Never recommend low-probability `+175+` longshot moneylines (eliminates Favorite-Longshot bias traps) and never lay `-175+` heavy juice.
+5. **MULTI-SIGNAL CONFLUENCE PRIORITY (RANKING HIERARCHY):**
+   - **Priority 1 (`[🏆 A+ CONFLUENCE]` & `[🔥 STALE LINE]` & `[+EV Consensus]`):** Games where 2+ independent quantitative signals align (e.g., BPI/FPI +EV + Sharp Steam, or B2B Fatigue + Steam) or Hard Rock lags behind Pinnacle/FanDuel/DraftKings.
+   - **Priority 2 (`[🎯 GOALIE MISMATCH EDGE]` & `[⚠️ FATIGUE EDGE]`):** NHL starting goalie SV% differential >= .025 (e.g., .920+ SV% starter vs sub-.885 SV% starter at playable ML odds) or fading a team on a 0-day-rest Back-to-Back.
+   - **Priority 3 (`[📊 BPI/FPI +EV (Sweet-Spot)]` & `[PROP STEAM]`):** Sweet-spot moneylines/spreads (-155 to +135) where BPI/FPI beats Power-Devigged market probability by 4%+ without fighting reverse steam, plus player props that steamed >= 1.0 full point from open to current.
+6. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
+   - Every recommended play on today's slip MUST come from a **different game/matchup**. Never place 2 tickets in the same game (prevents correlated downside).
+7. **SIMULTANEOUS MULTI-BET KELLY SIZING (EXACT PRE-COMPUTED STAKES):**
+   - Size your 3 to 4 plays using these exact pre-computed Simultaneous Fractional Kelly tiers (keeping total new deployment <= **${max_new_budget:.2f}**):
+     * **Play #1 (A+ Confluence / Top Edge):** **${stake_a_plus:.2f}**
+     * **Play #2 (A Core Edge / Goalie or BPI Mismatch):** **${stake_a_core:.2f}**
+     * **Play #3 (B+ Core / Steamed Player Prop):** **${stake_b_prop:.2f}**
+     * **Play #4 (Optional B+ Steamed Player Prop / Straight):** **${stake_b_prop:.2f}**
+8. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]`.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
 - Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
@@ -198,11 +209,13 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 *Today's Best EV Plays:*
 1. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: BPI/FPI EV%, goalie SV%/GAA delta, B2B fatigue edge, or prop steam move]
+   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
 2. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: BPI/FPI EV%, goalie SV%/GAA delta, B2B fatigue edge, or prop steam move]
+   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
 3. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: BPI/FPI EV%, goalie SV%/GAA delta, B2B fatigue edge, or prop steam move]
+   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
+4. *[Straight] Selection (Odds)* — *$X.XX*
+   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
 """
     candidate_models = [
         "gemini-3.6-flash",
