@@ -172,14 +172,15 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
     )
-    # Simultaneous Multi-Bet Fractional Kelly Stakes sized strictly against remaining_cap
+    # Sniper Mode Dynamic Bankroll Staking (high-conviction compounding, capped by remaining_cap)
+    settled_bankroll = ledger_meta["settled"]
     max_new_budget = round(min(available_bankroll, remaining_cap), 2)
-    stake_a_plus = max(1.50, round(max_new_budget * 0.32, 2))
-    stake_a_core = max(1.50, round(max_new_budget * 0.25, 2))
-    stake_b_prop = max(1.50, round(max_new_budget * 0.21, 2))
+    stake_sniper_1 = round(min(max_new_budget, max(2.00, settled_bankroll * 0.16)), 2)
+    stake_sniper_2 = round(min(max_new_budget / 2.0, max(2.00, settled_bankroll * 0.13)), 2)
+    stake_sniper_3 = round(min(max_new_budget / 3.0, max(2.00, settled_bankroll * 0.11)), 2)
 
     prompt = f"""
-You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using Simultaneous Multi-Bet Fractional Kelly staking and Top-Down Sharp Devigging.
+You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using **Sniper Mode** (concentrated high-conviction sizing on the 1–2 absolute strongest plays of the day) and Top-Down Sharp Devigging.
 Today's Date: {today_str}
 
 ### 1. LIVE BANKROLL & RECENT LEDGER
@@ -193,53 +194,56 @@ Recent Bets:
 
 {audit_text}
 
-### 3. SCRAPED SLATE INTEL (POWER-DEVIGGED +EV% + GOALIE MISMATCHES + B2B FATIGUE + BPI/FPI + PROP STEAM + INJURIES)
+### 3. SCRAPED SLATE INTEL (POWER-DEVIGGED +EV% + L5 FORM MARGIN + GOALIE MISMATCHES + B2B FATIGUE + BPI/FPI + JUICE-ONLY PROP STEAM + INJURIES)
 {intel_text[:32000]}
 
-### 4. INSTITUTIONAL QUANTITATIVE STRATEGY ENGINE (7 HARD MANDATES FROM EMPIRICAL LEDGER AUDIT):
-1. **MANDATORY DAILY DEPLOYMENT:** Because Available Unstaked Bankroll is **${available_bankroll:.2f}** (>= $2.00), you **MUST recommend 3 to 4 concrete Best EV Plays** from today's scraped slate. NEVER output "Holding" or "None".
+### 4. SNIPER MODE QUANTITATIVE STRATEGY ENGINE (8 HARD MANDATES FROM EMPIRICAL LEDGER AUDIT):
+1. **SNIPER MODE — QUALITY OVER VOLUME (1 TO 2 PLAYS DEFAULT, MAX 3 ON LOADED WEEKEND SLATES):**
+   - Because Available Unstaked Bankroll is **${available_bankroll:.2f}** (>= $2.00), pick **1 to 2 highest-conviction Sniper Plays** from today's scraped slate.
+   - **1-Play Sniper Day** is ENCOURAGED on lighter slates or when one game stands head-and-shoulders above the rest.
+   - **2-Play Sniper Day** is the standard ceiling when two distinct games both have genuine quantitative edges.
+   - **3-Play Max** is permitted **ONLY** on loaded weekend slates (Saturday/Sunday or 10+ games) where 3 separate games each have clear A-grade edges. **NEVER force filler 3rd or 4th bets just for action.** NEVER output "Holding" or "None" if at least 1 strong edge exists.
+   - **League-Agnostic Best-EV Focus:** Pick the single best bets regardless of league (NBA, NHL, NFL, CFB, CBB, MLB, Soccer) — do not ban any league, and lean into hot form / winning streaks when the numbers confirm it.
 2. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
    - Historical ledger audit proved SGPs (14.3% win rate, -74.6% ROI) and Parlays (16.7% win rate, -44.7% ROI) lose to synthetic vig compounding (~22% house hold on SGPs), while Sweet-Spot Straights & Props win at **71.4% (+37.69 net)**.
    - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop).
-3. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
-   - Ledger audit showed 0W-4L (-$40.00) on big favorite spreads (-7.5 to -16.5) due to 4th-quarter garbage-time benching.
-   - **NEVER recommend laying more than -6.5 points on a full-game favorite spread** (-7.5 max in college). If a matchup has a heavy favorite (-8.5 to -16.5) with a strong fatigue or talent edge (e.g., resting home team vs B2B opponent), pivot to a **Player Prop**, **1st-Half Spread**, **Game Total**, or skip the full-game spread!
-4. **THE "-155 TO +135 ODDS SWEET-SPOT BAND":**
-   - Restrict all recommended straight plays to American odds between **`-155` and `+135`** (`42.5%` to `60.8%` implied win probability).
-   - Never recommend low-probability `+175+` longshot moneylines (eliminates Favorite-Longshot bias traps) and never lay `-175+` heavy juice.
-5. **MULTI-SIGNAL CONFLUENCE PRIORITY (RANKING HIERARCHY):**
-   - **Priority 1 (`[🏆 A+ CONFLUENCE]` & `[🔥 STALE LINE]` & `[+EV Consensus]`):** Games where 2+ independent quantitative signals align (e.g., BPI/FPI +EV + Sharp Steam, or B2B Fatigue + Steam) or Hard Rock lags behind Pinnacle/FanDuel/DraftKings.
-   - **Priority 2 (`[🎯 GOALIE MISMATCH EDGE]` & `[⚠️ FATIGUE EDGE]`):** NHL starting goalie SV% differential >= .025 (e.g., .920+ SV% starter vs sub-.885 SV% starter at playable ML odds) or fading a team on a 0-day-rest Back-to-Back.
-   - **Priority 3 (`[📊 BPI/FPI +EV (Sweet-Spot)]` & `[PROP STEAM]`):** Sweet-spot moneylines/spreads (-155 to +135) where BPI/FPI beats Power-Devigged market probability by 4%+ without fighting reverse steam, plus player props that steamed >= 1.0 full point from open to current.
-6. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
-   - Every recommended play on today's slip MUST come from a **different game/matchup**. Never place 2 tickets in the same game (prevents correlated downside).
-7. **SIMULTANEOUS MULTI-BET KELLY SIZING (EXACT PRE-COMPUTED STAKES):**
-   - Size your 3 to 4 plays using these exact pre-computed Simultaneous Fractional Kelly tiers (keeping total new deployment <= **${max_new_budget:.2f}**):
-     * **Play #1 (A+ Confluence / Top Edge):** **${stake_a_plus:.2f}**
-     * **Play #2 (A Core Edge / Goalie or BPI Mismatch):** **${stake_a_core:.2f}**
-     * **Play #3 (B+ Core / Steamed Player Prop):** **${stake_b_prop:.2f}**
-     * **Play #4 (Optional B+ Steamed Player Prop / Straight):** **${stake_b_prop:.2f}**
-8. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]`.
+3. **MODERATE FAVORITE PRIORITY & "-150 TO +125" SWEET-SPOT BAND:**
+   - Empirical ledger audit: Moderate Favorites (`-1.5` to `-6.5` spreads or `-110` to `-150` MLs) hit **`10W-3L (76.9% win rate)`**, while Plus-Money Underdogs (`+110` to `+190`) went **`0W-4L (0.0%)`**.
+   - **Strongly prioritize high-probability Moderate Favorites (`-110` to `-145` ML or `-1.5` to `-6.5` spreads)** over coin-flip `+115` to `+135` underdogs unless an underdog has an overwhelming `[🏆 A+ CONFLUENCE]` (2+ independent quant edges).
+   - Restrict all plays to **`-155` to `+130`**. Never lay `-175+` heavy juice and never chase `+150+` longshots.
+4. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
+   - Ledger audit showed `0W-4L (-$40.00)` on big favorite spreads (`-7.5` to `-16.5`) due to 4th-quarter garbage-time benching.
+   - **NEVER recommend laying more than `-6.5` points on a full-game favorite spread** (`-7.5` max in college). If a heavy favorite has a strong fatigue or form edge, pivot to a **1st-Half Spread**, **Game Total**, or **Player Prop**.
+5. **NEVER CHASE LATE STEAM (ANTI-STALE-NUMBER RULE):**
+   - **STRICTLY IGNORE** any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`. Once a spread has moved `>= 2.5` pts or a total `>= 3.5` pts from open, the value is gone and you are buying the worst number on the board.
+   - For player props, ONLY use **Juice-Only Steam** (`[PROP STEAM]` where the line is still at the opening number and only the vig tightened) — never chase a prop whose line already jumped a full point.
+6. **MULTI-SIGNAL CONFLUENCE PRIORITY (RANKING HIERARCHY):**
+   - **Tier 1 (`[🏆 A+ CONFLUENCE]` & `[🔥 STALE LINE]` & `[+EV Consensus]`):** Games where 2+ independent quantitative signals align (e.g., `L5 Form Edge` + `B2B Fatigue`, or `BPI/FPI +EV` + `Goalie Mismatch`, or Hard Rock lagging Pinnacle/FD/DK).
+   - **Tier 2 (`[🎯 GOALIE MISMATCH EDGE]`, `[⚠️ FATIGUE EDGE]`, `[📈 FORM EDGE]`):** NHL starting goalie SV% differential >= .025, fading a team on a 0-day-rest Back-to-Back, or backing a hot team with a strong Last-5-Games scoring margin (`L5 Form`) against a slumping opponent.
+   - **Tier 3 (`[📊 BPI/FPI +EV (Sweet-Spot)]` & `[PROP STEAM]`):** High-info league (NBA/NFL/CFB) BPI/FPI +EV in the `-150` to `+110` band or Juice-Only Player Prop Steam.
+7. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
+   - Every recommended play MUST come from a **different game/matchup**. Never place 2 tickets in the same game.
+8. **SNIPER MODE BANKROLL SIZING (EXACT PRE-COMPUTED STAKES — TOTAL NEW <= ${max_new_budget:.2f}):**
+   - Match your exact stake to the number of plays you select today:
+     * **If selecting 1 Sniper Play (Solo Lock — 16% bankroll):** **${stake_sniper_1:.2f}**
+     * **If selecting 2 Sniper Plays (Dual Lock — 13% each / 26% total):** **${stake_sniper_2:.2f}** each
+     * **If selecting 3 Plays (Loaded Weekend Slate ONLY — 11% each / 33% total):** **${stake_sniper_3:.2f}** each
+9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]`.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
-- Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
+- Output ONLY the compact template below with **1, 2, or (loaded weekend only) 3 numbered plays**. NO extra paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
 - Use short team/player names.
 
-🎯 *{today_str} Hard Rock Bet Slate*
+🎯 *{today_str} Hard Rock Bet Slate (Sniper Mode)*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 *Pending ($XX.XX):*
 • *None* (or list active pending BET-XXX rows if any)
 
-*Today's Best EV Plays:*
+*Today's Sniper Plays:*
 1. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
-2. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
-3. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
-4. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: Confluence signals, goalie SV%/GAA delta, BPI/FPI Power-NoVig EV%, B2B fatigue, or prop steam]
+   - Edge: [1 short line: Confluence signals, L5 form margin, goalie SV%/GAA delta, BPI/FPI EV%, B2B fatigue, or juice-only prop steam]
+(Include #2 only if a 2nd A-grade edge exists; include #3 ONLY on loaded weekend slates with 3 distinct A-grade edges.)
 """
     candidate_models = [
         "gemini-3.6-flash",

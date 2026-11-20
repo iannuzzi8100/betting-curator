@@ -552,9 +552,15 @@ def fetch_espn_quant_matchups_and_props():
                     )
                 if h_sp_open is not None and h_sp_close is not None and abs(h_sp_close - h_sp_open) >= 1.0:
                     moved_toward = h_abbr if h_sp_close < h_sp_open else a_abbr
-                    tags.append(
-                        f"[🔥 SPREAD STEAM: Moved {abs(h_sp_close - h_sp_open):.1f} pts toward {moved_toward} (Open {h_abbr} {h_sp_open:+.1f} -> Now {h_sp_close:+.1f})]"
-                    )
+                    delta_sp = abs(h_sp_close - h_sp_open)
+                    if delta_sp >= 2.5:
+                        tags.append(
+                            f"[⚠️ SPREAD ALREADY STEAMED ({delta_sp:.1f} pts toward {moved_toward}: {h_sp_open:+.1f} -> {h_sp_close:+.1f}) — DO NOT CHASE LATE]"
+                        )
+                    else:
+                        tags.append(
+                            f"[🔥 SPREAD STEAM: Moved {delta_sp:.1f} pts toward {moved_toward} (Open {h_abbr} {h_sp_open:+.1f} -> Now {h_sp_close:+.1f})]"
+                        )
 
                 # Total close vs open
                 tot = od.get("total", {})
@@ -562,7 +568,13 @@ def fetch_espn_quant_matchups_and_props():
                 t_open = _safe_float_line(tot.get("over", {}).get("open", {}).get("line"))
                 if t_open is not None and t_close is not None and abs(t_close - t_open) >= 1.0:
                     dir_lbl = "OVER" if t_close > t_open else "UNDER"
-                    tags.append(f"[🔥 TOTAL STEAM: Moved {abs(t_close - t_open):.1f} pts toward {dir_lbl} (Open {t_open} -> Now {t_close})]")
+                    delta_t = abs(t_close - t_open)
+                    if delta_t >= 3.5:
+                        tags.append(
+                            f"[⚠️ TOTAL ALREADY STEAMED ({delta_t:.1f} pts toward {dir_lbl}: {t_open} -> {t_close}) — DO NOT CHASE LATE]"
+                        )
+                    else:
+                        tags.append(f"[🔥 TOTAL STEAM: Moved {delta_t:.1f} pts toward {dir_lbl} (Open {t_open} -> Now {t_close})]")
 
             # Fetch Event Summary for ESPN BPI/FPI Predictor & NHL Starting Goalie Stats
             try:
@@ -570,7 +582,8 @@ def fetch_espn_quant_matchups_and_props():
                 sum_data = requests.get(sum_url, timeout=10).json()
 
                 # ESPN BPI / FPI Model Win Probability vs Power-Devigged Market Implied Probability
-                # Enforce Sweet-Spot Odds (-155 to +135) and ensure sharp steam is NOT moving against the pick
+                # Restrict BPI/FPI +EV tags to high-information leagues (NBA, NFL, CFB — exclude noisy early-season mid-major CBB)
+                # and High-Probability Moderate Favorite / Coin-Flip Sweet Spot (-150 to +110) without fighting reverse steam
                 pred = sum_data.get("predictor", {})
                 h_proj = pred.get("homeTeam", {}).get("gameProjection")
                 a_proj = pred.get("awayTeam", {}).get("gameProjection")
@@ -578,7 +591,7 @@ def fetch_espn_quant_matchups_and_props():
                     h_bpi = float(h_proj)
                     a_bpi = float(a_proj)
                     odds_summary.append(f"ESPN BPI/FPI WinProb: {a_abbr} {a_bpi:.1f}% / {h_abbr} {h_bpi:.1f}%")
-                    if h_ml_close is not None and a_ml_close is not None:
+                    if label in ("NBA", "NFL", "CFB") and h_ml_close is not None and a_ml_close is not None:
                         imp_h = american_to_implied(h_ml_close)
                         imp_a = american_to_implied(a_ml_close)
                         if (imp_h + imp_a) > 0:
@@ -587,7 +600,7 @@ def fetch_espn_quant_matchups_and_props():
                             steam_str = " ".join(tags)
                             if (
                                 3.5 <= (h_bpi - mkt_h) <= 18.0
-                                and -155 <= h_ml_close <= 135
+                                and -150 <= h_ml_close <= 110
                                 and f"toward {a_abbr}" not in steam_str
                             ):
                                 dec_h = american_to_decimal(h_ml_close)
@@ -598,7 +611,7 @@ def fetch_espn_quant_matchups_and_props():
                                     )
                             elif (
                                 3.5 <= (a_bpi - mkt_a) <= 18.0
-                                and -155 <= a_ml_close <= 135
+                                and -150 <= a_ml_close <= 110
                                 and f"toward {h_abbr}" not in steam_str
                             ):
                                 dec_a = american_to_decimal(a_ml_close)
@@ -607,6 +620,46 @@ def fetch_espn_quant_matchups_and_props():
                                     tags.append(
                                         f"[📊 BPI/FPI +EV (Sweet-Spot): {a_abbr} ML ({a_ml_close:+d}) | BPI Win: {a_bpi:.1f}% vs PowerNoVig: {mkt_a:.1f}% | EV: +{ev_a}%]"
                                     )
+
+                # Last-5-Games Form & Scoring Margin Extractor (Free inside ESPN summary!)
+                l5_blocks = sum_data.get("lastFiveGames", [])
+                l5_parsed = {}
+                for tb in l5_blocks:
+                    t_info = tb.get("team", {})
+                    t_abbr = t_info.get("abbreviation", "")
+                    t_id = str(t_info.get("id", ""))
+                    evts_5 = tb.get("events", [])[:5]
+                    if not t_abbr or not evts_5:
+                        continue
+                    w5 = 0
+                    l5 = 0
+                    margins = []
+                    for g5 in evts_5:
+                        gr = str(g5.get("gameResult", "")).upper()
+                        if gr == "W":
+                            w5 += 1
+                        elif gr == "L":
+                            l5 += 1
+                        try:
+                            hs = int(g5.get("homeTeamScore", 0) or 0)
+                            as_ = int(g5.get("awayTeamScore", 0) or 0)
+                            if str(g5.get("homeTeamId", "")) == t_id:
+                                margins.append(hs - as_)
+                            else:
+                                margins.append(as_ - hs)
+                        except Exception:
+                            pass
+                    avg_m = round(sum(margins) / len(margins), 1) if margins else 0.0
+                    l5_parsed[t_abbr] = (w5, l5, avg_m)
+                if len(l5_parsed) == 2 and a_abbr in l5_parsed and h_abbr in l5_parsed:
+                    aw, al, am = l5_parsed[a_abbr]
+                    hw, hl, hm = l5_parsed[h_abbr]
+                    odds_summary.append(f"L5 Form: {a_abbr} {aw}-{al} ({am:+.1f}) vs {h_abbr} {hw}-{hl} ({hm:+.1f})")
+                    margin_thresh = 1.2 if label == "NHL" else 4.5
+                    if (hw - aw) >= 2 and (hm - am) >= margin_thresh:
+                        tags.append(f"[📈 FORM EDGE: {h_abbr} L5 {hw}-{hl} ({hm:+.1f} avg margin) vs {a_abbr} L5 {aw}-{al} ({am:+.1f})]")
+                    elif (aw - hw) >= 2 and (am - hm) >= margin_thresh:
+                        tags.append(f"[📈 FORM EDGE: {a_abbr} L5 {aw}-{al} ({am:+.1f} avg margin) vs {h_abbr} L5 {hw}-{hl} ({hm:+.1f})]")
 
                 # NHL Probable / Confirmed Starting Goalies + Season SV% & GAA + Goalie Mismatch Edge Detector
                 if label == "NHL":
@@ -654,8 +707,8 @@ def fetch_espn_quant_matchups_and_props():
                                     f"[🎯 GOALIE MISMATCH EDGE: {h_abbr} ML ({h_g[3]:+d}) — {h_g[0]} ({h_g[1]:.3f} SV%, {h_g[2]:.2f} GAA) vs {a_g[0]} ({a_g[1]:.3f} SV%, {a_g[2]:.2f} GAA)]"
                                 )
 
-                # Multi-Signal Confluence Detector (2+ independent signals on the same game)
-                edge_signals = [t for t in tags if any(k in t for k in ("FATIGUE EDGE", "STEAM", "BPI/FPI +EV", "GOALIE MISMATCH"))]
+                # Multi-Signal Confluence Detector (2+ independent signals on the same game, excluding DO NOT CHASE warnings)
+                edge_signals = [t for t in tags if any(k in t for k in ("FATIGUE EDGE", "FORM EDGE", "🔥 SPREAD STEAM", "🔥 ML STEAM", "BPI/FPI +EV", "GOALIE MISMATCH"))]
                 if len(edge_signals) >= 2:
                     tags.append(f"[🏆 A+ CONFLUENCE ({len(edge_signals)} Signals Aligned)]")
             except Exception:
@@ -692,15 +745,16 @@ def fetch_espn_quant_matchups_and_props():
                         if cur_line is None or cur_odds is None or cur_odds < -155 or not ath_ref:
                             continue
 
+                        # Only flag JUICE-ONLY steam where the target number did NOT jump a full point (prevents chasing inflated numbers like 4.5 -> 5.5!)
                         line_delta = (cur_line - open_line) if open_line is not None else 0.0
                         imp_shift = (
                             (american_to_implied(cur_odds) - american_to_implied(open_odds)) * 100.0
                             if open_odds is not None
                             else 0.0
                         )
-                        if abs(line_delta) >= 1.0 or imp_shift >= 4.0:
+                        if line_delta == 0.0 and imp_shift >= 4.0 and -150 <= cur_odds <= 115:
                             steamed_candidates.append(
-                                (abs(line_delta) * 5.0 + imp_shift, ath_ref, prop_name, open_line, cur_line, open_odds, cur_odds)
+                                (imp_shift, ath_ref, prop_name, open_line, cur_line, open_odds, cur_odds)
                             )
 
                     steamed_candidates.sort(key=lambda x: x[0], reverse=True)
