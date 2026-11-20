@@ -236,6 +236,24 @@ def build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, sta
     ]
 
 
+def _clean_float(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        return float(str(val).replace("$", "").replace(",", "").strip())
+    except Exception:
+        return default
+
+
+def _clean_int(val, default=-110):
+    if val is None:
+        return default
+    try:
+        return int(float(str(val).replace("+", "").replace(",", "").strip()))
+    except Exception:
+        return default
+
+
 def apply_actions_to_sheet(tracker_ws, actions):
     all_vals, header_idx, _, _ = get_current_sheet_state(tracker_ws)
     existing_text = "\n".join(" | ".join(r) for r in all_vals[header_idx + 1 :])
@@ -298,10 +316,11 @@ def apply_actions_to_sheet(tracker_ws, actions):
             tracker_ws.update_acell(f"F{r_idx}", str(upd["selections"]).strip())
             changed_fields.append(f"Selection={upd['selections']}")
         if upd.get("odds") is not None:
-            tracker_ws.update_acell(f"G{r_idx}", int(upd["odds"]))
-            changed_fields.append(f"Odds={int(upd['odds']):+d}")
+            o_val = _clean_int(upd["odds"])
+            tracker_ws.update_acell(f"G{r_idx}", o_val)
+            changed_fields.append(f"Odds={o_val:+d}")
         if upd.get("stake") is not None:
-            st = float(upd["stake"])
+            st = _clean_float(upd["stake"])
             tracker_ws.update_acell(f"H{r_idx}", f"{st/4.0:.2f}U")
             tracker_ws.update_acell(f"I{r_idx}", st)
             changed_fields.append(f"Stake=${st:.2f}")
@@ -316,7 +335,7 @@ def apply_actions_to_sheet(tracker_ws, actions):
     for t in new_tickets:
         t_id = str(t.get("ticket_id", "")).strip()
         sel = str(t.get("selections", "")).strip()
-        stake = float(t.get("stake", 0.0) or 0.0)
+        stake = _clean_float(t.get("stake", 0.0))
         if not sel or stake <= 0:
             continue
         if t_id and t_id in existing_text:
@@ -330,8 +349,8 @@ def apply_actions_to_sheet(tracker_ws, actions):
         t = valid_new_tickets.pop(0)
         t_id = str(t.get("ticket_id", "")).strip()
         sel = str(t.get("selections", "")).strip()
-        stake = float(t.get("stake", 0.0) or 0.0)
-        odds = int(t.get("odds", -110) or -110)
+        stake = _clean_float(t.get("stake", 0.0))
+        odds = _clean_int(t.get("odds", -110))
         sport = str(t.get("sport", "NBA")).strip()
         bet_type = str(t.get("bet_type", "Straight")).strip()
         date_str = str(t.get("date", "")).strip()
@@ -372,8 +391,8 @@ def apply_actions_to_sheet(tracker_ws, actions):
         for t in valid_new_tickets:
             t_id = str(t.get("ticket_id", "")).strip()
             sel = str(t.get("selections", "")).strip()
-            stake = float(t.get("stake", 0.0) or 0.0)
-            odds = int(t.get("odds", -110) or -110)
+            stake = _clean_float(t.get("stake", 0.0))
+            odds = _clean_int(t.get("odds", -110))
             sport = str(t.get("sport", "NBA")).strip()
             bet_type = str(t.get("bet_type", "Straight")).strip()
             date_str = str(t.get("date", "")).strip()
