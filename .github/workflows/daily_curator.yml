@@ -25,6 +25,8 @@ on:
 jobs:
   run-betting-pipeline:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -71,6 +73,15 @@ jobs:
       - name: Step 3 - Run Curator (09:12 AM EST & 05:30 PM EST Primetime Refresh)
         if: github.event.schedule == '12 14 * * *' || github.event.schedule == '30 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'curator' || inputs.stage == ''))
         run: python curator.py
+
+      - name: Step 4 - Rebuild & Publish Mobile Web App (docs/index.html)
+        continue-on-error: true
+        run: |
+          python dashboard_app.py --build-static
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git diff --staged --quiet || (git commit -m "Auto-update live betting dashboard" && git push)
 
       - name: Send Telegram alert on failure
         if: failure()
