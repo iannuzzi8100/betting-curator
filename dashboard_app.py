@@ -78,6 +78,7 @@ def fetch_dashboard_data():
     pending_tickets = []
     pending_total = 0.0
     equity_curve = [{"label": "START", "bankroll": 100.0}]
+    clv_values = []
 
     for r in all_rows[header_idx + 1 :]:
         if not r or not r[0].strip().startswith("BET-"):
@@ -93,6 +94,12 @@ def fetch_dashboard_data():
         res = r[10].strip() if len(r) > 10 else ""
         net_pl = _parse_num(r[12]) if len(r) > 12 else 0.0
         run_br = _parse_num(r[13]) if len(r) > 13 else settled_bankroll
+        notes = r[14].strip() if len(r) > 14 else ""
+
+        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", notes)
+        clv_val = float(clv_match.group(1)) if clv_match else None
+        if clv_val is not None:
+            clv_values.append(clv_val)
 
         res_l = res.lower()
         if res_l == "won":
@@ -121,6 +128,7 @@ def fetch_dashboard_data():
                 "odds": odds,
                 "stake": round(stake, 2),
                 "payout": round(payout, 2),
+                "clv": clv_val,
             })
 
         if b_date == yesterday_str and res_l in ("won", "lost", "push"):
@@ -188,6 +196,8 @@ def fetch_dashboard_data():
             "win_pct": overall_win_pct,
             "net_pl": round(total_net_pl, 2),
             "roi": overall_roi,
+            "avg_clv": round(sum(clv_values) / len(clv_values), 2) if clv_values else None,
+            "clv_count": len(clv_values),
         },
         "yesterday_stats": {
             "date": yesterday_str,
@@ -407,9 +417,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       document.getElementById("overall-ratio").innerHTML =
         `${ov.wins}W - ${ov.losses}L <span style="font-size:1.1rem;color:var(--muted)">(${ov.win_pct}%)</span>`;
       const plCls = ov.net_pl >= 0 ? "pos" : "neg";
+      const clvHtml = (ov.avg_clv !== null && ov.avg_clv !== undefined)
+        ? `<span>Avg CLV: <span class="${ov.avg_clv >= 0 ? "pos" : "neg"}">${ov.avg_clv >= 0 ? "+" : ""}${ov.avg_clv}%</span></span>`
+        : "";
       document.getElementById("overall-sub").innerHTML =
         `<span>Net P/L: <span class="${plCls}">${ov.net_pl >= 0 ? "+" : ""}${fmtMoney(ov.net_pl)}</span></span>` +
-        `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>`;
+        `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>` +
+        clvHtml;
 
       // 2. Yesterday W/L
       const ys = data.yesterday_stats;
@@ -445,20 +459,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         cList.innerHTML = `<div class="empty-msg">${(data.curated_raw || "No curated plays found yet.").replace(/\\n/g, "<br>")}</div>`;
       }
 
-      // 5. Active Pending Tickets
+      // 5. Active Pending Tickets (with live in-game ESPN score badges ONLY for games in play)
       const pList = document.getElementById("pending-list");
       const pend = data.pending_tickets || [];
       document.getElementById("pending-count").textContent = `${pend.length} Active (${fmtMoney(data.pending_total)})`;
       if (pend.length > 0) {
-        pList.innerHTML = pend.map(t => `
+        pList.innerHTML = pend.map((t, idx) => {
+          const clvBadge = (t.clv !== null && t.clv !== undefined)
+            ? ` <span class="pill ${t.clv >= 0 ? "pill-green" : "pill-red"}">CLV ${t.clv >= 0 ? "+" : ""}${t.clv}%</span>`
+            : "";
+          return `
           <div class="bet-item">
             <div class="bet-top">
               <div class="bet-title">${t.bet_id} • ${t.selections}</div>
-              <span class="pill pill-amber">${t.odds} | ${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>
+              <div><span class="pill pill-amber">${t.odds} | ${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>${clvBadge}</div>
             </div>
-            <div class="bet-meta">${t.sport} &bull; ${t.bet_type} &bull; Placed ${t.date}</div>
+            <div class="bet-meta" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+              <span>${t.sport} &bull; ${t.bet_type} &bull; Placed ${t.date}</span>
+              <span id="live-score-${idx}" style="font-weight:700;color:#60a5fa;"></span>
+            </div>
           </div>
-        `).join("");
+        `;
+        }).join("");
+        fetchLiveScoresForPending(pend);
       } else {
         pList.innerHTML = `<div class="empty-msg">No active pending bets right now.</div>`;
       }
@@ -513,6 +536,70 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             x: { ticks: { color: "#94a3b8", maxTicksLimit: 10 }, grid: { color: "rgba(148,163,184,0.08)" } },
             y: { ticks: { color: "#94a3b8", callback: v => "$" + v }, grid: { color: "rgba(148,163,184,0.08)" } }
           }
+        }
+      });
+    }
+
+    async function fetchLiveScoresForPending(pendingTickets) {
+      const sportMap = {
+        "NBA": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        "NHL": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
+        "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+        "CFB": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80",
+        "NCAAM": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50",
+        "CBB": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50",
+      };
+      const neededSports = [...new Set(pendingTickets.map(t => (t.sport || "").toUpperCase()).filter(s => sportMap[s]))];
+      const eventsBySport = {};
+      await Promise.all(neededSports.map(async sp => {
+        try {
+          const r = await fetch(sportMap[sp]);
+          const j = await r.json();
+          eventsBySport[sp] = j.events || [];
+        } catch (e) {
+          eventsBySport[sp] = [];
+        }
+      }));
+
+      pendingTickets.forEach((t, idx) => {
+        const el = document.getElementById(`live-score-${idx}`);
+        if (!el) return;
+        const sp = (t.sport || "").toUpperCase();
+        const evts = eventsBySport[sp] || [];
+        const selLower = (t.selections || "").toLowerCase();
+        const match = evts.find(ev => {
+          const comp = (ev.competitions || [])[0];
+          if (!comp) return false;
+          const teams = (comp.competitors || []).map(c => ({
+            short: (c.team?.shortDisplayName || "").toLowerCase(),
+            name: (c.team?.name || "").toLowerCase(),
+            abbr: (c.team?.abbreviation || "").toLowerCase(),
+            display: (c.team?.displayName || "").toLowerCase(),
+          }));
+          return teams.some(tm =>
+            (tm.short && tm.short.length > 2 && selLower.includes(tm.short)) ||
+            (tm.name && tm.name.length > 2 && selLower.includes(tm.name)) ||
+            (tm.display && selLower.includes(tm.display))
+          );
+        });
+        if (!match) return;
+        const comp = match.competitions[0];
+        const away = comp.competitors.find(c => c.homeAway === "away");
+        const home = comp.competitors.find(c => c.homeAway === "home");
+        const state = match.status?.type?.state || "";
+        const detail = match.status?.type?.shortDetail || "";
+        if (!away || !home) return;
+        const aAbbr = away.team?.abbreviation || away.team?.shortDisplayName || "";
+        const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
+        if (state === "in") {
+          el.style.color = "#10b981";
+          el.textContent = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+        } else if (state === "post") {
+          el.style.color = "#94a3b8";
+          el.textContent = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+        } else {
+          el.style.color = "#60a5fa";
+          el.textContent = `🕒 ${detail}`;
         }
       });
     }

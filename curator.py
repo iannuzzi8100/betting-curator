@@ -393,12 +393,94 @@ def send_telegram_alert(message):
     print("9:12 AM Telegram bet slip delivered successfully.")
 
 
+def record_pretipoff_clv(gc, intel_text):
+    """
+    Compares each active Pending bet's locked-in odds against fresh pre-tipoff lines in intel_text
+    and appends '| [CLV: +X.X% | Close: ...]' into Column O (Notes) once per ticket.
+    """
+    try:
+        sh = open_tracker_workbook(gc)
+        ws = sh.worksheets()[0]
+        all_vals = ws.get_all_values()
+        header_idx = next((i for i, r in enumerate(all_vals) if "Bet ID" in r and "Result" in r), 15)
+
+        targets = []
+        for idx in range(header_idx + 1, len(all_vals)):
+            r = all_vals[idx]
+            if len(r) > 10 and r[0].strip().startswith("BET-") and r[10].strip().lower() == "pending":
+                existing_note = r[14] if len(r) > 14 else ""
+                if "[CLV:" in existing_note:
+                    continue
+                targets.append({
+                    "row_index": idx + 1,
+                    "bet_id": r[0].strip(),
+                    "selections": r[5].strip() if len(r) > 5 else "",
+                    "locked_odds": r[6].strip() if len(r) > 6 else "",
+                    "existing_note": existing_note,
+                })
+
+        if not targets:
+            return
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        clv_prompt = f"""
+For each pending bet below, find the current pre-tipoff market odds in the Fresh Slate Intel.
+Compute CLV% = ((implied_prob(current_odds) / implied_prob(locked_odds)) - 1) * 100 (approximate implied probability edge gained or lost from line movement).
+If a bet's current line cannot be found in the intel, omit it.
+
+PENDING BETS:
+{json.dumps(targets, indent=2)}
+
+FRESH SLATE INTEL:
+{intel_text[:28000]}
+
+Respond ONLY with valid JSON:
+{{
+  "clv_records": [
+    {{
+      "row_index": 63,
+      "bet_id": "BET-046",
+      "close_odds": "-132",
+      "clv_pct": 11.2
+    }}
+  ]
+}}
+"""
+        for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]:
+            try:
+                resp = client.models.generate_content(
+                    model=model_id,
+                    contents=clv_prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0),
+                )
+                if resp and resp.text:
+                    records = json.loads(resp.text).get("clv_records", [])
+                    row_map = {t["row_index"]: t for t in targets}
+                    for rec in records:
+                        r_i = rec.get("row_index")
+                        clv_pct = rec.get("clv_pct")
+                        close_odds = rec.get("close_odds", "")
+                        if r_i in row_map and clv_pct is not None and close_odds:
+                            base_note = row_map[r_i]["existing_note"]
+                            clv_tag = f"[CLV: {float(clv_pct):+.1f}% | Close: {close_odds}]"
+                            new_note = f"{base_note} | {clv_tag}".strip(" |")
+                            ws.update_acell(f"O{r_i}", new_note)
+                            print(f"Recorded CLV for {row_map[r_i]['bet_id']}: {clv_tag}")
+                    return
+            except Exception:
+                continue
+    except Exception as exc:
+        print(f"CLV logging warning: {exc}")
+
+
 def main():
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
     today_str = est_now.strftime("%Y-%m-%d")
     gc, docs_service = get_google_clients()
     summary_block, recent_bets, rules_text, audit_text, ledger_meta = read_tracker_context(gc)
     intel_text = read_google_doc_text(docs_service, INTEL_DOC_ID, today_str=today_str) if INTEL_DOC_ID else "No Intel Doc ID set."
+    if ledger_meta.get("pending_lines"):
+        record_pretipoff_clv(gc, intel_text)
     curated_message = run_argon_curation(
         today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=ledger_meta
     )

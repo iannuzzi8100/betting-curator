@@ -503,6 +503,11 @@ def process_once(poll_timeout=5):
         pass
 
     if all_action_notes:
+        try:
+            with open(".tg_changed", "w", encoding="utf-8") as f:
+                f.write(str(len(all_action_notes)))
+        except Exception:
+            pass
         all_vals, _, pending_rows, _ = get_current_sheet_state(tracker_ws)
         bankroll_str = all_vals[4][0] if len(all_vals) > 4 and all_vals[4] else "$0.00"
         avail_str = all_vals[5][0] if len(all_vals) > 5 and all_vals[5] else ""

@@ -6,6 +6,8 @@ on:
     - cron: '12 8 * * *'           # 03:12 AM EST — Stage 1: Settle yesterday's pending bets
     - cron: '15 15 * * *'          # 10:15 AM EST — Stage 2: Morning scrape (full prop menus, confirmed goalies, sharp odds)
     - cron: '30 15 * * *'          # 10:30 AM EST — Stage 3: Morning curate & deliver Telegram slip
+    - cron: '15 16 * * 6'          # 11:15 AM EST (Saturday Only) — CFB Noon Kickoff Pre-Game Scrape & Audit
+    - cron: '35 16 * * 0'          # 11:35 AM EST (Sunday Only) — NFL 1PM Inactives Pre-Kickoff Scrape & Audit
     - cron: '30 22 * * *'          # 05:30 PM EST — Stage 4a: Primetime scrape (post-5PM NBA injury report & sharp moves)
     - cron: '45 22 * * *'          # 05:45 PM EST — Stage 4b: Primetime Pre-Tipoff Audit & Telegram alert
   workflow_dispatch:
@@ -66,22 +68,26 @@ jobs:
         if: github.event.schedule == '12 8 * * *' || github.event.schedule == '15 15 * * *' || github.event.schedule == '30 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'settler' || inputs.stage == ''))
         run: python settler.py
 
-      - name: Step 2 - Run Scraper (10:15 AM EST & 05:30 PM EST Primetime Refresh)
-        if: github.event.schedule == '15 15 * * *' || github.event.schedule == '30 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'scraper' || inputs.stage == ''))
+      - name: Step 2 - Run Scraper (10:15 AM, Sat 11:15 AM CFB, Sun 11:35 AM NFL, 05:30 PM Primetime)
+        if: github.event.schedule == '15 15 * * *' || github.event.schedule == '15 16 * * 6' || github.event.schedule == '35 16 * * 0' || github.event.schedule == '30 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'scraper' || inputs.stage == ''))
         run: python scraper.py
 
-      - name: Step 3 - Run Curator (10:30 AM EST & 05:45 PM EST Primetime Audit)
-        if: github.event.schedule == '30 15 * * *' || github.event.schedule == '45 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'curator' || inputs.stage == ''))
+      - name: Step 3 - Run Curator / Pre-Tipoff Audit (10:30 AM, Sat 11:15 AM CFB, Sun 11:35 AM NFL, 05:45 PM Primetime)
+        if: github.event.schedule == '30 15 * * *' || github.event.schedule == '15 16 * * 6' || github.event.schedule == '35 16 * * 0' || github.event.schedule == '45 22 * * *' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'curator' || inputs.stage == ''))
         run: python curator.py
 
-      - name: Step 4 - Rebuild & Publish Mobile Web App (docs/index.html)
+      - name: Step 4 - Rebuild & Publish Mobile Web App (Only When Sheet Changed)
         continue-on-error: true
         run: |
-          python dashboard_app.py --build-static
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html
-          git diff --staged --quiet || (git commit -m "Auto-update live betting dashboard" && git push)
+          if [ -f ".tg_changed" ] || [ "${{ github.event.schedule }}" = "12 8 * * *" ] || [ "${{ github.event.schedule }}" = "30 15 * * *" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python dashboard_app.py --build-static
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/index.html
+            git diff --staged --quiet || (git commit -m "Auto-update live betting dashboard" && git push)
+          else
+            echo "No Telegram bet changes detected; skipping dashboard rebuild."
+          fi
 
       - name: Send Telegram alert on failure
         if: failure()
