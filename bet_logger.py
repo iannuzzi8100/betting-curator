@@ -179,16 +179,31 @@ Respond ONLY with valid JSON matching this exact schema:
 
 
 def download_telegram_photo(file_id):
-    r1 = requests.get(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile",
-        params={"file_id": file_id},
-        timeout=10,
-    ).json()
-    file_path = r1.get("result", {}).get("file_path")
+    file_path = None
+    for attempt in range(3):
+        try:
+            r1 = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile",
+                params={"file_id": file_id},
+                timeout=30,
+            ).json()
+            file_path = r1.get("result", {}).get("file_path")
+            if file_path:
+                break
+        except Exception as exc:
+            print(f"Telegram getFile attempt {attempt + 1} failed: {exc}", flush=True)
+            time.sleep(2)
     if not file_path:
         return None
-    r2 = requests.get(f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}", timeout=15)
-    return r2.content if r2.status_code == 200 else None
+    for attempt in range(3):
+        try:
+            r2 = requests.get(f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}", timeout=30)
+            if r2.status_code == 200:
+                return r2.content
+        except Exception as exc:
+            print(f"Telegram photo download attempt {attempt + 1} failed: {exc}", flush=True)
+            time.sleep(2)
+    return None
 
 
 def build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, stake, t_id="", extra_note=""):
@@ -385,12 +400,12 @@ def process_once(poll_timeout=5):
     last_offset = get_last_update_id(feed_ws)
 
     resp = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             r = requests.get(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
                 params={"offset": last_offset + 1, "timeout": poll_timeout},
-                timeout=max(10, poll_timeout + 10),
+                timeout=max(25, poll_timeout + 15),
             )
             r.raise_for_status()
             resp = r.json()
