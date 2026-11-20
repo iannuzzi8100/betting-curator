@@ -358,9 +358,12 @@ Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total'
 def append_to_curator_feed(gc, today_str, curated_message):
     sh = open_tracker_workbook(gc)
     feed_ws = sh.worksheet("Curator Feed")
+    est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
+    ts_label = est_now.strftime("%Y-%m-%d %H:%M EST")
+    status_tag = "SENT_PRIMETIME_AUDIT" if est_now.hour >= 16 else "SENT_MORNING"
     feed_ws.append_row([
         today_str,
-        f"{today_str} 09:12 EST",
+        ts_label,
         "Argon Daily Curation Summary",
         "Daily Brief",
         "-",
@@ -369,7 +372,7 @@ def append_to_curator_feed(gc, today_str, curated_message):
         "-",
         "-",
         "-",
-        "SENT_912AM",
+        status_tag,
         curated_message[:4500],
     ])
 
