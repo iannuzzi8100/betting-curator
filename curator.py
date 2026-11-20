@@ -156,17 +156,17 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
     remaining_cap = ledger_meta["remaining_cap"]
     available_bankroll = ledger_meta["available"]
 
-    # Deterministic 50% Exposure Cap Guardrail: never spam new bets if active slate is already at/near 50% cap
+    # Deterministic 50% Exposure Cap Guardrail:
+    # If active slate is already at/near the 50% cap (e.g., 5:30 PM Primetime Refresh after morning bets are placed),
+    # switch into PRE-TIPOFF ACTIVE-TICKET RISK & INJURY AUDIT MODE instead of recommending 4 extra bets!
     if remaining_cap < 2.00:
-        p_formatted = [line.replace("- ", "• ") for line in ledger_meta["pending_lines"]] or ["• *None*"]
-        return (
-            f"🎯 *{today_str} Hard Rock Bet Slate (Active Cap Deployed)*\n"
-            f"Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total']:.2f} | Available: ${available_bankroll:.2f}\n\n"
-            f"*Pending (${ledger_meta['pending_total']:.2f} / ${ledger_meta['max_cap']:.2f} 50% Cap):*\n"
-            + "\n".join(p_formatted)
-            + f"\n\n*Today's Best EV Plays:*\n"
-            f"• Holding — 50% exposure cap already deployed (${remaining_cap:.2f} headroom left). Let your active tickets ride!"
-        )
+        if not ledger_meta["pending_lines"]:
+            return (
+                f"🎯 *{today_str} Hard Rock Bet Slate*\n"
+                f"Bankroll: ${ledger_meta['settled']:.2f} | Pending: $0.00 | Available: ${available_bankroll:.2f}\n\n"
+                f"• Holding — remaining exposure cap (${remaining_cap:.2f}) is below minimum $2.00 stake."
+            )
+        return run_active_ticket_audit(today_str, summary_block, intel_text, ledger_meta)
 
     client = genai.Client(
         api_key=GEMINI_API_KEY,
@@ -281,6 +281,72 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
         except Exception as exc:
             print(f"Model {model_id} skipped: {exc}")
     raise RuntimeError("All discovered Gemini models failed.")
+
+
+def run_active_ticket_audit(today_str, summary_block, intel_text, ledger_meta):
+    """
+    Primetime Pre-Tipoff Risk & Injury Audit Mode:
+    Triggered automatically when the 50% exposure cap is already deployed.
+    Scrubs fresh 5:00 PM ESPN injuries, breaking news, NHL goalies, and afternoon sharp line movement
+    specifically for the user's locked-in pending tickets to flag HOLD / WATCH / CASH OUT + 1 Pivot Play.
+    """
+    client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(api_version="v1beta"),
+    )
+    prompt = f"""
+You are the Argon Pre-Tipoff Risk & Lineup Auditor.
+The user has ALREADY locked in their bets for today ({today_str}) and deployed their 50% exposure cap.
+Do NOT recommend adding 4 extra bets on top of their existing slate!
+
+Instead, scrub the freshly scraped 5:00 PM Slate Intel (ESPN injury reports, breaking news, NHL starting goalies, and current line/prop movement) specifically for EACH of the user's Active Pending Tickets below.
+
+### 1. USER'S ACTIVE PENDING TICKETS
+{summary_block}
+
+### 2. FRESH 5:00 PM SLATE INTEL (ODDS MOVEMENT + PROPS + ESPN NEWS & INJURIES)
+{intel_text[:32000]}
+
+### AUDIT RULES FOR EACH PENDING TICKET:
+- Assign one of three exact statuses to EVERY pending ticket:
+  * 🟢 **HOLD** — No negative injury news, lineup confirmed/healthy, or line moved in our favor (good CLV).
+  * 🟡 **WATCH** — Player or key teammate/opponent is Questionable/Day-To-Day, or line moved slightly against us. Check lineup 30 min before tip.
+  * 🔴 **CASH OUT ALERT** — Player ruled OUT/Doubtful, goalie scratched, or sharp market steamed heavily against our ticket.
+- If ANY ticket is marked 🔴 **CASH OUT ALERT** (or if there is a massive late-breaking A+ replacement edge if a full-refund cashout is available), include a single **1-Play Backup Pivot** at the bottom. Otherwise, confirm **"All Clear — Let Your Active Slate Ride."**
+
+### STRICT TELEGRAM FORMATTING (COMPACT & SCANNABLE):
+🛡️ *{today_str} Primetime Pre-Tipoff Audit*
+Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total']:.2f} | Available: ${ledger_meta['available']:.2f}
+
+*Active Ticket Check:*
+• 🟢/🟡/🔴 *BET-XXX* — [Short Pick] ([Odds])
+  - Status: [1 crisp line: latest injury status, goalie update, or current line vs our locked odds]
+
+*Action Plan:*
+• [Either "All Clear — Hold all active tickets." OR "If Hard Rock offers full refund on BET-XXX, pivot to: [1 single best replacement play + edge]"]
+"""
+    for model_id in [
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+    ]:
+        try:
+            resp = client.models.generate_content(model=model_id, contents=prompt)
+            if resp and resp.text:
+                return resp.text.strip()
+        except Exception as exc:
+            print(f"Audit model {model_id} skipped: {exc}")
+
+    p_formatted = [line.replace("- ", "• ") for line in ledger_meta["pending_lines"]]
+    return (
+        f"🛡️ *{today_str} Primetime Pre-Tipoff Audit*\n"
+        f"Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total']:.2f} | Available: ${ledger_meta['available']:.2f}\n\n"
+        + "\n".join(p_formatted)
+        + "\n\n• 50% exposure cap already deployed — hold active tickets."
+    )
 
 
 def append_to_curator_feed(gc, today_str, curated_message):
