@@ -56,6 +56,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Step 0 - Sync Placed Bets from Telegram Bot (Screenshots & Text)
+        continue-on-error: true
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'logger' || inputs.stage == ''))
         run: python bet_logger.py
 

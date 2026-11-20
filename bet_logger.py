@@ -384,11 +384,24 @@ def process_once(poll_timeout=5):
     feed_ws = sh.worksheet("Curator Feed")
     last_offset = get_last_update_id(feed_ws)
 
-    resp = requests.get(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
-        params={"offset": last_offset + 1, "timeout": poll_timeout},
-        timeout=poll_timeout + 10,
-    ).json()
+    resp = None
+    for attempt in range(2):
+        try:
+            r = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+                params={"offset": last_offset + 1, "timeout": poll_timeout},
+                timeout=max(10, poll_timeout + 10),
+            )
+            r.raise_for_status()
+            resp = r.json()
+            break
+        except Exception as exc:
+            print(f"Telegram getUpdates attempt {attempt + 1} failed: {exc}", flush=True)
+            time.sleep(2)
+
+    if not resp:
+        print("Skipping Telegram sync cycle due to transient Telegram timeout.", flush=True)
+        return
 
     updates = resp.get("result", [])
     if not updates:
@@ -482,7 +495,7 @@ def main():
                 print(f"Watcher cycle warning: {exc}", flush=True)
             time.sleep(3)
     else:
-        process_once(poll_timeout=4)
+        process_once(poll_timeout=0)
 
 
 if __name__ == "__main__":
