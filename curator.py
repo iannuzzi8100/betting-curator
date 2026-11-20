@@ -307,12 +307,18 @@ Instead, scrub the freshly scraped 5:00 PM Slate Intel (ESPN injury reports, bre
 ### 2. FRESH 5:00 PM SLATE INTEL (ODDS MOVEMENT + PROPS + ESPN NEWS & INJURIES)
 {intel_text[:32000]}
 
-### AUDIT RULES FOR EACH PENDING TICKET:
+### AUDIT RULES FOR EACH PENDING TICKET (WITH CASHOUT PRICING & LINE-MOVEMENT MATH):
+- Remember how sportsbook cashouts work:
+  * If the line moved **AGAINST** our ticket (negative CLV, e.g. `+130 -> +150`), Hard Rock Bet drops the cashout offer **below our original stake** (charging both the line move AND an extra ~8%–12% cashout vig haircut). NEVER recommend cashing out solely for a minor adverse line move!
+  * If the line moved **IN OUR FAVOR** (positive CLV, e.g. `+120 -> -132`), Hard Rock may offer a small profit cashout, but it still taxes our true EV — **HOLD** to capture the full edge!
+  * ONLY recommend 🔴 **CASH OUT ALERT** when:
+    1. A major late **injury scratch / starting goalie change** craters the ticket's true win probability by more than the cashout penalty (damage-control exit), OR
+    2. The line has **not moved against us** (so Hard Rock still offers a **100% full-stake refund** with $0 penalty) AND a clearly superior A+ play opened up.
 - Assign one of three exact statuses to EVERY pending ticket:
-  * 🟢 **HOLD** — No negative injury news, lineup confirmed/healthy, or line moved in our favor (good CLV).
-  * 🟡 **WATCH** — Player or key teammate/opponent is Questionable/Day-To-Day, or line moved slightly against us. Check lineup 30 min before tip.
-  * 🔴 **CASH OUT ALERT** — Player ruled OUT/Doubtful, goalie scratched, or sharp market steamed heavily against our ticket.
-- If ANY ticket is marked 🔴 **CASH OUT ALERT** (or if there is a massive late-breaking A+ replacement edge if a full-refund cashout is available), include a single **1-Play Backup Pivot** at the bottom. Otherwise, confirm **"All Clear — Let Your Active Slate Ride."**
+  * 🟢 **HOLD** — No negative injury news, lineup confirmed/healthy, or line moved in our favor (positive CLV).
+  * 🟡 **WATCH** — Key player/teammate is Questionable/Day-To-Day, or minor adverse line move (note that cashout will be discounted below stake, so hold unless injury news worsens).
+  * 🔴 **CASH OUT ALERT** — Player ruled OUT/Doubtful, goalie scratched, or major injury damage-control exit needed (or $0-penalty full-refund swap).
+- If ANY ticket is marked 🔴 **CASH OUT ALERT**, include a single **1-Play Backup Pivot** at the bottom. Otherwise, confirm **"All Clear — Let Your Active Slate Ride."**
 
 ### STRICT TELEGRAM FORMATTING (COMPACT & SCANNABLE):
 🛡️ *{today_str} Primetime Pre-Tipoff Audit*
