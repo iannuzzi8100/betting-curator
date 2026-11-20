@@ -140,19 +140,43 @@ def read_tracker_context(gc):
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 
-    return summary_block, recent_bets, rules_text, audit_text, available_bankroll
+    ledger_meta = {
+        "settled": settled_bankroll,
+        "pending_total": pending_total,
+        "available": available_bankroll,
+        "max_cap": max_exposure_cap,
+        "remaining_cap": remaining_50pct_cap,
+        "pending_lines": pending_lines,
+    }
+    return summary_block, recent_bets, rules_text, audit_text, ledger_meta
 
 
-def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, available_bankroll=10.0):
+def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=None):
+    ledger_meta = ledger_meta or {"settled": 20.0, "pending_total": 0.0, "available": 20.0, "max_cap": 10.0, "remaining_cap": 10.0, "pending_lines": []}
+    remaining_cap = ledger_meta["remaining_cap"]
+    available_bankroll = ledger_meta["available"]
+
+    # Deterministic 50% Exposure Cap Guardrail: never spam new bets if active slate is already at/near 50% cap
+    if remaining_cap < 2.00:
+        p_formatted = [line.replace("- ", "• ") for line in ledger_meta["pending_lines"]] or ["• *None*"]
+        return (
+            f"🎯 *{today_str} Hard Rock Bet Slate (Active Cap Deployed)*\n"
+            f"Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total']:.2f} | Available: ${available_bankroll:.2f}\n\n"
+            f"*Pending (${ledger_meta['pending_total']:.2f} / ${ledger_meta['max_cap']:.2f} 50% Cap):*\n"
+            + "\n".join(p_formatted)
+            + f"\n\n*Today's Best EV Plays:*\n"
+            f"• Holding — 50% exposure cap already deployed (${remaining_cap:.2f} headroom left). Let your active tickets ride!"
+        )
+
     client = genai.Client(
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
     )
-    # Simultaneous Multi-Bet Fractional Kelly Stakes (45%-50% max simultaneous slate deployment)
-    stake_a_plus = max(1.50, round(available_bankroll * 0.145, 2))
-    stake_a_core = max(1.50, round(available_bankroll * 0.115, 2))
-    stake_b_prop = max(1.50, round(available_bankroll * 0.095, 2))
-    max_new_budget = round(available_bankroll * 0.48, 2)
+    # Simultaneous Multi-Bet Fractional Kelly Stakes sized strictly against remaining_cap
+    max_new_budget = round(min(available_bankroll, remaining_cap), 2)
+    stake_a_plus = max(1.50, round(max_new_budget * 0.32, 2))
+    stake_a_core = max(1.50, round(max_new_budget * 0.25, 2))
+    stake_b_prop = max(1.50, round(max_new_budget * 0.21, 2))
 
     prompt = f"""
 You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using Simultaneous Multi-Bet Fractional Kelly staking and Top-Down Sharp Devigging.
@@ -298,10 +322,10 @@ def main():
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
     today_str = est_now.strftime("%Y-%m-%d")
     gc, docs_service = get_google_clients()
-    summary_block, recent_bets, rules_text, audit_text, available_bankroll = read_tracker_context(gc)
+    summary_block, recent_bets, rules_text, audit_text, ledger_meta = read_tracker_context(gc)
     intel_text = read_google_doc_text(docs_service, INTEL_DOC_ID, today_str=today_str) if INTEL_DOC_ID else "No Intel Doc ID set."
     curated_message = run_argon_curation(
-        today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, available_bankroll=available_bankroll
+        today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=ledger_meta
     )
     append_to_curator_feed(gc, today_str, curated_message)
     send_telegram_alert(curated_message)
