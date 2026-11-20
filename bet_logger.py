@@ -111,7 +111,7 @@ RULES:
 1. For "sport": use one of ["NBA", "NHL", "NCAAM", "CFB", "NFL", "EPL", "UCL", "ATP", "WTA", "MLB", "Multi-Sport"].
    - Note: Rice @ Temple, MACtion, FBS games = "CFB". College basketball = "NCAAM".
 2. For "bet_type": use one of ["Straight", "SGP", "Parlay"].
-3. For "selections": format cleanly as "<Pick> (<Matchup>)" e.g. "Anaheim Ducks ML (Ducks @ Avalanche)" or "Julian Champagnie Over 5.5 Rebounds (Clippers @ Spurs)".
+3. For "selections": format cleanly as "<Pick> (<Matchup> • <Game Time EST>)" if the game time is visible on the ticket (e.g. "Josh Giddey Over 7.5 Rebounds (Wizards @ Bulls • 8:00 PM EST)" or "Canisius ML (Mercyhurst @ Canisius • 5:30 PM EST)"), otherwise "<Pick> (<Matchup>)".
 4. If the user says they cashed out a pending bet for a full refund (or wants to remove/replace a pending bet), list that pending bet's exact "bet_id" and "row_index" in "removals_or_cashouts" with "is_full_refund": true.
 5. If the user says they cashed out a pending bet for a partial amount (less than stake), set "is_full_refund": false and "cashout_return": <dollar amount>.
 6. If the user asks to edit an existing row's sport, stake, odds, selection, or result, include an entry in "updates".
