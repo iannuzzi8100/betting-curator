@@ -623,6 +623,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       max-width: 92vw;
       text-align: center;
     }
+    .card-btn {
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      font: inherit;
+      color: inherit;
+      transition: border-color 0.18s, transform 0.12s, background 0.18s;
+    }
+    .card-btn:hover {
+      border-color: rgba(59, 130, 246, 0.55);
+      background: #151f33;
+    }
+    .card-btn:active { transform: scale(0.99); }
+    .card-tap-hint {
+      font-size: 0.74rem;
+      color: #60a5fa;
+      font-weight: 700;
+      margin-left: auto;
+    }
     .toast.show { display: block; }
   </style>
 </head>
@@ -649,17 +668,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="sub-row" id="overall-sub"></div>
       </div>
 
-      <div class="card">
+      <button type="button" class="card card-btn" onclick="openGradedModal('today')">
         <div class="card-label" id="today-label">Today's Win / Loss</div>
         <div class="big-num" id="today-ratio">--</div>
         <div class="sub-row" id="today-sub"></div>
-      </div>
+      </button>
 
-      <div class="card">
+      <button type="button" class="card card-btn" onclick="openGradedModal('yesterday')">
         <div class="card-label" id="yest-label">Yesterday's Win / Loss Ratio</div>
         <div class="big-num" id="yest-ratio">--</div>
         <div class="sub-row" id="yest-sub"></div>
-      </div>
+      </button>
 
       <div class="card">
         <div class="card-label">Live Bankroll &amp; Exposure</div>
@@ -686,22 +705,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </div>
         </div>
         <div class="bet-list" id="pending-list"></div>
-      </div>
-
-      <div class="card">
-        <div class="section-title">
-          <span>🏁 Today's Graded Tickets (<span id="today-tickets-date">--</span>)</span>
-          <span class="pill pill-blue" id="today-count">0 Settled</span>
-        </div>
-        <div class="bet-list" id="today-list"></div>
-      </div>
-
-      <div class="card">
-        <div class="section-title">
-          <span>📅 Yesterday's Graded Tickets</span>
-          <span class="pill pill-blue" id="yest-count">0 Settled</span>
-        </div>
-        <div class="bet-list" id="yest-list"></div>
       </div>
 
       <div class="card">
@@ -879,6 +882,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <button class="btn-secondary" onclick="closeModal('settings-modal')">Cancel</button>
           <button class="btn-primary" id="cfg-save-btn" onclick="saveLiveConfig()">Save &amp; Connect</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 4: GRADED TICKETS (TODAY / YESTERDAY) -->
+  <div class="modal-backdrop" id="graded-modal" onclick="if(event.target===this) closeModal('graded-modal')">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="graded-modal-title">🏁 Graded Tickets</h3>
+        <button class="close-btn" onclick="closeModal('graded-modal')">&times;</button>
+      </div>
+      <div class="tabs">
+        <button class="tab-btn active" id="graded-tab-today" onclick="openGradedModal('today')">🏁 Today</button>
+        <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">📅 Yesterday</button>
+      </div>
+      <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:12px;"></div>
+      <div class="bet-list" id="graded-modal-list"></div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeModal('graded-modal')">Close</button>
       </div>
     </div>
   </div>
@@ -1214,6 +1236,48 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }
     }
 
+    function renderGradedModal(which) {
+      window.__activeGradedTab = which;
+      const statsMap = window.__gradedStats || {};
+      const st = statsMap[which] || { date: "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const isToday = which === "today";
+      document.getElementById("graded-tab-today").classList.toggle("active", isToday);
+      document.getElementById("graded-tab-yesterday").classList.toggle("active", !isToday);
+      document.getElementById("graded-modal-title").textContent =
+        (isToday ? "🏁 Today's Graded Tickets" : "📅 Yesterday's Graded Tickets") + (st.date ? ` (${st.date})` : "");
+
+      const tix = st.tickets || [];
+      const plCls = st.net_pl >= 0 ? "pos" : "neg";
+      document.getElementById("graded-modal-summary").innerHTML =
+        `<span class="pill pill-blue">${tix.length} Settled</span>` +
+        `<span>Record: <strong>${st.wins}W - ${st.losses}L${st.pushes ? ` - ${st.pushes}P` : ""} (${st.win_pct}%)</strong></span>` +
+        `<span>Daily P/L: <span class="${plCls}">${st.net_pl >= 0 ? "+" : ""}${fmtMoney(st.net_pl)}</span></span>`;
+
+      const listEl = document.getElementById("graded-modal-list");
+      if (tix.length > 0) {
+        listEl.innerHTML = tix.map(t => {
+          const rl = (t.result || "").toLowerCase();
+          const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
+          return `
+            <div class="bet-item">
+              <div class="bet-top">
+                <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
+                <span class="pill ${pClass}">${esc((t.result || "").toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
+              </div>
+              <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
+            </div>
+          `;
+        }).join("");
+      } else {
+        listEl.innerHTML = `<div class="empty-msg">No settled bets recorded ${isToday ? "yet " : ""}for ${esc(st.date || which)}.</div>`;
+      }
+    }
+
+    function openGradedModal(which) {
+      renderGradedModal(which);
+      openModal("graded-modal");
+    }
+
     function render(data) {
       currentData = data;
       updateSyncPill(Boolean(data.live_mode));
@@ -1232,25 +1296,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>` +
         clvHtml;
 
-      // 2a. Today W/L
+      // 2a. Today W/L (clickable -> opens Today's Graded Tickets modal)
       const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const tCount = (ts.tickets || []).length;
       document.getElementById("today-label").textContent = `Today (${ts.date}) Win / Loss`;
       document.getElementById("today-ratio").innerHTML =
         `${ts.wins}W - ${ts.losses}L` + (ts.pushes ? ` - ${ts.pushes}P` : "") +
         ` <span style="font-size:1.1rem;color:var(--muted)">(${ts.win_pct}%)</span>`;
       const tCls = ts.net_pl >= 0 ? "pos" : "neg";
       document.getElementById("today-sub").innerHTML =
-        `<span>Daily P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>`;
+        `<span>Daily P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>` +
+        `<span class="card-tap-hint">${tCount} bet${tCount === 1 ? "" : "s"} &rarr;</span>`;
 
-      // 2b. Yesterday W/L
-      const ys = data.yesterday_stats;
+      // 2b. Yesterday W/L (clickable -> opens Yesterday's Graded Tickets modal)
+      const ys = data.yesterday_stats || { date: data.yesterday || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const yCount = (ys.tickets || []).length;
       document.getElementById("yest-label").textContent = `Yesterday (${ys.date}) Win / Loss`;
       document.getElementById("yest-ratio").innerHTML =
         `${ys.wins}W - ${ys.losses}L` + (ys.pushes ? ` - ${ys.pushes}P` : "") +
         ` <span style="font-size:1.1rem;color:var(--muted)">(${ys.win_pct}%)</span>`;
       const yCls = ys.net_pl >= 0 ? "pos" : "neg";
       document.getElementById("yest-sub").innerHTML =
-        `<span>Daily P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>`;
+        `<span>Daily P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>` +
+        `<span class="card-tap-hint">${yCount} bet${yCount === 1 ? "" : "s"} &rarr;</span>`;
 
       // 3. Bankroll
       document.getElementById("bankroll-val").textContent = fmtMoney(data.bankroll);
@@ -1361,39 +1429,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         pList.innerHTML = `<div class="empty-msg">No active pending bets right now.</div>`;
       }
 
-      // 6a. Today's Graded Tickets
-      function renderGradedTicket(t) {
-        const rl = (t.result || "").toLowerCase();
-        const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
-        return `
-          <div class="bet-item">
-            <div class="bet-top">
-              <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
-              <span class="pill ${pClass}">${esc((t.result || "").toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
-            </div>
-            <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
-          </div>
-        `;
-      }
-
-      document.getElementById("today-tickets-date").textContent = ts.date || data.today || "--";
-      const tList = document.getElementById("today-list");
-      const tTix = ts.tickets || [];
-      document.getElementById("today-count").textContent = `${tTix.length} Settled`;
-      if (tTix.length > 0) {
-        tList.innerHTML = tTix.map(renderGradedTicket).join("");
-      } else {
-        tList.innerHTML = `<div class="empty-msg">No settled bets recorded yet for ${esc(ts.date || data.today || "today")}.</div>`;
-      }
-
-      // 6b. Yesterday's Graded Tickets
-      const yList = document.getElementById("yest-list");
-      const yTix = ys.tickets || [];
-      document.getElementById("yest-count").textContent = `${yTix.length} Settled`;
-      if (yTix.length > 0) {
-        yList.innerHTML = yTix.map(renderGradedTicket).join("");
-      } else {
-        yList.innerHTML = `<div class="empty-msg">No settled bets recorded for ${esc(ys.date)}.</div>`;
+      // 6. Store latest graded stats for Today / Yesterday modal
+      window.__gradedStats = { today: ts, yesterday: ys };
+      if (document.getElementById("graded-modal").classList.contains("open") && window.__activeGradedTab) {
+        renderGradedModal(window.__activeGradedTab);
       }
 
       // 7. Equity Curve Chart
