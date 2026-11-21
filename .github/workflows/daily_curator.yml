@@ -2,7 +2,7 @@ name: Daily Betting Intel Scrape & 9:12 AM Telegram Curator
 
 on:
   schedule:
-    - cron: '*/30 12-23,0-4 * * *' # Every 30 min (07:00 AM–11:30 PM EST) — Stage 0: Sync Telegram bet screenshots/replies
+    - cron: '7,37 12-23,0-4 * * *' # Every 30 min off-peak (:07/:37, 07:07 AM–11:37 PM EST) — Fallback Telegram sync & live settlement
     - cron: '12 8 * * *'           # 03:12 AM EST — Stage 1: Settle yesterday's pending bets
     - cron: '45 11 * * 6,0'        # 06:45 AM EST (Sat & Sun) — Early Weekend EPL + CFB/NFL Time-Slot Scrape & Curate
     - cron: '15 15 * * 1-5'        # 10:15 AM EST (Mon–Fri) — Weekday Morning Scrape & Pre-Scrape Settler
@@ -94,7 +94,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add docs/index.html docs/data.json
-            git diff --staged --quiet || (git commit -m "Auto-update live betting dashboard" && git push)
+            git diff --staged --quiet || (git commit -m "Auto-update live betting dashboard" && (git pull --rebase origin main || true) && git push)
           else
             echo "No Telegram or settlement changes detected; skipping dashboard rebuild."
           fi

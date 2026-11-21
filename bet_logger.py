@@ -88,7 +88,7 @@ def get_current_sheet_state(tracker_ws):
     return all_vals, header_idx, pending_rows, recent_rows[-10:]
 
 
-def parse_telegram_reply(text_msg=None, image_bytes=None, pending_rows=None, recent_rows=None):
+def parse_telegram_reply(text_msg=None, image_bytes=None, pending_rows=None, recent_rows=None, image_mime_type="image/jpeg"):
     client = genai.Client(api_key=GEMINI_API_KEY)
     est_today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5))).strftime("%Y-%m-%d")
 
@@ -155,7 +155,7 @@ Respond ONLY with valid JSON matching this exact schema:
     if text_msg:
         contents.append(f"User Telegram reply text/caption: {text_msg}")
     if image_bytes:
-        contents.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
+        contents.append(types.Part.from_bytes(data=image_bytes, mime_type=image_mime_type or "image/jpeg"))
 
     for model_id in [
         "gemini-3.5-flash-lite",
@@ -164,6 +164,7 @@ Respond ONLY with valid JSON matching this exact schema:
         "gemini-3.7-flash",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
+        "gemini-2.5-flash",
     ]:
         try:
             resp = client.models.generate_content(
@@ -175,7 +176,7 @@ Respond ONLY with valid JSON matching this exact schema:
                 return json.loads(resp.text)
         except Exception as exc:
             print(f"Model {model_id} skipped: {exc}")
-    return {"removals_or_cashouts": [], "updates": [], "tickets": []}
+    return None
 
 
 def download_telegram_photo(file_id):
@@ -426,6 +427,9 @@ def process_once(poll_timeout=5):
                 params={"offset": last_offset + 1, "timeout": poll_timeout},
                 timeout=max(25, poll_timeout + 15),
             )
+            if r.status_code == 409:
+                print("Telegram webhook is active — instant webhook handles bet sync; skipping polling cleanly.", flush=True)
+                return
             r.raise_for_status()
             resp = r.json()
             break
@@ -446,21 +450,37 @@ def process_once(poll_timeout=5):
 
     for u in updates:
         u_id = u.get("update_id", 0)
-        if u_id > max_update_id:
-            max_update_id = u_id
-
         msg = u.get("message") or u.get("edited_message")
         if not msg:
+            if u_id > max_update_id:
+                max_update_id = u_id
             continue
         chat_id = str(msg.get("chat", {}).get("id", ""))
         if TELEGRAM_CHAT_ID and chat_id != str(TELEGRAM_CHAT_ID):
+            if u_id > max_update_id:
+                max_update_id = u_id
             continue
 
         text = (msg.get("text") or msg.get("caption") or "").strip()
         photos = msg.get("photo", [])
-        img_bytes = download_telegram_photo(photos[-1]["file_id"]) if photos else None
+        doc = msg.get("document") or {}
+        doc_mime = str(doc.get("mime_type", ""))
+        has_image = bool(photos) or (doc_mime.startswith("image/") and bool(doc.get("file_id")))
+        img_mime = "image/jpeg"
+        img_bytes = None
+        if photos:
+            img_bytes = download_telegram_photo(photos[-1]["file_id"])
+        elif doc_mime.startswith("image/") and doc.get("file_id"):
+            img_mime = doc_mime
+            img_bytes = download_telegram_photo(doc["file_id"])
+
+        if has_image and not img_bytes:
+            print(f"Failed to download image for update {u_id}; halting offset advance for retry.", flush=True)
+            break
 
         if not img_bytes and text.lower() in ("/start", "hi", "hello"):
+            if u_id > max_update_id:
+                max_update_id = u_id
             continue
 
         if not img_bytes and text.lower() in ("status", "/status", "bankroll", "/bankroll"):
@@ -479,6 +499,8 @@ def process_once(poll_timeout=5):
                 json={"chat_id": TELEGRAM_CHAT_ID, "text": status_reply, "parse_mode": "Markdown"},
                 timeout=10,
             )
+            if u_id > max_update_id:
+                max_update_id = u_id
             continue
 
         if img_bytes or text:
@@ -488,19 +510,27 @@ def process_once(poll_timeout=5):
                 image_bytes=img_bytes,
                 pending_rows=pending_rows,
                 recent_rows=recent_rows,
+                image_mime_type=img_mime,
             )
+            if parsed is None:
+                print(f"Gemini parse failed for update {u_id}; halting offset advance for retry.", flush=True)
+                break
             notes = apply_actions_to_sheet(tracker_ws, parsed)
             all_action_notes.extend(notes)
 
-    set_last_update_id(feed_ws, max_update_id)
-    try:
-        requests.get(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
-            params={"offset": max_update_id + 1, "timeout": 1},
-            timeout=6,
-        )
-    except Exception:
-        pass
+        if u_id > max_update_id:
+            max_update_id = u_id
+
+    if max_update_id > last_offset:
+        set_last_update_id(feed_ws, max_update_id)
+        try:
+            requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+                params={"offset": max_update_id + 1, "timeout": 1},
+                timeout=6,
+            )
+        except Exception:
+            pass
 
     if all_action_notes:
         try:
