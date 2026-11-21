@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import datetime
 import requests
@@ -423,6 +424,32 @@ def append_to_curator_feed(gc, today_str, curated_message):
     ])
 
 
+def _build_curated_inline_keyboard(message):
+    rows = []
+    play_idx = 0
+    for ln in (message or "").splitlines():
+        m = re.match(r"^\s*\d+\.\s*(.+)$", ln)
+        if not m:
+            continue
+        clean = m.group(1).replace("*", "").strip()
+        # Strip leading [Time — Sport] bracket for a crisp iPhone button label
+        short_label = re.sub(r"^\[[^\]]+\]\s*", "", clean).strip()
+        if len(short_label) > 40:
+            short_label = short_label[:37].rstrip() + "..."
+        rows.append([{
+            "text": f"✅ Log #{play_idx + 1}: {short_label}",
+            "callback_data": f"log_curated:{play_idx}",
+        }])
+        play_idx += 1
+        if play_idx >= 10:
+            break
+    rows.append([
+        {"text": "📊 Live Status", "callback_data": "status"},
+        {"text": "📱 Open Dashboard", "url": "https://iannuzzi8100.github.io/betting-curator/"},
+    ])
+    return {"inline_keyboard": rows}
+
+
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials missing. Alert text:\n", message)
@@ -433,6 +460,7 @@ def send_telegram_alert(message):
         "text": message,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
+        "reply_markup": _build_curated_inline_keyboard(message),
     }
     resp = requests.post(url, json=payload, timeout=15)
     resp.raise_for_status()

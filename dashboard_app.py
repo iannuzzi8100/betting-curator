@@ -34,6 +34,54 @@ def _parse_num(val):
         return 0.0
 
 
+def _parse_curated_title_fields(title):
+    sport = "CFB"
+    game_time = ""
+    rest = title.strip()
+    m_br = re.match(r"^\[([^\]]+)\]\s*(.*)$", rest)
+    if m_br:
+        inside = m_br.group(1)
+        rest = m_br.group(2).strip()
+        parts = [p.strip() for p in re.split(r"[—–-]", inside) if p.strip()]
+        if len(parts) >= 2:
+            game_time = parts[0]
+            sport = parts[-1].upper()
+        elif len(parts) == 1:
+            sport = parts[0].upper()
+
+    odds = -110
+    m_odds = re.search(r"\(([+-]\d{3,4})\)", rest)
+    if m_odds:
+        try:
+            odds = int(m_odds.group(1))
+        except Exception:
+            odds = -110
+
+    stake = 0.0
+    m_stake = re.search(r"\$(\d+(?:\.\d{1,2})?)", rest)
+    if m_stake:
+        try:
+            stake = float(m_stake.group(1))
+        except Exception:
+            stake = 0.0
+
+    pick = rest
+    if m_odds:
+        pick = rest[: m_odds.start()].strip()
+    elif "—" in rest:
+        pick = rest.split("—", 1)[0].strip()
+    if game_time and pick and game_time not in pick:
+        pick = f"{pick} ({game_time})"
+
+    return {
+        "sport": sport,
+        "selection": pick,
+        "odds": odds,
+        "stake": stake,
+        "game_time": game_time,
+    }
+
+
 def get_workbook():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -80,7 +128,7 @@ def fetch_dashboard_data():
     equity_curve = [{"label": "START", "bankroll": 100.0}]
     clv_values = []
 
-    for r in all_rows[header_idx + 1 :]:
+    for idx_row, r in enumerate(all_rows[header_idx + 1 :], start=header_idx + 2):
         if not r or not r[0].strip().startswith("BET-"):
             continue
         bet_id = r[0].strip()
@@ -120,6 +168,7 @@ def fetch_dashboard_data():
         elif res_l == "pending":
             pending_total += stake
             pending_tickets.append({
+                "row_index": idx_row,
                 "bet_id": bet_id,
                 "date": b_date,
                 "sport": sport,
@@ -175,7 +224,14 @@ def fetch_dashboard_data():
                 if cur_play:
                     curated_plays.append(cur_play)
                 clean_title = m.group(1).replace("*", "").strip()
-                cur_play = {"title": clean_title, "edge": "", "confidence_pct": None, "confidence_tier": ""}
+                parsed_fields = _parse_curated_title_fields(clean_title)
+                cur_play = {
+                    "title": clean_title,
+                    "edge": "",
+                    "confidence_pct": None,
+                    "confidence_tier": "",
+                    **parsed_fields,
+                }
             elif cur_play and (s.startswith("- ") or s.startswith("• ")):
                 raw_bullet = re.sub(r"^[-•]\s*", "", s).replace("*", "").replace("`", "").strip()
                 if raw_bullet.lower().startswith("confidence:"):
@@ -227,7 +283,7 @@ def fetch_dashboard_data():
     }
 
 
-HTML_TEMPLATE = """<!DOCTYPE html>
+HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -254,7 +310,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
       background: var(--bg);
       color: var(--text);
-      padding: 18px 14px 48px;
+      padding: 18px 14px 60px;
       line-height: 1.45;
     }
     .container { max-width: 960px; margin: 0 auto; }
@@ -266,20 +322,56 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       flex-wrap: wrap;
       gap: 10px;
     }
-    .title-group h1 { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.02em; }
+    .title-group h1 { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .title-group p { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+    .header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .refresh-btn {
       background: linear-gradient(135deg, var(--blue), var(--accent));
       color: #fff;
       border: none;
       border-radius: 10px;
-      padding: 9px 16px;
+      padding: 9px 14px;
       font-weight: 600;
-      font-size: 0.85rem;
+      font-size: 0.84rem;
       cursor: pointer;
       transition: opacity 0.2s;
     }
     .refresh-btn:hover { opacity: 0.9; }
+    .btn-secondary {
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 8px 13px;
+      font-weight: 600;
+      font-size: 0.83rem;
+      cursor: pointer;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.11); }
+    .btn-green {
+      background: rgba(16,185,129,0.18);
+      color: var(--green);
+      border: 1px solid rgba(16,185,129,0.35);
+      border-radius: 8px;
+      padding: 6px 11px;
+      font-weight: 700;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+    .btn-green:hover { background: rgba(16,185,129,0.28); }
+    .btn-mini {
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+      border: 1px solid var(--card-border);
+      border-radius: 7px;
+      padding: 4px 9px;
+      font-weight: 600;
+      font-size: 0.74rem;
+      cursor: pointer;
+    }
+    .btn-mini:hover { color: var(--text); background: rgba(255,255,255,0.1); }
+    .btn-mini-danger { color: #fca5a5; border-color: rgba(239,68,68,0.35); }
+    .btn-mini-danger:hover { background: rgba(239,68,68,0.18); color: #fecaca; }
     .grid-3 {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -313,7 +405,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
     }
+    .section-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .pill {
       display: inline-block;
       padding: 2px 9px;
@@ -341,19 +436,149 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
     .bet-title { font-weight: 700; font-size: 0.96rem; }
     .bet-meta { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+    .bet-actions { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
     .chart-wrap { height: 210px; position: relative; margin-top: 6px; }
     .stack { display: flex; flex-direction: column; gap: 16px; }
     .empty-msg { color: var(--muted); font-size: 0.9rem; padding: 8px 0; }
+
+    /* Modal & Form styles */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.78);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 1000;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: 100%;
+      max-width: 460px;
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.55);
+      max-height: 92vh;
+      overflow-y: auto;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .modal-header h3 { font-size: 1.05rem; font-weight: 800; }
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 1.3rem;
+      cursor: pointer;
+      padding: 2px 6px;
+    }
+    .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+    .tab-btn {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 9px;
+      border: 1px solid var(--card-border);
+      background: rgba(255,255,255,0.03);
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: rgba(59,130,246,0.2);
+      border-color: rgba(59,130,246,0.5);
+      color: #93c5fd;
+    }
+    .form-grid { display: flex; flex-direction: column; gap: 11px; }
+    .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .field label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      background: #0b1120;
+      color: var(--text);
+      border: 1px solid #334155;
+      border-radius: 9px;
+      padding: 9px 11px;
+      font-size: 0.92rem;
+      font-family: inherit;
+    }
+    .field input:focus, .field select:focus { outline: none; border-color: var(--blue); }
+    .payout-preview {
+      background: rgba(16,185,129,0.08);
+      border: 1px solid rgba(16,185,129,0.25);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 0.84rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--green), #059669);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-weight: 700;
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+    .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-danger {
+      background: rgba(239,68,68,0.2);
+      color: #fca5a5;
+      border: 1px solid rgba(239,68,68,0.45);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      font-size: 0.86rem;
+      cursor: pointer;
+    }
+    .help-text { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1e293b;
+      border: 1px solid #475569;
+      color: #f8fafc;
+      padding: 10px 16px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+      z-index: 2000;
+      display: none;
+      max-width: 92vw;
+      text-align: center;
+    }
+    .toast.show { display: block; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <div class="title-group">
-        <h1>🎯 Betting Curator Terminal</h1>
+        <h1>
+          🎯 Betting Curator Terminal
+          <span class="pill pill-amber" id="sync-mode-pill">STATIC SNAPSHOT</span>
+        </h1>
         <p id="updated-at">Loading live ledger...</p>
       </div>
-      <button class="refresh-btn" id="refresh-btn" onclick="loadData()">↻ Refresh Live</button>
+      <div class="header-actions">
+        <button class="btn-secondary" onclick="openSettingsModal()">⚙️ Live Sync</button>
+        <button class="refresh-btn" id="refresh-btn" onclick="loadData()">↻ Refresh Live</button>
+      </div>
     </header>
 
     <div class="grid-3">
@@ -388,7 +613,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="card">
         <div class="section-title">
           <span>⏳ Active Pending Tickets</span>
-          <span class="pill pill-amber" id="pending-count">0 Active</span>
+          <div class="section-right">
+            <span class="pill pill-amber" id="pending-count">0 Active</span>
+            <button class="btn-green" onclick="openLogModal()">+ Log Bet</button>
+          </div>
         </div>
         <div class="bet-list" id="pending-list"></div>
       </div>
@@ -412,16 +640,508 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- MODAL 1: LOG BET (1-Tap Form + Screenshot OCR Upload) -->
+  <div class="modal-backdrop" id="log-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="log-modal-title">➕ Log Placed Bet</h3>
+        <button class="close-btn" onclick="closeModal('log-modal')">&times;</button>
+      </div>
+      <div class="tabs">
+        <button class="tab-btn active" id="tab-form-btn" onclick="switchLogTab('form')">⚡ Quick Bet Form</button>
+        <button class="tab-btn" id="tab-shot-btn" onclick="switchLogTab('shot')">📸 Upload Screenshot</button>
+      </div>
+
+      <div id="log-tab-form" class="form-grid">
+        <div class="form-row-2">
+          <div class="field">
+            <label>Sport</label>
+            <select id="f-sport">
+              <option value="CFB">CFB</option>
+              <option value="NFL">NFL</option>
+              <option value="NBA">NBA</option>
+              <option value="NHL">NHL</option>
+              <option value="NCAAM">NCAAM</option>
+              <option value="EPL">EPL</option>
+              <option value="UCL">UCL</option>
+              <option value="MLB">MLB</option>
+              <option value="ATP">ATP</option>
+              <option value="WTA">WTA</option>
+              <option value="Multi-Sport">Multi-Sport</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Bet Type</label>
+            <select id="f-type">
+              <option value="Straight">Straight</option>
+              <option value="SGP">SGP</option>
+              <option value="Parlay">Parlay</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Selection &amp; Matchup</label>
+          <input id="f-sel" type="text" placeholder="e.g. Middle Tennessee -6.5 (2:00 PM EST)" />
+        </div>
+        <div class="form-row-2">
+          <div class="field">
+            <label>American Odds</label>
+            <input id="f-odds" type="text" inputmode="text" placeholder="-110" oninput="updatePayoutPreview()" />
+          </div>
+          <div class="field">
+            <label>Stake ($)</label>
+            <input id="f-stake" type="number" step="0.01" min="0.01" placeholder="10.00" oninput="updatePayoutPreview()" />
+          </div>
+        </div>
+        <div class="payout-preview">
+          <span style="color:var(--muted);">Estimated Payout</span>
+          <strong id="f-payout-preview" style="color:var(--green);">$0.00</strong>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" onclick="closeModal('log-modal')">Cancel</button>
+          <button class="btn-primary" id="f-submit-btn" onclick="submitLogBet()">✓ Confirm &amp; Log Bet</button>
+        </div>
+      </div>
+
+      <div id="log-tab-shot" class="form-grid" style="display:none;">
+        <div class="field">
+          <label>Hard Rock Bet Screenshot</label>
+          <input id="s-file" type="file" accept="image/*" />
+        </div>
+        <div class="field">
+          <label>Optional Note / Caption</label>
+          <input id="s-caption" type="text" placeholder="Optional: e.g. cashed out BET-051 and placed this" />
+        </div>
+        <p class="help-text">Gemini Vision parses the ticket and writes straight to your Google Sheet in ~3 seconds.</p>
+        <div class="modal-footer">
+          <button class="btn-secondary" onclick="closeModal('log-modal')">Cancel</button>
+          <button class="btn-primary" id="s-submit-btn" onclick="submitScreenshot()">📸 Parse &amp; Log</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: EDIT / CASHOUT EXISTING PENDING BET -->
+  <div class="modal-backdrop" id="edit-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="edit-modal-title">✏️ Manage Ticket</h3>
+        <button class="close-btn" onclick="closeModal('edit-modal')">&times;</button>
+      </div>
+      <input type="hidden" id="e-row" />
+      <input type="hidden" id="e-betid" />
+      <div class="form-grid">
+        <div class="form-row-2">
+          <div class="field">
+            <label>Sport</label>
+            <input id="e-sport" type="text" />
+          </div>
+          <div class="field">
+            <label>Result</label>
+            <select id="e-result">
+              <option value="Pending">Pending</option>
+              <option value="Won">Won</option>
+              <option value="Lost">Lost</option>
+              <option value="Push">Push</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Selection</label>
+          <input id="e-sel" type="text" />
+        </div>
+        <div class="form-row-2">
+          <div class="field">
+            <label>Odds</label>
+            <input id="e-odds" type="text" />
+          </div>
+          <div class="field">
+            <label>Stake ($)</label>
+            <input id="e-stake" type="number" step="0.01" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" onclick="closeModal('edit-modal')">Cancel</button>
+          <button class="btn-primary" id="e-save-btn" onclick="submitEditBet()">Save Changes</button>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--card-border);margin:6px 0;" />
+        <div class="field">
+          <label>Quick Cash Out / Void</label>
+          <div class="form-row-2">
+            <button class="btn-danger" id="e-void-btn" onclick="submitCashout(true)">🗑️ Full Refund / Void</button>
+            <div style="display:flex;gap:6px;">
+              <input id="e-cashout-ret" type="number" step="0.01" placeholder="Return $" />
+              <button class="btn-secondary" id="e-partial-btn" onclick="submitCashout(false)" style="white-space:nowrap;">Cash Out</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: LIVE SYNC SETTINGS -->
+  <div class="modal-backdrop" id="settings-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>⚙️ Instant Live Sheet Sync</h3>
+        <button class="close-btn" onclick="closeModal('settings-modal')">&times;</button>
+      </div>
+      <div class="form-grid">
+        <p class="help-text">
+          Connect your deployed Google Apps Script Web App (see <code>apps_script/SETUP.md</code>) for instant 1-tap bet logging, direct sheet refresh, and screenshot OCR. Stored only on this device.
+        </p>
+        <div class="field">
+          <label>Apps Script Web App URL (/exec)</label>
+          <input id="cfg-url" type="url" placeholder="https://script.google.com/macros/s/.../exec" />
+        </div>
+        <div class="field">
+          <label>Dashboard PIN</label>
+          <input id="cfg-pin" type="password" placeholder="Your DASHBOARD_PIN secret" />
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" onclick="clearLiveConfig()">Disconnect</button>
+          <button class="btn-secondary" onclick="closeModal('settings-modal')">Cancel</button>
+          <button class="btn-primary" id="cfg-save-btn" onclick="saveLiveConfig()">Save &amp; Connect</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
   <script>
     const STATIC_DATA = __INITIAL_DATA_JSON__;
+    const LS_URL_KEY = "bc_live_api_url";
+    const LS_PIN_KEY = "bc_live_api_pin";
     let chartInstance = null;
+    let currentData = STATIC_DATA || null;
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
 
     function fmtMoney(n) {
-      const sign = n < 0 ? "-" : "";
-      return sign + "$" + Math.abs(n).toFixed(2);
+      const num = Number(n) || 0;
+      const sign = num < 0 ? "-" : "";
+      return sign + "$" + Math.abs(num).toFixed(2);
+    }
+
+    function showToast(msg, ms) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => el.classList.remove("show"), ms || 3200);
+    }
+
+    function getLiveConfig() {
+      return {
+        url: (localStorage.getItem(LS_URL_KEY) || "").trim(),
+        pin: (localStorage.getItem(LS_PIN_KEY) || "").trim(),
+      };
+    }
+
+    function isLiveConfigured() {
+      const cfg = getLiveConfig();
+      return Boolean(cfg.url && cfg.pin);
+    }
+
+    function updateSyncPill(isLive) {
+      const pill = document.getElementById("sync-mode-pill");
+      if (!pill) return;
+      if (isLive) {
+        pill.className = "pill pill-green";
+        pill.textContent = "● LIVE SHEET";
+      } else {
+        pill.className = "pill pill-amber";
+        pill.textContent = "STATIC SNAPSHOT";
+      }
+    }
+
+    function openModal(id) { document.getElementById(id).classList.add("open"); }
+    function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+
+    function openSettingsModal() {
+      const cfg = getLiveConfig();
+      document.getElementById("cfg-url").value = cfg.url;
+      document.getElementById("cfg-pin").value = cfg.pin;
+      openModal("settings-modal");
+    }
+
+    async function saveLiveConfig() {
+      const url = document.getElementById("cfg-url").value.trim();
+      const pin = document.getElementById("cfg-pin").value.trim();
+      if (!url || !pin) {
+        showToast("Enter both the Apps Script /exec URL and PIN.");
+        return;
+      }
+      const btn = document.getElementById("cfg-save-btn");
+      btn.disabled = true;
+      btn.textContent = "Testing...";
+      try {
+        const sep = url.includes("?") ? "&" : "?";
+        const r = await fetch(`${url}${sep}action=dashboard&pin=${encodeURIComponent(pin)}&t=${Date.now()}`, {
+          redirect: "follow",
+          cache: "no-store",
+        });
+        const j = await r.json();
+        if (!j.ok || !j.dashboard) {
+          throw new Error(j.error || "Connection rejected");
+        }
+        localStorage.setItem(LS_URL_KEY, url);
+        localStorage.setItem(LS_PIN_KEY, pin);
+        render(j.dashboard);
+        updateSyncPill(true);
+        closeModal("settings-modal");
+        showToast("✅ Connected to Live Google Sheet!");
+      } catch (e) {
+        showToast("❌ " + (e.message || "Could not connect to Apps Script"));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Save & Connect";
+      }
+    }
+
+    function clearLiveConfig() {
+      localStorage.removeItem(LS_URL_KEY);
+      localStorage.removeItem(LS_PIN_KEY);
+      updateSyncPill(false);
+      closeModal("settings-modal");
+      showToast("Disconnected Live Sync (using static snapshot).");
+    }
+
+    async function postLiveApi(payload) {
+      const cfg = getLiveConfig();
+      if (!cfg.url || !cfg.pin) {
+        openSettingsModal();
+        throw new Error("Connect Live Sync first (paste your Apps Script URL + PIN).");
+      }
+      const r = await fetch(cfg.url, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ ...payload, pin: cfg.pin }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "API error");
+      return j;
+    }
+
+    function switchLogTab(tab) {
+      document.getElementById("log-tab-form").style.display = tab === "form" ? "flex" : "none";
+      document.getElementById("log-tab-shot").style.display = tab === "shot" ? "flex" : "none";
+      document.getElementById("tab-form-btn").classList.toggle("active", tab === "form");
+      document.getElementById("tab-shot-btn").classList.toggle("active", tab === "shot");
+    }
+
+    function updatePayoutPreview() {
+      const odds = parseInt(String(document.getElementById("f-odds").value || "").replace(/\+/g, ""), 10);
+      const stake = parseFloat(document.getElementById("f-stake").value || "0");
+      let payout = 0;
+      if (!isNaN(odds) && odds !== 0 && !isNaN(stake) && stake > 0) {
+        payout = odds > 0 ? stake * (1 + odds / 100) : stake * (1 + 100 / Math.abs(odds));
+      }
+      document.getElementById("f-payout-preview").textContent = fmtMoney(payout);
+    }
+
+    function parseTitleFallback(title) {
+      let sport = "CFB", gameTime = "", rest = String(title || "").trim();
+      const bm = rest.match(/^\[([^\]]+)\]\s*(.*)$/);
+      if (bm) {
+        rest = bm[2].trim();
+        const parts = bm[1].split(/[—–-]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) { gameTime = parts[0]; sport = parts[parts.length - 1].toUpperCase(); }
+        else if (parts.length === 1) { sport = parts[0].toUpperCase(); }
+      }
+      const om = rest.match(/\(([+-]\d{3,4})\)/);
+      const sm = rest.match(/\$(\d+(?:\.\d{1,2})?)/);
+      let pick = om ? rest.slice(0, rest.indexOf(om[0])).trim() : rest.split("—")[0].trim();
+      if (gameTime && pick && !pick.includes(gameTime)) pick += ` (${gameTime})`;
+      return {
+        sport,
+        selection: pick,
+        odds: om ? parseInt(om[1], 10) : -110,
+        stake: sm ? parseFloat(sm[1]) : 0,
+      };
+    }
+
+    function openLogModal(prefillPlay) {
+      if (!isLiveConfigured()) {
+        openSettingsModal();
+        showToast("Set up Live Sync once to log bets directly in 1 tap.");
+        return;
+      }
+      switchLogTab("form");
+      if (prefillPlay) {
+        const fb = parseTitleFallback(prefillPlay.title);
+        const sport = prefillPlay.sport || fb.sport;
+        const sel = prefillPlay.selection || fb.selection;
+        const odds = prefillPlay.odds != null ? prefillPlay.odds : fb.odds;
+        const stake = (prefillPlay.stake && prefillPlay.stake > 0) ? prefillPlay.stake : (fb.stake || (currentData && currentData.available_cash ? Math.min(currentData.available_cash, 10) : 5));
+        document.getElementById("log-modal-title").textContent = "⚡ Confirm Curated Bet";
+        const spEl = document.getElementById("f-sport");
+        if ([...spEl.options].some(o => o.value === sport)) spEl.value = sport;
+        document.getElementById("f-type").value = "Straight";
+        document.getElementById("f-sel").value = sel;
+        document.getElementById("f-odds").value = odds >= 0 ? `+${odds}` : String(odds);
+        document.getElementById("f-stake").value = Number(stake).toFixed(2);
+      } else {
+        document.getElementById("log-modal-title").textContent = "➕ Log Placed Bet";
+        document.getElementById("f-sel").value = "";
+        document.getElementById("f-odds").value = "-110";
+        document.getElementById("f-stake").value = "";
+      }
+      updatePayoutPreview();
+      openModal("log-modal");
+    }
+
+    async function submitLogBet() {
+      const btn = document.getElementById("f-submit-btn");
+      const sport = document.getElementById("f-sport").value;
+      const bet_type = document.getElementById("f-type").value;
+      const selections = document.getElementById("f-sel").value.trim();
+      const odds = document.getElementById("f-odds").value.trim();
+      const stake = parseFloat(document.getElementById("f-stake").value);
+      if (!selections || !stake || stake <= 0) {
+        showToast("Enter a selection and valid stake.");
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = "Logging...";
+      try {
+        const res = await postLiveApi({ action: "log_bet", sport, bet_type, selections, odds, stake });
+        if (res.dashboard) render(res.dashboard);
+        closeModal("log-modal");
+        showToast(`✅ Logged ${res.bet_id || "bet"} straight to Sheet!`);
+      } catch (e) {
+        showToast("❌ " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "✓ Confirm & Log Bet";
+      }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function submitScreenshot() {
+      const fileInput = document.getElementById("s-file");
+      const caption = document.getElementById("s-caption").value.trim();
+      const file = fileInput.files && fileInput.files[0];
+      if (!file && !caption) {
+        showToast("Pick a screenshot or enter a text note.");
+        return;
+      }
+      const btn = document.getElementById("s-submit-btn");
+      btn.disabled = true;
+      btn.textContent = "Parsing...";
+      try {
+        let image_base64 = "";
+        let mime_type = "image/jpeg";
+        if (file) {
+          image_base64 = await fileToBase64(file);
+          mime_type = file.type || "image/jpeg";
+        }
+        const res = await postLiveApi({ action: "log_screenshot", image_base64, mime_type, caption });
+        if (res.dashboard) render(res.dashboard);
+        fileInput.value = "";
+        document.getElementById("s-caption").value = "";
+        closeModal("log-modal");
+        showToast("✅ Screenshot parsed & logged!");
+      } catch (e) {
+        showToast("❌ " + e.message, 4500);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "📸 Parse & Log";
+      }
+    }
+
+    function openEditModal(ticket) {
+      if (!isLiveConfigured()) {
+        openSettingsModal();
+        showToast("Connect Live Sync once to edit or cash out tickets.");
+        return;
+      }
+      document.getElementById("edit-modal-title").textContent = `✏️ Manage ${ticket.bet_id}`;
+      document.getElementById("e-row").value = ticket.row_index || "";
+      document.getElementById("e-betid").value = ticket.bet_id || "";
+      document.getElementById("e-sport").value = ticket.sport || "";
+      document.getElementById("e-result").value = "Pending";
+      document.getElementById("e-sel").value = ticket.selections || "";
+      document.getElementById("e-odds").value = ticket.odds || "";
+      document.getElementById("e-stake").value = ticket.stake != null ? Number(ticket.stake).toFixed(2) : "";
+      document.getElementById("e-cashout-ret").value = "";
+      openModal("edit-modal");
+    }
+
+    async function submitEditBet() {
+      const btn = document.getElementById("e-save-btn");
+      btn.disabled = true;
+      btn.textContent = "Saving...";
+      try {
+        const res = await postLiveApi({
+          action: "edit_bet",
+          row_index: document.getElementById("e-row").value || null,
+          bet_id: document.getElementById("e-betid").value,
+          sport: document.getElementById("e-sport").value.trim(),
+          result: document.getElementById("e-result").value,
+          selections: document.getElementById("e-sel").value.trim(),
+          odds: document.getElementById("e-odds").value.trim(),
+          stake: document.getElementById("e-stake").value,
+        });
+        if (res.dashboard) render(res.dashboard);
+        closeModal("edit-modal");
+        showToast("✅ Ticket updated in Sheet!");
+      } catch (e) {
+        showToast("❌ " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Save Changes";
+      }
+    }
+
+    async function submitCashout(isFullRefund) {
+      const betId = document.getElementById("e-betid").value;
+      const rowIndex = document.getElementById("e-row").value || null;
+      const retVal = document.getElementById("e-cashout-ret").value;
+      if (!isFullRefund && (retVal === "" || isNaN(parseFloat(retVal)))) {
+        showToast("Enter the cashout return dollar amount.");
+        return;
+      }
+      const btn = document.getElementById(isFullRefund ? "e-void-btn" : "e-partial-btn");
+      btn.disabled = true;
+      try {
+        const res = await postLiveApi({
+          action: "cashout_bet",
+          bet_id: betId,
+          row_index: rowIndex,
+          is_full_refund: isFullRefund,
+          cashout_return: isFullRefund ? null : parseFloat(retVal),
+        });
+        if (res.dashboard) render(res.dashboard);
+        closeModal("edit-modal");
+        showToast(isFullRefund ? `🗑️ Removed ${betId} (full refund)` : `🔄 Cashed out ${betId}`);
+      } catch (e) {
+        showToast("❌ " + e.message);
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     function render(data) {
+      currentData = data;
+      updateSyncPill(Boolean(data.live_mode));
       document.getElementById("updated-at").textContent = "Last synced: " + data.updated_at;
 
       // 1. Overall W/L
@@ -452,10 +1172,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
         `<span>Avail Cash: <span class="pos">${fmtMoney(data.available_cash)}</span></span>`;
 
-      // 4. Today's Curated Bets
+      // 4. Today's Curated Bets (with 1-Tap Log Bet button)
       document.getElementById("curated-date").textContent = data.curated_date;
       const cList = document.getElementById("curated-list");
       const plays = data.curated_plays || [];
+      window.__curatedPlays = plays;
       document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
       if (plays.length > 0) {
         cList.innerHTML = plays.map((p, idx) => {
@@ -470,7 +1191,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             meterHtml = `
               <div style="margin-top:8px;">
                 <div style="display:flex;justify-content:space-between;font-size:0.77rem;font-weight:700;color:${barColor};margin-bottom:4px;">
-                  <span>${p.confidence_tier || "Confidence Meter"}</span>
+                  <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
                   <span>${cp}%</span>
                 </div>
                 <div style="width:100%;height:7px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
@@ -482,21 +1203,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           return `
           <div class="bet-item">
             <div class="bet-top">
-              <div class="bet-title">${idx + 1}. ${p.title}</div>
-              <span class="pill ${pillCls}">${pillTxt}</span>
+              <div class="bet-title">${idx + 1}. ${esc(p.title)}</div>
+              <span class="pill ${pillCls}">${esc(pillTxt)}</span>
             </div>
             ${meterHtml}
-            ${p.edge ? `<div class="bet-meta" style="margin-top:6px;">Edge: ${p.edge}</div>` : ""}
+            ${p.edge ? `<div class="bet-meta" style="margin-top:6px;">Edge: ${esc(p.edge)}</div>` : ""}
+            <div class="bet-actions">
+              <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This</button>
+            </div>
           </div>
         `;
         }).join("");
       } else {
-        cList.innerHTML = `<div class="empty-msg">${(data.curated_raw || "No curated plays found yet.").replace(/\\n/g, "<br>")}</div>`;
+        cList.innerHTML = `<div class="empty-msg">${esc(data.curated_raw || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
       }
 
-      // 5. Active Pending Tickets (with live in-game ESPN score badges ONLY for games in play)
+      // 5. Active Pending Tickets (with live in-game ESPN score badges + Edit/Cashout)
       const pList = document.getElementById("pending-list");
       const pend = data.pending_tickets || [];
+      window.__pendingTickets = pend;
       document.getElementById("pending-count").textContent = `${pend.length} Active (${fmtMoney(data.pending_total)})`;
       if (pend.length > 0) {
         pList.innerHTML = pend.map((t, idx) => {
@@ -506,12 +1231,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           return `
           <div class="bet-item">
             <div class="bet-top">
-              <div class="bet-title">${t.bet_id} • ${t.selections}</div>
-              <div><span class="pill pill-amber">${t.odds} | ${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>${clvBadge}</div>
+              <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)}</div>
+              <div><span class="pill pill-amber">${esc(t.odds)} | ${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>${clvBadge}</div>
             </div>
             <div class="bet-meta" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
-              <span>${t.sport} &bull; ${t.bet_type} &bull; Placed ${t.date}</span>
+              <span>${esc(t.sport)} &bull; ${esc(t.bet_type)} &bull; Placed ${esc(t.date)}</span>
               <span id="live-score-${idx}" style="font-weight:700;color:#60a5fa;"></span>
+            </div>
+            <div class="bet-actions">
+              <button class="btn-mini" onclick="openEditModal(window.__pendingTickets[${idx}])">✏️ Edit / Cash Out</button>
             </div>
           </div>
         `;
@@ -532,15 +1260,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           return `
             <div class="bet-item">
               <div class="bet-top">
-                <div class="bet-title">${t.bet_id} • ${t.selections} (${t.odds})</div>
-                <span class="pill ${pClass}">${t.result.toUpperCase()} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
+                <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
+                <span class="pill ${pClass}">${esc(t.result.toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
               </div>
-              <div class="bet-meta">${t.sport} &bull; Stake ${fmtMoney(t.stake)}</div>
+              <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
             </div>
           `;
         }).join("");
       } else {
-        yList.innerHTML = `<div class="empty-msg">No settled bets recorded for ${ys.date}.</div>`;
+        yList.innerHTML = `<div class="empty-msg">No settled bets recorded for ${esc(ys.date)}.</div>`;
       }
 
       // 7. Equity Curve Chart
@@ -590,7 +1318,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
       };
       const neededSports = [...new Set(pendingTickets.map(t => (t.sport || "").toUpperCase()).filter(s => sportMap[s]))];
-      const ymd = ((STATIC_DATA && STATIC_DATA.today) || new Date().toISOString().slice(0,10)).replace(/-/g, "");
+      const ymd = ((currentData && currentData.today) || new Date().toISOString().slice(0,10)).replace(/-/g, "");
       const eventsBySport = {};
       await Promise.all(neededSports.map(async sp => {
         try {
@@ -648,46 +1376,53 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     async function loadData() {
       const btn = document.getElementById("refresh-btn");
-      if (window.location.protocol.startsWith("http") && !STATIC_DATA) {
-        btn.textContent = "Refreshing...";
-        try {
-          const r = await fetch("/api/dashboard");
-          const d = await r.json();
-          render(d);
-        } catch (e) {
-          console.error(e);
-        }
-        btn.textContent = "↻ Refresh Live";
-      } else if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-        btn.textContent = "Refreshing...";
-        try {
-          const r = await fetch("/api/dashboard");
-          const d = await r.json();
-          render(d);
-        } catch (e) {
-          if (STATIC_DATA) render(STATIC_DATA);
-        }
-        btn.textContent = "↻ Refresh Live";
-      } else {
-        btn.textContent = "Refreshing...";
-        try {
-          const r = await fetch(`./data.json?t=${Date.now()}`, { cache: "no-store" });
+      btn.textContent = "Refreshing...";
+      try {
+        // 1. Prefer Live Apps Script Web App if configured
+        const cfg = getLiveConfig();
+        if (cfg.url && cfg.pin) {
+          const sep = cfg.url.includes("?") ? "&" : "?";
+          const r = await fetch(`${cfg.url}${sep}action=dashboard&pin=${encodeURIComponent(cfg.pin)}&t=${Date.now()}`, {
+            redirect: "follow",
+            cache: "no-store",
+          });
           if (r.ok) {
-            const freshData = await r.json();
-            render(freshData);
-          } else if (STATIC_DATA) {
-            render(STATIC_DATA);
+            const j = await r.json();
+            if (j.ok && j.dashboard) {
+              render(j.dashboard);
+              btn.textContent = "↻ Refresh Live";
+              return;
+            }
           }
-        } catch (e) {
-          if (STATIC_DATA) render(STATIC_DATA);
         }
-        const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const upEl = document.getElementById("updated-at");
-        if (upEl && !upEl.textContent.includes("checked")) {
-          upEl.textContent += ` (Live checked ${nowStr})`;
+
+        // 2. Local Python server mode
+        if ((window.location.protocol.startsWith("http") && !STATIC_DATA) || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+          const r = await fetch("/api/dashboard");
+          const d = await r.json();
+          render(d);
+          btn.textContent = "↻ Refresh Live";
+          return;
         }
-        btn.textContent = "↻ Refresh Live";
+
+        // 3. Fallback: GitHub Pages static data.json
+        const r = await fetch(`./data.json?t=${Date.now()}`, { cache: "no-store" });
+        if (r.ok) {
+          const freshData = await r.json();
+          render(freshData);
+        } else if (STATIC_DATA) {
+          render(STATIC_DATA);
+        }
+      } catch (e) {
+        if (STATIC_DATA && !currentData) render(STATIC_DATA);
+        console.error(e);
       }
+      const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const upEl = document.getElementById("updated-at");
+      if (upEl && !upEl.textContent.includes("checked")) {
+        upEl.textContent += ` (checked ${nowStr})`;
+      }
+      btn.textContent = "↻ Refresh Live";
     }
 
     if (STATIC_DATA) {
@@ -696,7 +1431,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     } else {
       loadData();
     }
-    // Auto-refresh live scores & latest data.json every 60 seconds on its own!
+    // Auto-refresh live sheet & scores every 60 seconds
     setInterval(loadData, 60000);
   </script>
 </body>
