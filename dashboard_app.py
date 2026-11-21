@@ -555,10 +555,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
       };
       const neededSports = [...new Set(pendingTickets.map(t => (t.sport || "").toUpperCase()).filter(s => sportMap[s]))];
+      const ymd = ((STATIC_DATA && STATIC_DATA.today) || new Date().toISOString().slice(0,10)).replace(/-/g, "");
       const eventsBySport = {};
       await Promise.all(neededSports.map(async sp => {
         try {
-          const r = await fetch(sportMap[sp]);
+          const sep = sportMap[sp].includes("?") ? "&" : "?";
+          const r = await fetch(`${sportMap[sp]}${sep}dates=${ymd}`, { cache: "no-store" });
           const j = await r.json();
           eventsBySport[sp] = j.events || [];
         } catch (e) {
@@ -633,18 +635,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         btn.textContent = "↻ Refresh Live";
       } else {
         btn.textContent = "Refreshing...";
-        if (STATIC_DATA && STATIC_DATA.pending && STATIC_DATA.pending.length) {
-          await fetchLiveScoresForPending(STATIC_DATA.pending);
+        try {
+          const r = await fetch(`./data.json?t=${Date.now()}`, { cache: "no-store" });
+          if (r.ok) {
+            const freshData = await r.json();
+            render(freshData);
+          } else if (STATIC_DATA) {
+            render(STATIC_DATA);
+          }
+        } catch (e) {
+          if (STATIC_DATA) render(STATIC_DATA);
         }
-        window.location.href = window.location.pathname + "?t=" + Date.now();
+        const nowStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const upEl = document.getElementById("updated-at");
+        if (upEl && !upEl.textContent.includes("checked")) {
+          upEl.textContent += ` (Live checked ${nowStr})`;
+        }
+        btn.textContent = "↻ Refresh Live";
       }
     }
 
     if (STATIC_DATA) {
       render(STATIC_DATA);
+      loadData();
     } else {
       loadData();
     }
+    // Auto-refresh live scores & latest data.json every 60 seconds on its own!
+    setInterval(loadData, 60000);
   </script>
 </body>
 </html>
@@ -653,11 +671,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 def build_static_html(out_path="docs/index.html"):
     data = fetch_dashboard_data()
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    out_dir = os.path.dirname(out_path)
+    os.makedirs(out_dir, exist_ok=True)
     html = HTML_TEMPLATE.replace("__INITIAL_DATA_JSON__", json.dumps(data))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"Built static dashboard at {out_path} ({data['updated_at']}).")
+    json_path = os.path.join(out_dir, "data.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    print(f"Built static dashboard at {out_path} and {json_path} ({data['updated_at']}).")
 
 
 class DashboardHandler(BaseHTTPRequestHandler):

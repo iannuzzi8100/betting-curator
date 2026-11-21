@@ -513,7 +513,7 @@ def fetch_espn_quant_matchups_and_props():
         except Exception:
             continue
 
-        max_events = 35 if label == "CFB" else (20 if label in ("NFL", "EPL") else 15)
+        max_events = 65 if label == "CFB" else (25 if label in ("NFL", "EPL") else 20)
         for ev in events[:max_events]:
             ev_id = ev.get("id", "")
             status_state = ev.get("status", {}).get("type", {}).get("state", "")
@@ -521,9 +521,9 @@ def fetch_espn_quant_matchups_and_props():
             if status_state in ("in", "post"):
                 continue
 
-            # Parse exact EST kickoff/tipoff time & assign Time-Slot bucket
+            # Parse exact EST kickoff/tipoff time & assign Sequential Time-Slot Window
             time_est_str = "TBD EST"
-            slot_tag = "[SLOT 4: PRIMETIME/NIGHT]"
+            slot_tag = "[WINDOW 5: 6:30-9:00 PM PRIMETIME]"
             raw_date = ev.get("date", "")
             if raw_date:
                 try:
@@ -531,14 +531,18 @@ def fetch_espn_quant_matchups_and_props():
                     dt_est = dt_utc.astimezone(est_tz)
                     time_est_str = dt_est.strftime("%I:%M %p EST").lstrip("0")
                     hr_dec = dt_est.hour + dt_est.minute / 60.0
-                    if hr_dec < 11.5:
-                        slot_tag = "[SLOT 1: MORNING]"
-                    elif hr_dec < 14.5:
-                        slot_tag = "[SLOT 2: EARLY AFTERNOON]"
-                    elif hr_dec < 17.75:
-                        slot_tag = "[SLOT 3: LATE AFTERNOON]"
+                    if hr_dec < 9.5:
+                        slot_tag = "[WINDOW 1: 7:30 AM EARLY MORNING]"
+                    elif hr_dec < 11.75:
+                        slot_tag = "[WINDOW 2: 10:00 AM LATE MORNING]"
+                    elif hr_dec < 14.75:
+                        slot_tag = "[WINDOW 3: 12:00-2:30 PM EARLY AFTERNOON]"
+                    elif hr_dec < 18.25:
+                        slot_tag = "[WINDOW 4: 3:00-6:00 PM LATE AFTERNOON]"
+                    elif hr_dec < 21.25:
+                        slot_tag = "[WINDOW 5: 6:30-9:00 PM PRIMETIME]"
                     else:
-                        slot_tag = "[SLOT 4: PRIMETIME/NIGHT]"
+                        slot_tag = "[WINDOW 6: 9:30 PM+ LATE NIGHT]"
                 except Exception:
                     pass
 

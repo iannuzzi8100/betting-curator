@@ -172,11 +172,12 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
     )
-    # Sequential Time-Slot Compounding Sizing:
-    # Because each time slot settles before the next major kickoff window, only 1 bet is live at a time!
-    # Stake 20% of settled bankroll per sequential slot (capped cleanly by available_bankroll).
+    # Sequential Time-Slot Compounding Sizing (Up to 50% of Resulting Bankroll per Window):
+    # Because each time slot settles before the next window kicks off, only 1 bet is live at a time!
+    # Stake 50% of settled bankroll on A+ / Top Window Edges (or 35% on solid B+ Window Edges), rolling 50% of the new resulting bankroll into the next window!
     settled_bankroll = ledger_meta["settled"]
-    stake_per_slot = round(min(available_bankroll, max(2.00, settled_bankroll * 0.20)), 2)
+    stake_50 = round(min(available_bankroll, max(2.00, settled_bankroll * 0.50)), 2)
+    stake_35 = round(min(available_bankroll, max(2.00, settled_bankroll * 0.35)), 2)
 
     # Detect Weekend Football + EPL Mode automatically from scraped intel / day of week
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
@@ -186,35 +187,37 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
             "**SATURDAY FOOTBALL + EPL ONLY (STRICT):** Today is Saturday during College Football season. "
             "Pick **SOLELY from College Football (CFB) and Premier League Soccer (EPL)**. "
             "Do NOT recommend NBA, NHL, CBB, or any other sport today. "
-            "Target 1 Sniper Play per remaining upcoming Time Slot in chronological order:\n"
-            "     • **Slot 1 — Morning (EPL Soccer):** 7:30 AM – 11:00 AM EST\n"
-            "     • **Slot 2 — Early Afternoon (CFB Noon):** 12:00 PM – 2:00 PM EST\n"
-            "     • **Slot 3 — Late Afternoon (CFB 3:30 PM):** 2:30 PM – 5:30 PM EST\n"
-            "     • **Slot 4 — Primetime (CFB Night):** 6:00 PM – 10:30 PM EST"
+            "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
+            "     • **Window 1 — Early Morning (7:30 AM EPL):** 7:30 AM – 9:30 AM EST\n"
+            "     • **Window 2 — Late Morning (10:00 AM EPL):** 9:45 AM – 11:45 AM EST\n"
+            "     • **Window 3 — Noon / Early Afternoon (12:00–2:30 PM CFB/EPL):** 11:45 AM – 2:45 PM EST\n"
+            "     • **Window 4 — Late Afternoon (3:00–5:30 PM CFB):** 2:45 PM – 6:15 PM EST\n"
+            "     • **Window 5 — Primetime (6:30–9:00 PM CFB):** 6:15 PM – 9:15 PM EST\n"
+            "     • **Window 6 — Late Night (9:30 PM+ CFB):** 9:15 PM – 11:30 PM EST"
         )
-        slate_header_tag = "Saturday CFB + EPL Time-Slot Slate"
+        slate_header_tag = "Saturday CFB + EPL 50% Time-Slot Roll"
     elif "SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or (dow == 6 and "[NFL QUANT]" in intel_text):
         league_rule = (
             "**SUNDAY FOOTBALL + EPL ONLY (STRICT):** Today is Sunday during NFL season. "
             "Pick **SOLELY from NFL and Premier League Soccer (EPL)**. "
             "Do NOT recommend NBA, NHL, CBB, or any other sport today. "
-            "Target 1 Sniper Play per remaining upcoming Time Slot in chronological order:\n"
-            "     • **Slot 1 — Morning (EPL Soccer):** 9:00 AM – 11:30 AM EST\n"
-            "     • **Slot 2 — Early Afternoon (NFL 1:00 PM):** 1:00 PM EST\n"
-            "     • **Slot 3 — Late Afternoon (NFL 4:05 / 4:25 PM):** 4:05 PM – 4:25 PM EST\n"
-            "     • **Slot 4 — Primetime (NFL SNF):** 8:20 PM EST"
+            "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
+            "     • **Window 1 — Morning (9:00–11:30 AM EPL):** 9:00 AM – 11:45 AM EST\n"
+            "     • **Window 2 — Early Afternoon (1:00 PM NFL):** 12:30 PM – 3:45 PM EST\n"
+            "     • **Window 3 — Late Afternoon (4:05 / 4:25 PM NFL):** 4:00 PM – 7:30 PM EST\n"
+            "     • **Window 4 — Primetime (8:20 PM NFL SNF):** 8:00 PM – 11:30 PM EST"
         )
-        slate_header_tag = "Sunday NFL + EPL Time-Slot Slate"
+        slate_header_tag = "Sunday NFL + EPL 50% Time-Slot Roll"
     else:
         league_rule = (
             "**ALL-LEAGUE BEST-EV TIME-SLOT MODE:** Pick the highest-conviction plays across any active league "
-            "(NBA, NHL, CFB, NFL, CBB, EPL, MLB) — staggered across distinct upcoming time slots (e.g., Afternoon / Early Evening / Late Night) "
-            "so earlier bets settle and compound the bankroll into later slots."
+            "(NBA, NHL, CFB, NFL, CBB, EPL, MLB) — staggered across every remaining ~3-hour betting window "
+            "so each bet settles and rolls up to 50% of the resulting bankroll into the next window."
         )
-        slate_header_tag = "Time-Slot Sniper Slate"
+        slate_header_tag = "50% Time-Slot Compounding Slate"
 
     prompt = f"""
-You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using **Sequential Time-Slot Compounding** (1 highest-conviction Sniper Play per upcoming time slot so each bet settles and rolls into the next window!).
+You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using **50% Sequential Time-Slot Compounding** (betting up to 50% of current bankroll on the immediate window, then rolling up to 50% of the resulting bankroll into each subsequent time-slot window all day!).
 Today's Date: {today_str} | Current Time: {est_now.strftime('%I:%M %p EST').lstrip('0')}
 
 ### 1. LIVE BANKROLL & RECENT LEDGER
@@ -231,19 +234,25 @@ Recent Bets:
 ### 3. SCRAPED SLATE INTEL (TIME-SLOT TAGGED MATCHUPS + POWER-DEVIGGED +EV% + L5 FORM MARGIN + BPI/FPI + STEAM + INJURIES)
 {intel_text[:34000]}
 
-### 4. SEQUENTIAL TIME-SLOT COMPOUNDING STRATEGY (9 HARD MANDATES):
-1. **LEAGUE & TIME-SLOT MANDATE:**
+### 4. 50% SEQUENTIAL TIME-SLOT COMPOUNDING STRATEGY (9 HARD MANDATES):
+1. **HIT EVERY UPCOMING TIME-SLOT WINDOW (OR EXPLICITLY PASS IF NO GOOD PLAY):**
    - {league_rule}
-   - Pick **exactly 1 highest-conviction Sniper Play for EACH remaining upcoming Time Slot** that has available games in the scraped intel above (typically **3 to 4 staggered plays** in the morning, or **1 to 2 plays** for afternoon/primetime refreshes).
-   - **ONLY pick games that have NOT started yet** (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}`).
-   - Order your plays **strictly chronologically** from earliest kickoff/tipoff to latest!
-2. **SEQUENTIAL COMPOUNDING SIZING (20% OF BANKROLL PER TIME SLOT):**
-   - Because only **1 time slot is in play at a time**, size each slot's Sniper Play at **20% of current bankroll = ${stake_per_slot:.2f}** (rolling 20% of the updated bankroll into the next slot after each settlement!).
-   - Display **${stake_per_slot:.2f}** on Slot 1 and **`${stake_per_slot:.2f} (or 20% of updated BR)`** — keep it concise as **`${stake_per_slot:.2f}`** per slot with a 1-line note at the bottom to roll 20% after each settlement.
+   - Only include windows that have NOT started yet (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}`).
+   - For **EACH remaining upcoming window today**, pick the **1 single best play** in that window so the user can settle a bet in every window and compound to $1,000 as fast as possible.
+   - **IF A TIME-SLOT WINDOW HAS NO GOOD PLAY** (no clear quantitative edge, or only bad/already-steamed lines), do NOT force a bad bet — explicitly write:
+     `*[Window Time EST] — NO GOOD PLAY / PASS* (Wait for next window)` so the user knows you checked that window and passed!
+2. **UP TO 50% SEQUENTIAL BANKROLL SIZING PER WINDOW:**
+   - Because each window settles before the next window kicks off, only **1 bet is live at a time**!
+   - Size the **Immediate Next Window (#1)** using exact current bankroll (**${settled_bankroll:.2f}**):
+     * **A+ / Strong Window Play (50% Bankroll):** **${stake_50:.2f}**
+     * **Solid B+ Window Play (35% Bankroll):** **${stake_35:.2f}**
+   - For **Subsequent Windows (#2, #3, #4...)** later today, display:
+     **`50% of Resulting BR (Currently ${stake_50:.2f})`** (or `35% of Resulting BR (Currently ${stake_35:.2f})` for a moderate B+ edge).
+   - As soon as each window finishes, our automated Settler + Curator will re-run and update the exact dollar amount from the new resulting bankroll!
 3. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
    - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop). Never recommend SGPs or Parlays.
 4. **MODERATE FAVORITE PRIORITY & "-155 TO +130" SWEET-SPOT BAND:**
-   - Empirical ledger audit: Moderate Favorites (`-1.5` to `-6.5` spreads or `-110` to `-150` MLs) hit **`10W-3L (76.9% win rate)`**, while Plus-Money Underdogs (`+110` to `+190`) went **`0W-4L (0.0%)`**.
+   - Empirical ledger audit: Moderate Favorites (`-1.5` to `-6.5` spreads or `-110` to `-150` MLs) hit **`11W-3L (78.6% win rate)`** (including today's Bournemouth 2-0 win!), while Plus-Money Underdogs (`+110` to `+190`) went **`0W-4L (0.0%)`**.
    - **Strongly prioritize Moderate Favorites (`-110` to `-150` ML or `-1.5` to `-6.5` spreads; or EPL ML/Spread/O2.5/U2.5 in `-155` to `+125`)** over coin-flip underdogs unless an underdog has `[🏆 A+ CONFLUENCE]`.
    - Restrict all plays to **`-155` to `+130`**. Never lay `-175+` heavy juice and never chase `+150+` longshots.
 5. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
@@ -251,16 +260,16 @@ Recent Bets:
 6. **NEVER CHASE LATE STEAM:**
    - **STRICTLY IGNORE** any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`.
 7. **MULTI-SIGNAL CONFLUENCE PRIORITY:**
-   - **Tier 1:** `[🏆 A+ CONFLUENCE]`, `[🔥 STALE LINE]`, `[+EV Consensus]`
-   - **Tier 2:** `[📈 FORM EDGE]`, `[📊 BPI/FPI +EV (Sweet-Spot)]`, `[🔥 SPREAD STEAM]`, `[🔥 ML STEAM]`, `[🎯 GOALIE MISMATCH EDGE]`, `[⚠️ FATIGUE EDGE]`
-   - **Tier 3:** Clean Moderate Favorite ML/Spread or EPL Total backed by L5 Form & record superiority.
+   - **Tier 1:** `[🏆 A+ CONFLUENCE]`, `[🔥 STALE LINE]`, `[+EV Consensus]` -> Stake **50% (${stake_50:.2f})**
+   - **Tier 2:** `[📈 FORM EDGE]`, `[📊 BPI/FPI +EV (Sweet-Spot)]`, `[🔥 SPREAD STEAM]`, `[🔥 ML STEAM]`, `[🎯 GOALIE MISMATCH EDGE]`, `[⚠️ FATIGUE EDGE]` -> Stake **50% (${stake_50:.2f})**
+   - **Tier 3:** Clean Moderate Favorite ML/Spread or EPL Total backed by L5 Form & record superiority -> Stake **35% (${stake_35:.2f})**
 8. **STRICT FACTUAL GROUNDING (ZERO HALLUCINATIONS):**
    - ONLY cite odds, records, L5 form, FPI/BPI numbers, and player names that appear **verbatim** in Section 3 above. NEVER invent stats or assign a player/goalie to the wrong team!
 9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
 - Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps.
-- Always include the **Slot label + exact EST kickoff time** on every play!
+- Always include the **Window time in EST + League** on every play!
 
 🎯 *{today_str} {slate_header_tag}*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
@@ -268,12 +277,12 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 *Pending ($XX.XX):*
 • *None* (or list active pending BET-XXX rows if any)
 
-*Today's Time-Slot Sniper Plays (Roll 20% BR per slot as each settles):*
-1. *[Slot Time EST — League] Selection (Odds)* — *${stake_per_slot:.2f}*
+*Today's Sequential 50% Time-Slot Roll (Settle each window -> roll up to 50% of resulting BR into next):*
+1. *[NEXT WINDOW: Time EST — League] Selection (Odds)* — *${stake_50:.2f} (50% BR)*
    - Edge: [1 short line using ONLY verified stats from scraped intel]
-2. *[Slot Time EST — League] Selection (Odds)* — *${stake_per_slot:.2f}*
+2. *[WINDOW 2: Time EST — League] Selection (Odds)* — *50% of Resulting BR (Est. ${stake_50:.2f})*
    - Edge: [1 short line using ONLY verified stats from scraped intel]
-(Continue in chronological order for each remaining upcoming time slot today.)
+(Continue in chronological order for every remaining time-slot window today; if any window has no good play, list `X. *[Window Time EST] — NO GOOD PLAY / PASS*`)
 """
     candidate_models = [
         "gemini-3.6-flash",

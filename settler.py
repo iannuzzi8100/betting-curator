@@ -388,6 +388,14 @@ if __name__ == "__main__":
             updated_count += 1
 
     print(f"Settlement run complete. Updated {updated_count} ticket(s).", flush=True)
+    if updated_count > 0:
+        try:
+            with open(".tg_changed", "w", encoding="utf-8") as f:
+                f.write(str(updated_count))
+            with open(".settled_changed", "w", encoding="utf-8") as f:
+                f.write(str(updated_count))
+        except Exception:
+            pass
 
     if updated_count > 0 and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         try:
