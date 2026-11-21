@@ -172,16 +172,50 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
     )
-    # Sniper Mode Dynamic Bankroll Staking (high-conviction compounding, capped by remaining_cap)
+    # Sequential Time-Slot Compounding Sizing:
+    # Because each time slot settles before the next major kickoff window, only 1 bet is live at a time!
+    # Stake 20% of settled bankroll per sequential slot (capped cleanly by available_bankroll).
     settled_bankroll = ledger_meta["settled"]
-    max_new_budget = round(min(available_bankroll, remaining_cap), 2)
-    stake_sniper_1 = round(min(max_new_budget, max(2.00, settled_bankroll * 0.16)), 2)
-    stake_sniper_2 = round(min(max_new_budget / 2.0, max(2.00, settled_bankroll * 0.13)), 2)
-    stake_sniper_3 = round(min(max_new_budget / 3.0, max(2.00, settled_bankroll * 0.11)), 2)
+    stake_per_slot = round(min(available_bankroll, max(2.00, settled_bankroll * 0.20)), 2)
+
+    # Detect Weekend Football + EPL Mode automatically from scraped intel / day of week
+    est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
+    dow = est_now.weekday()  # 5 = Saturday, 6 = Sunday
+    if "SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or (dow == 5 and "[CFB QUANT]" in intel_text):
+        league_rule = (
+            "**SATURDAY FOOTBALL + EPL ONLY (STRICT):** Today is Saturday during College Football season. "
+            "Pick **SOLELY from College Football (CFB) and Premier League Soccer (EPL)**. "
+            "Do NOT recommend NBA, NHL, CBB, or any other sport today. "
+            "Target 1 Sniper Play per remaining upcoming Time Slot in chronological order:\n"
+            "     • **Slot 1 — Morning (EPL Soccer):** 7:30 AM – 11:00 AM EST\n"
+            "     • **Slot 2 — Early Afternoon (CFB Noon):** 12:00 PM – 2:00 PM EST\n"
+            "     • **Slot 3 — Late Afternoon (CFB 3:30 PM):** 2:30 PM – 5:30 PM EST\n"
+            "     • **Slot 4 — Primetime (CFB Night):** 6:00 PM – 10:30 PM EST"
+        )
+        slate_header_tag = "Saturday CFB + EPL Time-Slot Slate"
+    elif "SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or (dow == 6 and "[NFL QUANT]" in intel_text):
+        league_rule = (
+            "**SUNDAY FOOTBALL + EPL ONLY (STRICT):** Today is Sunday during NFL season. "
+            "Pick **SOLELY from NFL and Premier League Soccer (EPL)**. "
+            "Do NOT recommend NBA, NHL, CBB, or any other sport today. "
+            "Target 1 Sniper Play per remaining upcoming Time Slot in chronological order:\n"
+            "     • **Slot 1 — Morning (EPL Soccer):** 9:00 AM – 11:30 AM EST\n"
+            "     • **Slot 2 — Early Afternoon (NFL 1:00 PM):** 1:00 PM EST\n"
+            "     • **Slot 3 — Late Afternoon (NFL 4:05 / 4:25 PM):** 4:05 PM – 4:25 PM EST\n"
+            "     • **Slot 4 — Primetime (NFL SNF):** 8:20 PM EST"
+        )
+        slate_header_tag = "Sunday NFL + EPL Time-Slot Slate"
+    else:
+        league_rule = (
+            "**ALL-LEAGUE BEST-EV TIME-SLOT MODE:** Pick the highest-conviction plays across any active league "
+            "(NBA, NHL, CFB, NFL, CBB, EPL, MLB) — staggered across distinct upcoming time slots (e.g., Afternoon / Early Evening / Late Night) "
+            "so earlier bets settle and compound the bankroll into later slots."
+        )
+        slate_header_tag = "Time-Slot Sniper Slate"
 
     prompt = f"""
-You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using **Sniper Mode** (concentrated high-conviction sizing on the 1–2 absolute strongest plays of the day) and Top-Down Sharp Devigging.
-Today's Date: {today_str}
+You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using **Sequential Time-Slot Compounding** (1 highest-conviction Sniper Play per upcoming time slot so each bet settles and rolls into the next window!).
+Today's Date: {today_str} | Current Time: {est_now.strftime('%I:%M %p EST').lstrip('0')}
 
 ### 1. LIVE BANKROLL & RECENT LEDGER
 {summary_block}
@@ -194,56 +228,52 @@ Recent Bets:
 
 {audit_text}
 
-### 3. SCRAPED SLATE INTEL (POWER-DEVIGGED +EV% + L5 FORM MARGIN + GOALIE MISMATCHES + B2B FATIGUE + BPI/FPI + JUICE-ONLY PROP STEAM + INJURIES)
-{intel_text[:32000]}
+### 3. SCRAPED SLATE INTEL (TIME-SLOT TAGGED MATCHUPS + POWER-DEVIGGED +EV% + L5 FORM MARGIN + BPI/FPI + STEAM + INJURIES)
+{intel_text[:34000]}
 
-### 4. SNIPER MODE QUANTITATIVE STRATEGY ENGINE (8 HARD MANDATES FROM EMPIRICAL LEDGER AUDIT):
-1. **SNIPER MODE — QUALITY OVER VOLUME (1 TO 2 PLAYS DEFAULT, MAX 3 ON LOADED WEEKEND SLATES):**
-   - Because Available Unstaked Bankroll is **${available_bankroll:.2f}** (>= $2.00), pick **1 to 2 highest-conviction Sniper Plays** from today's scraped slate.
-   - **1-Play Sniper Day** is ENCOURAGED on lighter slates or when one game stands head-and-shoulders above the rest.
-   - **2-Play Sniper Day** is the standard ceiling when two distinct games both have genuine quantitative edges.
-   - **3-Play Max** is permitted **ONLY** on loaded weekend slates (Saturday/Sunday or 10+ games) where 3 separate games each have clear A-grade edges. **NEVER force filler 3rd or 4th bets just for action.** NEVER output "Holding" or "None" if at least 1 strong edge exists.
-   - **League-Agnostic Best-EV Focus:** Pick the single best bets regardless of league (NBA, NHL, NFL, CFB, CBB, MLB, Soccer) — do not ban any league, and lean into hot form / winning streaks when the numbers confirm it.
-2. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
-   - Historical ledger audit proved SGPs (14.3% win rate, -74.6% ROI) and Parlays (16.7% win rate, -44.7% ROI) lose to synthetic vig compounding (~22% house hold on SGPs), while Sweet-Spot Straights & Props win at **71.4% (+37.69 net)**.
-   - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop).
-3. **MODERATE FAVORITE PRIORITY & "-150 TO +125" SWEET-SPOT BAND:**
+### 4. SEQUENTIAL TIME-SLOT COMPOUNDING STRATEGY (9 HARD MANDATES):
+1. **LEAGUE & TIME-SLOT MANDATE:**
+   - {league_rule}
+   - Pick **exactly 1 highest-conviction Sniper Play for EACH remaining upcoming Time Slot** that has available games in the scraped intel above (typically **3 to 4 staggered plays** in the morning, or **1 to 2 plays** for afternoon/primetime refreshes).
+   - **ONLY pick games that have NOT started yet** (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}`).
+   - Order your plays **strictly chronologically** from earliest kickoff/tipoff to latest!
+2. **SEQUENTIAL COMPOUNDING SIZING (20% OF BANKROLL PER TIME SLOT):**
+   - Because only **1 time slot is in play at a time**, size each slot's Sniper Play at **20% of current bankroll = ${stake_per_slot:.2f}** (rolling 20% of the updated bankroll into the next slot after each settlement!).
+   - Display **${stake_per_slot:.2f}** on Slot 1 and **`${stake_per_slot:.2f} (or 20% of updated BR)`** — keep it concise as **`${stake_per_slot:.2f}`** per slot with a 1-line note at the bottom to roll 20% after each settlement.
+3. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
+   - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop). Never recommend SGPs or Parlays.
+4. **MODERATE FAVORITE PRIORITY & "-155 TO +130" SWEET-SPOT BAND:**
    - Empirical ledger audit: Moderate Favorites (`-1.5` to `-6.5` spreads or `-110` to `-150` MLs) hit **`10W-3L (76.9% win rate)`**, while Plus-Money Underdogs (`+110` to `+190`) went **`0W-4L (0.0%)`**.
-   - **Strongly prioritize high-probability Moderate Favorites (`-110` to `-145` ML or `-1.5` to `-6.5` spreads)** over coin-flip `+115` to `+135` underdogs unless an underdog has an overwhelming `[🏆 A+ CONFLUENCE]` (2+ independent quant edges).
+   - **Strongly prioritize Moderate Favorites (`-110` to `-150` ML or `-1.5` to `-6.5` spreads; or EPL ML/Spread/O2.5/U2.5 in `-155` to `+125`)** over coin-flip underdogs unless an underdog has `[🏆 A+ CONFLUENCE]`.
    - Restrict all plays to **`-155` to `+130`**. Never lay `-175+` heavy juice and never chase `+150+` longshots.
-4. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
-   - Ledger audit showed `0W-4L (-$40.00)` on big favorite spreads (`-7.5` to `-16.5`) due to 4th-quarter garbage-time benching.
-   - **NEVER recommend laying more than `-6.5` points on a full-game favorite spread** (`-7.5` max in college). If a heavy favorite has a strong fatigue or form edge, pivot to a **1st-Half Spread**, **Game Total**, or **Player Prop**.
-5. **NEVER CHASE LATE STEAM (ANTI-STALE-NUMBER RULE):**
-   - **STRICTLY IGNORE** any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`. Once a spread has moved `>= 2.5` pts or a total `>= 3.5` pts from open, the value is gone and you are buying the worst number on the board.
-   - For player props, ONLY use **Juice-Only Steam** (`[PROP STEAM]` where the line is still at the opening number and only the vig tightened) — never chase a prop whose line already jumped a full point.
-6. **MULTI-SIGNAL CONFLUENCE PRIORITY (RANKING HIERARCHY):**
-   - **Tier 1 (`[🏆 A+ CONFLUENCE]` & `[🔥 STALE LINE]` & `[+EV Consensus]`):** Games where 2+ independent quantitative signals align (e.g., `L5 Form Edge` + `B2B Fatigue`, or `BPI/FPI +EV` + `Goalie Mismatch`, or Hard Rock lagging Pinnacle/FD/DK).
-   - **Tier 2 (`[🎯 GOALIE MISMATCH EDGE]`, `[⚠️ FATIGUE EDGE]`, `[📈 FORM EDGE]`):** NHL starting goalie SV% differential >= .025, fading a team on a 0-day-rest Back-to-Back, or backing a hot team with a strong Last-5-Games scoring margin (`L5 Form`) against a slumping opponent.
-   - **Tier 3 (`[📊 BPI/FPI +EV (Sweet-Spot)]` & `[PROP STEAM]`):** High-info league (NBA/NFL/CFB) BPI/FPI +EV in the `-150` to `+110` band or Juice-Only Player Prop Steam.
-7. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
-   - Every recommended play MUST come from a **different game/matchup**. Never place 2 tickets in the same game.
-8. **SNIPER MODE BANKROLL SIZING (EXACT PRE-COMPUTED STAKES — TOTAL NEW <= ${max_new_budget:.2f}):**
-   - Match your exact stake to the number of plays you select today:
-     * **If selecting 1 Sniper Play (Solo Lock — 16% bankroll):** **${stake_sniper_1:.2f}**
-     * **If selecting 2 Sniper Plays (Dual Lock — 13% each / 26% total):** **${stake_sniper_2:.2f}** each
-     * **If selecting 3 Plays (Loaded Weekend Slate ONLY — 11% each / 33% total):** **${stake_sniper_3:.2f}** each
-9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day` on the ESPN injury feed, append `[WAIT FOR LINEUP]`.
+5. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
+   - **NEVER recommend laying more than `-6.5` points on an NFL/NBA/NHL spread (`-7.5` max in CFB)**. If a heavy favorite has a strong form/FPI edge, pivot to a **1st-Half Spread**, **Game Total**, or **Moneyline** (if `-155` or better).
+6. **NEVER CHASE LATE STEAM:**
+   - **STRICTLY IGNORE** any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`.
+7. **MULTI-SIGNAL CONFLUENCE PRIORITY:**
+   - **Tier 1:** `[🏆 A+ CONFLUENCE]`, `[🔥 STALE LINE]`, `[+EV Consensus]`
+   - **Tier 2:** `[📈 FORM EDGE]`, `[📊 BPI/FPI +EV (Sweet-Spot)]`, `[🔥 SPREAD STEAM]`, `[🔥 ML STEAM]`, `[🎯 GOALIE MISMATCH EDGE]`, `[⚠️ FATIGUE EDGE]`
+   - **Tier 3:** Clean Moderate Favorite ML/Spread or EPL Total backed by L5 Form & record superiority.
+8. **STRICT FACTUAL GROUNDING (ZERO HALLUCINATIONS):**
+   - ONLY cite odds, records, L5 form, FPI/BPI numbers, and player names that appear **verbatim** in Section 3 above. NEVER invent stats or assign a player/goalie to the wrong team!
+9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
-- Output ONLY the compact template below with **1, 2, or (loaded weekend only) 3 numbered plays**. NO extra paragraphs, NO UTC timestamps, NO "Leg 1 / Leg 2" prefixes.
-- Use short team/player names.
+- Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps.
+- Always include the **Slot label + exact EST kickoff time** on every play!
 
-🎯 *{today_str} Hard Rock Bet Slate (Sniper Mode)*
+🎯 *{today_str} {slate_header_tag}*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 *Pending ($XX.XX):*
 • *None* (or list active pending BET-XXX rows if any)
 
-*Today's Sniper Plays:*
-1. *[Straight] Selection (Odds)* — *$X.XX*
-   - Edge: [1 short line: Confluence signals, L5 form margin, goalie SV%/GAA delta, BPI/FPI EV%, B2B fatigue, or juice-only prop steam]
-(Include #2 only if a 2nd A-grade edge exists; include #3 ONLY on loaded weekend slates with 3 distinct A-grade edges.)
+*Today's Time-Slot Sniper Plays (Roll 20% BR per slot as each settles):*
+1. *[Slot Time EST — League] Selection (Odds)* — *${stake_per_slot:.2f}*
+   - Edge: [1 short line using ONLY verified stats from scraped intel]
+2. *[Slot Time EST — League] Selection (Odds)* — *${stake_per_slot:.2f}*
+   - Edge: [1 short line using ONLY verified stats from scraped intel]
+(Continue in chronological order for each remaining upcoming time slot today.)
 """
     candidate_models = [
         "gemini-3.6-flash",

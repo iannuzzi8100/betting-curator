@@ -77,6 +77,10 @@ ESPN_ENDPOINTS = {
         "news": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/news",
         "injuries": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries",
     },
+    "EPL": {
+        "scoreboard": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+        "news": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/news",
+    },
 }
 
 YOUTUBE_CHANNELS = [
@@ -441,13 +445,43 @@ def fetch_espn_quant_matchups_and_props():
     today_ymd = now_est.strftime("%Y%m%d")
     yesterday_ymd = (now_est - datetime.timedelta(days=1)).strftime("%Y%m%d")
 
-    league_configs = [
+    all_league_configs = [
+        ("EPL", "soccer", "eng.1", None),
+        ("CFB", "football", "college-football", "80"),
+        ("NFL", "football", "nfl", None),
         ("NBA", "basketball", "nba", None),
         ("NHL", "hockey", "nhl", None),
         ("CBB", "basketball", "mens-college-basketball", "50"),
-        ("CFB", "football", "college-football", "80"),
-        ("NFL", "football", "nfl", None),
     ]
+
+    # Auto-detect Weekend Football Mode (Saturday = CFB + EPL only; Sunday = NFL + EPL only).
+    # Automatically falls back to ALL leagues as soon as CFB/NFL season ends (0 games scheduled).
+    weekday = now_est.weekday()  # 5 = Saturday, 6 = Sunday
+    league_configs = all_league_configs
+    if weekday == 5:
+        try:
+            cfb_check = requests.get(
+                "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+                params={"dates": today_ymd, "groups": "80"},
+                timeout=10,
+            ).json().get("events", [])
+            if len(cfb_check) > 0:
+                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "CFB")]
+                quant_games.append("- [SLATE MODE] SATURDAY FOOTBALL + EPL MODE ACTIVE (Strictly CFB & Premier League Soccer)")
+        except Exception:
+            pass
+    elif weekday == 6:
+        try:
+            nfl_check = requests.get(
+                "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+                params={"dates": today_ymd},
+                timeout=10,
+            ).json().get("events", [])
+            if len(nfl_check) > 0:
+                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "NFL")]
+                quant_games.append("- [SLATE MODE] SUNDAY FOOTBALL + EPL MODE ACTIVE (Strictly NFL & Premier League Soccer)")
+        except Exception:
+            pass
 
     athlete_cache = {}
 
@@ -479,11 +513,34 @@ def fetch_espn_quant_matchups_and_props():
         except Exception:
             continue
 
-        for ev in events[:15]:
+        max_events = 35 if label == "CFB" else (20 if label in ("NFL", "EPL") else 15)
+        for ev in events[:max_events]:
             ev_id = ev.get("id", "")
             status_state = ev.get("status", {}).get("type", {}).get("state", "")
-            if status_state == "post":
+            # Skip already-finished OR already-live games so curator only picks upcoming playable slots
+            if status_state in ("in", "post"):
                 continue
+
+            # Parse exact EST kickoff/tipoff time & assign Time-Slot bucket
+            time_est_str = "TBD EST"
+            slot_tag = "[SLOT 4: PRIMETIME/NIGHT]"
+            raw_date = ev.get("date", "")
+            if raw_date:
+                try:
+                    dt_utc = datetime.datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                    dt_est = dt_utc.astimezone(est_tz)
+                    time_est_str = dt_est.strftime("%I:%M %p EST").lstrip("0")
+                    hr_dec = dt_est.hour + dt_est.minute / 60.0
+                    if hr_dec < 11.5:
+                        slot_tag = "[SLOT 1: MORNING]"
+                    elif hr_dec < 14.5:
+                        slot_tag = "[SLOT 2: EARLY AFTERNOON]"
+                    elif hr_dec < 17.75:
+                        slot_tag = "[SLOT 3: LATE AFTERNOON]"
+                    else:
+                        slot_tag = "[SLOT 4: PRIMETIME/NIGHT]"
+                except Exception:
+                    pass
 
             comps = ev.get("competitions", [])
             if not comps:
@@ -504,12 +561,27 @@ def fetch_espn_quant_matchups_and_props():
             a_abbr = away.get("team", {}).get("abbreviation", a_name)
             matchup = f"{a_name} @ {h_name}"
 
-            # Extract Overall / Home / Road records
+            # Extract Overall / Home / Road records (+ Soccer 5-match form string if present)
             h_rec = next((r.get("summary", "") for r in home.get("records", []) if r.get("type") == "total"), "")
             a_rec = next((r.get("summary", "") for r in away.get("records", []) if r.get("type") == "total"), "")
             rec_str = f"({a_abbr} {a_rec} @ {h_abbr} {h_rec})" if (h_rec or a_rec) else ""
 
             tags = []
+            # EPL Soccer 5-match form string directly from scoreboard (e.g. "WWDLW")
+            if label == "EPL":
+                a_form = str(away.get("form", "") or "").upper()
+                h_form = str(home.get("form", "") or "").upper()
+                if a_form and h_form:
+                    a_w = a_form.count("W")
+                    h_w = h_form.count("W")
+                    a_pts = a_w * 3 + a_form.count("D")
+                    h_pts = h_w * 3 + h_form.count("D")
+                    tags.append(f"[EPL L5 Form: {a_abbr} {a_form} ({a_pts}pts) vs {h_abbr} {h_form} ({h_pts}pts)]")
+                    if (h_pts - a_pts) >= 5:
+                        tags.append(f"[📈 FORM EDGE: {h_abbr} L5 {h_form} ({h_pts}pts) vs {a_abbr} L5 {a_form} ({a_pts}pts)]")
+                    elif (a_pts - h_pts) >= 5:
+                        tags.append(f"[📈 FORM EDGE: {a_abbr} L5 {a_form} ({a_pts}pts) vs {h_abbr} L5 {h_form} ({h_pts}pts)]")
+
             # Back-to-Back Fatigue Flags
             if a_name in b2b_teams and h_name not in b2b_teams:
                 tags.append(f"[⚠️ FATIGUE EDGE: {a_abbr} on Road Back-to-Back (0d rest) vs Rested {h_abbr}]")
@@ -527,13 +599,15 @@ def fetch_espn_quant_matchups_and_props():
                 if details or ou:
                     odds_summary.append(f"Spread: {details} | O/U: {ou}")
 
-                # Moneyline close vs open
+                # Moneyline close vs open (plus 3-way Draw odds for Soccer)
                 ml = od.get("moneyline", {})
                 h_ml_close = _safe_int_odds(ml.get("home", {}).get("close", {}).get("odds"))
                 a_ml_close = _safe_int_odds(ml.get("away", {}).get("close", {}).get("odds"))
+                d_ml_close = _safe_int_odds(ml.get("draw", {}).get("close", {}).get("odds"))
                 h_ml_open = _safe_int_odds(ml.get("home", {}).get("open", {}).get("odds"))
                 if h_ml_close is not None and a_ml_close is not None:
-                    odds_summary.append(f"ML: {a_abbr} ({a_ml_close:+d}) / {h_abbr} ({h_ml_close:+d})")
+                    draw_str = f" / Draw ({d_ml_close:+d})" if d_ml_close is not None else ""
+                    odds_summary.append(f"ML: {a_abbr} ({a_ml_close:+d}) / {h_abbr} ({h_ml_close:+d}){draw_str}")
                 if h_ml_open is not None and h_ml_close is not None:
                     imp_diff = (american_to_implied(h_ml_close) - american_to_implied(h_ml_open)) * 100.0
                     if abs(imp_diff) >= 3.5:
@@ -562,10 +636,14 @@ def fetch_espn_quant_matchups_and_props():
                             f"[🔥 SPREAD STEAM: Moved {delta_sp:.1f} pts toward {moved_toward} (Open {h_abbr} {h_sp_open:+.1f} -> Now {h_sp_close:+.1f})]"
                         )
 
-                # Total close vs open
+                # Total close vs open (include Over/Under juice for EPL totals like o2.5 / u2.5)
                 tot = od.get("total", {})
                 t_close = _safe_float_line(tot.get("over", {}).get("close", {}).get("line"))
                 t_open = _safe_float_line(tot.get("over", {}).get("open", {}).get("line"))
+                t_over_odds = _safe_int_odds(tot.get("over", {}).get("close", {}).get("odds"))
+                t_under_odds = _safe_int_odds(tot.get("under", {}).get("close", {}).get("odds"))
+                if t_close is not None and t_over_odds is not None and t_under_odds is not None and label == "EPL":
+                    odds_summary.append(f"Total Prices: O{t_close} ({t_over_odds:+d}) / U{t_close} ({t_under_odds:+d})")
                 if t_open is not None and t_close is not None and abs(t_close - t_open) >= 1.0:
                     dir_lbl = "OVER" if t_close > t_open else "UNDER"
                     delta_t = abs(t_close - t_open)
@@ -655,7 +733,7 @@ def fetch_espn_quant_matchups_and_props():
                     aw, al, am = l5_parsed[a_abbr]
                     hw, hl, hm = l5_parsed[h_abbr]
                     odds_summary.append(f"L5 Form: {a_abbr} {aw}-{al} ({am:+.1f}) vs {h_abbr} {hw}-{hl} ({hm:+.1f})")
-                    margin_thresh = 1.2 if label == "NHL" else 4.5
+                    margin_thresh = 0.8 if label == "EPL" else (1.2 if label == "NHL" else 4.5)
                     if (hw - aw) >= 2 and (hm - am) >= margin_thresh:
                         tags.append(f"[📈 FORM EDGE: {h_abbr} L5 {hw}-{hl} ({hm:+.1f} avg margin) vs {a_abbr} L5 {aw}-{al} ({am:+.1f})]")
                     elif (aw - hw) >= 2 and (am - hm) >= margin_thresh:
@@ -716,7 +794,7 @@ def fetch_espn_quant_matchups_and_props():
 
             if odds_summary or tags:
                 quant_games.append(
-                    f"- [{label} QUANT] {matchup} {rec_str} -> {' | '.join(odds_summary)}"
+                    f"- [{label} QUANT] {slot_tag} ({time_est_str}) {matchup} {rec_str} -> {' | '.join(odds_summary)}"
                     + ((" -> " + " ".join(tags)) if tags else "")
                 )
 
