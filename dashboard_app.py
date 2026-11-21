@@ -118,8 +118,15 @@ def fetch_dashboard_data():
     total_staked_settled = 0.0
     total_net_pl = 0.0
 
+    today_wins = 0
+    today_losses = 0
+    today_pushes = 0
+    today_pl = 0.0
+    today_tickets = []
+
     yest_wins = 0
     yest_losses = 0
+    yest_pushes = 0
     yest_pl = 0.0
     yest_tickets = []
 
@@ -154,17 +161,19 @@ def fetch_dashboard_data():
             overall_wins += 1
             total_staked_settled += stake
             total_net_pl += net_pl
-            settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(run_br, 2)})
+            if run_br > 0:
+                settled_bankroll = run_br
+            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
         elif res_l == "lost":
             overall_losses += 1
             total_staked_settled += stake
             total_net_pl += net_pl
-            settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(run_br, 2)})
+            if run_br > 0:
+                settled_bankroll = run_br
+            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
         elif res_l == "push":
             overall_pushes += 1
-            equity_curve.append({"label": bet_id, "bankroll": round(run_br, 2)})
+            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
         elif res_l == "pending":
             pending_total += stake
             pending_tickets.append({
@@ -180,11 +189,31 @@ def fetch_dashboard_data():
                 "clv": clv_val,
             })
 
+        if b_date == today_str and res_l in ("won", "lost", "push"):
+            if res_l == "won":
+                today_wins += 1
+            elif res_l == "lost":
+                today_losses += 1
+            elif res_l == "push":
+                today_pushes += 1
+            today_pl += net_pl
+            today_tickets.append({
+                "bet_id": bet_id,
+                "sport": sport,
+                "selections": sel,
+                "odds": odds,
+                "stake": round(stake, 2),
+                "result": res,
+                "net_pl": round(net_pl, 2),
+            })
+
         if b_date == yesterday_str and res_l in ("won", "lost", "push"):
             if res_l == "won":
                 yest_wins += 1
             elif res_l == "lost":
                 yest_losses += 1
+            elif res_l == "push":
+                yest_pushes += 1
             yest_pl += net_pl
             yest_tickets.append({
                 "bet_id": bet_id,
@@ -199,6 +228,9 @@ def fetch_dashboard_data():
     overall_total = overall_wins + overall_losses
     overall_win_pct = round((overall_wins / overall_total) * 100.0, 1) if overall_total > 0 else 0.0
     overall_roi = round((total_net_pl / total_staked_settled) * 100.0, 1) if total_staked_settled > 0 else 0.0
+
+    today_total = today_wins + today_losses
+    today_win_pct = round((today_wins / today_total) * 100.0, 1) if today_total > 0 else 0.0
 
     yest_total = yest_wins + yest_losses
     yest_win_pct = round((yest_wins / yest_total) * 100.0, 1) if yest_total > 0 else 0.0
@@ -267,10 +299,20 @@ def fetch_dashboard_data():
             "avg_clv": round(sum(clv_values) / len(clv_values), 2) if clv_values else None,
             "clv_count": len(clv_values),
         },
+        "today_stats": {
+            "date": today_str,
+            "wins": today_wins,
+            "losses": today_losses,
+            "pushes": today_pushes,
+            "win_pct": today_win_pct,
+            "net_pl": round(today_pl, 2),
+            "tickets": today_tickets,
+        },
         "yesterday_stats": {
             "date": yesterday_str,
             "wins": yest_wins,
             "losses": yest_losses,
+            "pushes": yest_pushes,
             "win_pct": yest_win_pct,
             "net_pl": round(yest_pl, 2),
             "tickets": yest_tickets,
@@ -374,7 +416,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .btn-mini-danger:hover { background: rgba(239,68,68,0.18); color: #fecaca; }
     .grid-3 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 14px;
       margin-bottom: 18px;
     }
@@ -589,6 +631,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
 
       <div class="card">
+        <div class="card-label" id="today-label">Today's Win / Loss</div>
+        <div class="big-num" id="today-ratio">--</div>
+        <div class="sub-row" id="today-sub"></div>
+      </div>
+
+      <div class="card">
         <div class="card-label" id="yest-label">Yesterday's Win / Loss Ratio</div>
         <div class="big-num" id="yest-ratio">--</div>
         <div class="sub-row" id="yest-sub"></div>
@@ -619,6 +667,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </div>
         </div>
         <div class="bet-list" id="pending-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">
+          <span>🏁 Today's Graded Tickets (<span id="today-tickets-date">--</span>)</span>
+          <span class="pill pill-blue" id="today-count">0 Settled</span>
+        </div>
+        <div class="bet-list" id="today-list"></div>
       </div>
 
       <div class="card">
@@ -1157,11 +1213,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>` +
         clvHtml;
 
-      // 2. Yesterday W/L
+      // 2a. Today W/L
+      const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      document.getElementById("today-label").textContent = `Today (${ts.date}) Win / Loss`;
+      document.getElementById("today-ratio").innerHTML =
+        `${ts.wins}W - ${ts.losses}L` + (ts.pushes ? ` - ${ts.pushes}P` : "") +
+        ` <span style="font-size:1.1rem;color:var(--muted)">(${ts.win_pct}%)</span>`;
+      const tCls = ts.net_pl >= 0 ? "pos" : "neg";
+      document.getElementById("today-sub").innerHTML =
+        `<span>Daily P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>`;
+
+      // 2b. Yesterday W/L
       const ys = data.yesterday_stats;
       document.getElementById("yest-label").textContent = `Yesterday (${ys.date}) Win / Loss`;
       document.getElementById("yest-ratio").innerHTML =
-        `${ys.wins}W - ${ys.losses}L <span style="font-size:1.1rem;color:var(--muted)">(${ys.win_pct}%)</span>`;
+        `${ys.wins}W - ${ys.losses}L` + (ys.pushes ? ` - ${ys.pushes}P` : "") +
+        ` <span style="font-size:1.1rem;color:var(--muted)">(${ys.win_pct}%)</span>`;
       const yCls = ys.net_pl >= 0 ? "pos" : "neg";
       document.getElementById("yest-sub").innerHTML =
         `<span>Daily P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>`;
@@ -1172,18 +1239,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
         `<span>Avail Cash: <span class="pos">${fmtMoney(data.available_cash)}</span></span>`;
 
-      // 4. Today's Curated Bets (with 1-Tap Log Bet button)
+      // 4. Today's Curated Bets (with 1-Tap Log Bet button + duplicate-pending guard)
       document.getElementById("curated-date").textContent = data.curated_date;
       const cList = document.getElementById("curated-list");
       const plays = data.curated_plays || [];
+      const pendingList = data.pending_tickets || [];
       window.__curatedPlays = plays;
       document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
+
+      function findMatchingPending(play) {
+        const fb = parseTitleFallback(play.title);
+        const selRaw = (play.selection || fb.selection || play.title || "").toLowerCase();
+        // Extract core team/subject phrase before ML, spread (+/-), over/under, or parentheses
+        const core = selRaw.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\()/i)[0].replace(/[^a-z0-9\s]/g, "").trim();
+        if (!core || core.length < 3) return null;
+        return pendingList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+      }
+
       if (plays.length > 0) {
         cList.innerHTML = plays.map((p, idx) => {
+          const isPass = (p.title || "").includes("⛔") || /\bPASS\b/.test(p.title || "");
+          const existingPend = isPass ? null : findMatchingPending(p);
           const cp = p.confidence_pct;
           let meterHtml = "";
-          let pillCls = "pill-blue";
-          let pillTxt = "CURATED";
+          let pillCls = isPass ? "pill-red" : "pill-blue";
+          let pillTxt = isPass ? "PASS" : "CURATED";
           if (cp !== null && cp !== undefined) {
             const barColor = cp >= 88 ? "#10b981" : (cp >= 78 ? "#3b82f6" : (cp >= 68 ? "#f59e0b" : "#ef4444"));
             pillCls = cp >= 88 ? "pill-green" : (cp >= 78 ? "pill-blue" : (cp >= 68 ? "pill-amber" : "pill-red"));
@@ -1200,6 +1280,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               </div>
             `;
           }
+          let actionHtml = "";
+          if (!isPass) {
+            if (existingPend) {
+              actionHtml = `
+                <div class="bet-actions">
+                  <span class="pill pill-green">✓ Already Pending (${esc(existingPend.bet_id)})</span>
+                  <button class="btn-mini" onclick="if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
+                </div>`;
+            } else {
+              actionHtml = `
+                <div class="bet-actions">
+                  <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This</button>
+                </div>`;
+            }
+          }
           return `
           <div class="bet-item">
             <div class="bet-top">
@@ -1208,9 +1303,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </div>
             ${meterHtml}
             ${p.edge ? `<div class="bet-meta" style="margin-top:6px;">Edge: ${esc(p.edge)}</div>` : ""}
-            <div class="bet-actions">
-              <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This</button>
-            </div>
+            ${actionHtml}
           </div>
         `;
         }).join("");
@@ -1249,24 +1342,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         pList.innerHTML = `<div class="empty-msg">No active pending bets right now.</div>`;
       }
 
-      // 6. Yesterday's Tickets
+      // 6a. Today's Graded Tickets
+      function renderGradedTicket(t) {
+        const rl = (t.result || "").toLowerCase();
+        const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
+        return `
+          <div class="bet-item">
+            <div class="bet-top">
+              <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
+              <span class="pill ${pClass}">${esc((t.result || "").toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
+            </div>
+            <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
+          </div>
+        `;
+      }
+
+      document.getElementById("today-tickets-date").textContent = ts.date || data.today || "--";
+      const tList = document.getElementById("today-list");
+      const tTix = ts.tickets || [];
+      document.getElementById("today-count").textContent = `${tTix.length} Settled`;
+      if (tTix.length > 0) {
+        tList.innerHTML = tTix.map(renderGradedTicket).join("");
+      } else {
+        tList.innerHTML = `<div class="empty-msg">No settled bets recorded yet for ${esc(ts.date || data.today || "today")}.</div>`;
+      }
+
+      // 6b. Yesterday's Graded Tickets
       const yList = document.getElementById("yest-list");
       const yTix = ys.tickets || [];
       document.getElementById("yest-count").textContent = `${yTix.length} Settled`;
       if (yTix.length > 0) {
-        yList.innerHTML = yTix.map(t => {
-          const isWin = t.result.toLowerCase() === "won";
-          const pClass = isWin ? "pill-green" : "pill-red";
-          return `
-            <div class="bet-item">
-              <div class="bet-top">
-                <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
-                <span class="pill ${pClass}">${esc(t.result.toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
-              </div>
-              <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
-            </div>
-          `;
-        }).join("");
+        yList.innerHTML = yTix.map(renderGradedTicket).join("");
       } else {
         yList.innerHTML = `<div class="empty-msg">No settled bets recorded for ${esc(ys.date)}.</div>`;
       }
@@ -1349,7 +1455,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           return teams.some(tm =>
             (tm.short && tm.short.length > 2 && selLower.includes(tm.short)) ||
             (tm.name && tm.name.length > 2 && selLower.includes(tm.name)) ||
-            (tm.display && selLower.includes(tm.display))
+            (tm.display && selLower.includes(tm.display)) ||
+            (tm.abbr && tm.abbr.length >= 3 && new RegExp(`\\b${tm.abbr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(selLower))
           );
         });
         if (!match) return;

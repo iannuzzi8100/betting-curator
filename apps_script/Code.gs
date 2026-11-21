@@ -118,8 +118,15 @@ function buildDashboardData_() {
   let totalStakedSettled = 0.0;
   let totalNetPl = 0.0;
 
+  let todayWins = 0;
+  let todayLosses = 0;
+  let todayPushes = 0;
+  let todayPl = 0.0;
+  const todayTickets = [];
+
   let yestWins = 0;
   let yestLosses = 0;
+  let yestPushes = 0;
   let yestPl = 0.0;
   const yestTickets = [];
 
@@ -156,17 +163,17 @@ function buildDashboardData_() {
       overallWins++;
       totalStakedSettled += stake;
       totalNetPl += netPl;
-      settledBankroll = runBr;
-      equityCurve.push({ label: betId, bankroll: round2_(runBr) });
+      if (runBr > 0) settledBankroll = runBr;
+      equityCurve.push({ label: betId, bankroll: round2_(settledBankroll) });
     } else if (resL === "lost") {
       overallLosses++;
       totalStakedSettled += stake;
       totalNetPl += netPl;
-      settledBankroll = runBr;
-      equityCurve.push({ label: betId, bankroll: round2_(runBr) });
+      if (runBr > 0) settledBankroll = runBr;
+      equityCurve.push({ label: betId, bankroll: round2_(settledBankroll) });
     } else if (resL === "push") {
       overallPushes++;
-      equityCurve.push({ label: betId, bankroll: round2_(runBr) });
+      equityCurve.push({ label: betId, bankroll: round2_(settledBankroll) });
     } else if (resL === "pending") {
       pendingTotal += stake;
       pendingTickets.push({
@@ -183,9 +190,26 @@ function buildDashboardData_() {
       });
     }
 
+    if (bDate === todayStr && (resL === "won" || resL === "lost" || resL === "push")) {
+      if (resL === "won") todayWins++;
+      else if (resL === "lost") todayLosses++;
+      else if (resL === "push") todayPushes++;
+      todayPl += netPl;
+      todayTickets.push({
+        bet_id: betId,
+        sport: sport,
+        selections: sel,
+        odds: odds,
+        stake: round2_(stake),
+        result: res,
+        net_pl: round2_(netPl),
+      });
+    }
+
     if (bDate === yesterdayStr && (resL === "won" || resL === "lost" || resL === "push")) {
       if (resL === "won") yestWins++;
       else if (resL === "lost") yestLosses++;
+      else if (resL === "push") yestPushes++;
       yestPl += netPl;
       yestTickets.push({
         bet_id: betId,
@@ -202,6 +226,9 @@ function buildDashboardData_() {
   const overallTotal = overallWins + overallLosses;
   const overallWinPct = overallTotal > 0 ? round1_((overallWins / overallTotal) * 100.0) : 0.0;
   const overallRoi = totalStakedSettled > 0 ? round1_((totalNetPl / totalStakedSettled) * 100.0) : 0.0;
+
+  const todayTotal = todayWins + todayLosses;
+  const todayWinPct = todayTotal > 0 ? round1_((todayWins / todayTotal) * 100.0) : 0.0;
 
   const yestTotal = yestWins + yestLosses;
   const yestWinPct = yestTotal > 0 ? round1_((yestWins / yestTotal) * 100.0) : 0.0;
@@ -226,10 +253,20 @@ function buildDashboardData_() {
       avg_clv: clvValues.length > 0 ? round2_(clvValues.reduce((a, b) => a + b, 0) / clvValues.length) : null,
       clv_count: clvValues.length,
     },
+    today_stats: {
+      date: todayStr,
+      wins: todayWins,
+      losses: todayLosses,
+      pushes: todayPushes,
+      win_pct: todayWinPct,
+      net_pl: round2_(todayPl),
+      tickets: todayTickets,
+    },
     yesterday_stats: {
       date: yesterdayStr,
       wins: yestWins,
       losses: yestLosses,
+      pushes: yestPushes,
       win_pct: yestWinPct,
       net_pl: round2_(yestPl),
       tickets: yestTickets,
@@ -379,6 +416,14 @@ function handleLogBetApi_(body) {
 
     SpreadsheetApp.flush();
 
+    if (res.logged_ids.length === 0) {
+      return {
+        ok: false,
+        error: "Identical pending bet is already logged today (duplicate skipped).",
+        dashboard: buildDashboardData_(),
+      };
+    }
+
     if (res.notes.length > 0 && body.notify_telegram !== false) {
       sendTelegramReceipt_(trackerWs, res.notes, "📱 *Bet Logged via Live Dashboard:*");
     }
@@ -386,7 +431,7 @@ function handleLogBetApi_(body) {
     return {
       ok: true,
       notes: res.notes,
-      bet_id: res.logged_ids[0] || null,
+      bet_id: res.logged_ids[0],
       dashboard: buildDashboardData_(),
     };
   } finally {
@@ -516,7 +561,7 @@ function buildRowPayload_(betId, curRow, dateStr, sport, betType, sel, odds, sta
     stake,
     '=IF(OR(ISBLANK(I' + curRow + '), ISBLANK(G' + curRow + '), I' + curRow + '="", G' + curRow + '=""), "", IF(G' + curRow + '>0, ROUND(I' + curRow + '*(1+G' + curRow + '/100), 2), ROUND(I' + curRow + '*(1+100/ABS(G' + curRow + ')), 2)))',
     "Pending",
-    '=IF(K' + curRow + '="Won", J' + curRow + ', IF(K' + curRow + '="Lost", 0, ""))',
+    '=IF(K' + curRow + '="Won", J' + curRow + ', IF(K' + curRow + '="Lost", 0, IF(K' + curRow + '="Push", I' + curRow + ', "")))',
     '=IF(OR(K' + curRow + '="", K' + curRow + '="Pending"), "", IF(K' + curRow + '="Lost", -I' + curRow + ', IF(ISNUMBER(L' + curRow + '), L' + curRow + '-I' + curRow + ', "")))',
     '=IF(OR(ISBLANK(I' + curRow + '), I' + curRow + '=""), "", IF(ISNUMBER(M' + curRow + '), N' + prevRow + '+M' + curRow + ', N' + prevRow + '))',
     noteStr,
@@ -653,12 +698,13 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
     actionNotes.push("🔄 *Replaced " + slot.bId + "* -> *" + sel + " (" + (odds >= 0 ? "+" + odds : odds) + ")* — *$" + stake.toFixed(2) + "*");
   }
 
-  // 5. Clear remaining freed slots
+  // 5. Clear remaining freed slots (preserve Running Bankroll chain in Col N so rows below never break)
   for (let i = 0; i < freedSlots.length; i++) {
     const slot = freedSlots[i];
-    trackerWs.getRange("A" + slot.rIdx + ":I" + slot.rIdx).setValues([["", "", "", "", "", "", "", "", ""]]);
-    trackerWs.getRange("K" + slot.rIdx).setValue("");
-    trackerWs.getRange("O" + slot.rIdx + ":P" + slot.rIdx).setValues([["", ""]]);
+    const prevRow = slot.rIdx - 1;
+    trackerWs.getRange("A" + slot.rIdx + ":P" + slot.rIdx).setValues([[
+      "", "", "", "", "", "", "", "", "", "", "", "", "", "=N" + prevRow, "", ""
+    ]]);
     actionNotes.push("🗑️ *Removed " + slot.bId + "* (Row " + slot.rIdx + " — " + slot.reason + ")");
   }
 
@@ -711,17 +757,23 @@ function handleTelegramWebhook_(update) {
   const allowedChatId = String(getProp_("TELEGRAM_CHAT_ID") || "").trim();
   if (!botToken) return;
 
-  // Deduplicate Telegram webhook retries (Apps Script redirects/latency can cause Telegram to retry the same update_id)
+  // Atomic deduplication of Telegram webhook retries (Apps Script redirects/latency can cause concurrent retries)
   const updId = Number(update.update_id || 0);
   if (updId > 0) {
-    const cache = CacheService.getScriptCache();
-    const cacheKey = "tg_upd_" + updId;
-    if (cache.get(cacheKey)) return;
-    const props = PropertiesService.getScriptProperties();
-    const lastId = Number(props.getProperty("LAST_TG_UPDATE_ID") || 0);
-    if (updId <= lastId) return;
-    cache.put(cacheKey, "1", 21600);
-    props.setProperty("LAST_TG_UPDATE_ID", String(updId));
+    const dedupeLock = LockService.getScriptLock();
+    dedupeLock.waitLock(8000);
+    try {
+      const cache = CacheService.getScriptCache();
+      const cacheKey = "tg_upd_" + updId;
+      if (cache.get(cacheKey)) return;
+      const props = PropertiesService.getScriptProperties();
+      const lastId = Number(props.getProperty("LAST_TG_UPDATE_ID") || 0);
+      if (updId <= lastId) return;
+      cache.put(cacheKey, "1", 21600);
+      props.setProperty("LAST_TG_UPDATE_ID", String(updId));
+    } finally {
+      dedupeLock.releaseLock();
+    }
   }
 
   // A. Inline keyboard button taps (1-tap "Log #1", "Status", etc.)
