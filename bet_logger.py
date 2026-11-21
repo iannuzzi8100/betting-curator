@@ -62,6 +62,13 @@ def set_last_update_id(feed_ws, update_id):
         pass
 
 
+def _bet_num(bet_id):
+    try:
+        return int(str(bet_id).strip().split("-")[1])
+    except Exception:
+        return 0
+
+
 def get_current_sheet_state(tracker_ws):
     all_vals = tracker_ws.get_all_values()
     header_idx = next((i for i, r in enumerate(all_vals) if "Bet ID" in r and "Result" in r), 15)
@@ -85,6 +92,7 @@ def get_current_sheet_state(tracker_ws):
         recent_rows.append(item)
         if item["result"].lower() == "pending":
             pending_rows.append(item)
+    recent_rows.sort(key=lambda x: _bet_num(x["bet_id"]))
     return all_vals, header_idx, pending_rows, recent_rows[-10:]
 
 
@@ -231,7 +239,7 @@ def build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, sta
         "Pending",
         f'=IF(K{cur_row}="Won", J{cur_row}, IF(K{cur_row}="Lost", 0, IF(K{cur_row}="Push", I{cur_row}, "")))',
         f'=IF(OR(K{cur_row}="", K{cur_row}="Pending"), "", IF(K{cur_row}="Lost", -I{cur_row}, IF(ISNUMBER(L{cur_row}), L{cur_row}-I{cur_row}, "")))',
-        f'=IF(OR(ISBLANK(I{cur_row}), I{cur_row}=""), "", IF(ISNUMBER(M{cur_row}), N{prev_row}+M{cur_row}, N{prev_row}))',
+        f'=IF(OR(ISBLANK(I{cur_row}), I{cur_row}=""), "", ROUND(100 + SUM(M{cur_row}:M), 2))',
         note_str,
         "",
     ]
@@ -360,32 +368,23 @@ def apply_actions_to_sheet(tracker_ws, actions):
         tracker_ws.update(range_name=f"A{r_idx}:P{r_idx}", values=[row_payload], value_input_option="USER_ENTERED")
         action_notes.append(f"🔄 *Replaced {b_id}* (Row {r_idx} full refund) -> *{sel} ({odds:+d})* — *${stake:.2f}*")
 
-    # 5. If any freed_slots remain without replacement tickets, clear row while preserving Col N Running Bankroll chain
-    for r_idx, b_id, reason in freed_slots:
-        prev_row = r_idx - 1
-        tracker_ws.update(
-            range_name=f"A{r_idx}:P{r_idx}",
-            values=[["", "", "", "", "", "", "", "", "", "", "", "", "", f"=N{prev_row}", "", ""]],
-            value_input_option="USER_ENTERED",
-        )
+    # 5. Delete remaining freed_slots bottom-to-top (newest-first SUM(M{r}:M) stays exact with zero blank rows)
+    for r_idx, b_id, reason in sorted(freed_slots, key=lambda x: x[0], reverse=True):
+        tracker_ws.delete_rows(r_idx)
         action_notes.append(f"🗑️ *Removed Cashed-Out {b_id}* (Row {r_idx} — {reason})")
 
-    # 6. Append any remaining new tickets to the next available BET-XXX row
+    # 6. Insert remaining new tickets at the TOP of the tracker (newest-first, right under header)
     if valid_new_tickets:
         all_vals, header_idx, _, _ = get_current_sheet_state(tracker_ws)
-        last_bet_num = 0
-        last_bet_row = header_idx + 1
+        max_bet_num = 0
         for idx in range(header_idx + 1, len(all_vals)):
             r = all_vals[idx]
             if r and r[0].strip().startswith("BET-"):
-                try:
-                    num = int(r[0].strip().split("-")[1])
-                    if num > last_bet_num:
-                        last_bet_num = num
-                        last_bet_row = idx + 1
-                except Exception:
-                    pass
+                num = _bet_num(r[0].strip())
+                if num > max_bet_num:
+                    max_bet_num = num
 
+        insert_row = header_idx + 2
         for t in valid_new_tickets:
             t_id = str(t.get("ticket_id", "")).strip()
             sel = str(t.get("selections", "")).strip()
@@ -395,12 +394,10 @@ def apply_actions_to_sheet(tracker_ws, actions):
             bet_type = str(t.get("bet_type", "Straight")).strip()
             date_str = str(t.get("date", "")).strip()
 
-            last_bet_num += 1
-            last_bet_row += 1
-            bet_id = f"BET-{last_bet_num:03d}"
-            cur_row = last_bet_row
-            row_payload = build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, stake, t_id=t_id)
-            tracker_ws.update(range_name=f"A{cur_row}:P{cur_row}", values=[row_payload], value_input_option="USER_ENTERED")
+            max_bet_num += 1
+            bet_id = f"BET-{max_bet_num:03d}"
+            row_payload = build_row_payload(bet_id, insert_row, date_str, sport, bet_type, sel, odds, stake, t_id=t_id)
+            tracker_ws.insert_row(row_payload, index=insert_row, value_input_option="USER_ENTERED")
             action_notes.append(f"✅ *Logged {bet_id}* (${stake:.2f}) — {sel} ({odds:+d})")
 
     return action_notes

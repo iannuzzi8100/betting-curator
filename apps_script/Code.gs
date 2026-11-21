@@ -135,90 +135,113 @@ function buildDashboardData_() {
   const equityCurve = [{ label: "START", bankroll: 100.0 }];
   const clvValues = [];
 
+  const betEntries = [];
   for (let idx = headerIdx + 1; idx < allRows.length; idx++) {
     const r = allRows[idx];
     if (!r || !String(r[0] || "").trim().startsWith("BET-")) continue;
-
     const betId = String(r[0]).trim();
-    const bDate = String(r[1] || "").trim();
-    const sport = String(r[2] || "").trim();
-    const bType = String(r[3] || "").trim();
-    const sel = String(r[5] || "").trim();
-    const odds = String(r[6] || "").trim();
-    const stake = parseNum_(r[8], 0.0);
-    const payout = parseNum_(r[9], 0.0);
-    const res = String(r[10] || "").trim();
-    const netPl = parseNum_(r[12], 0.0);
-    const runBr = (r.length > 13 && String(r[13] || "").trim() !== "") ? parseNum_(r[13], settledBankroll) : settledBankroll;
-    const notes = String(r[14] || "").trim();
+    betEntries.push({
+      row_index: idx + 1,
+      bet_num: parseBetNum_(betId),
+      bet_id: betId,
+      bDate: String(r[1] || "").trim(),
+      sport: String(r[2] || "").trim(),
+      bType: String(r[3] || "").trim(),
+      sel: String(r[5] || "").trim(),
+      odds: String(r[6] || "").trim(),
+      stake: parseNum_(r[8], 0.0),
+      payout: parseNum_(r[9], 0.0),
+      res: String(r[10] || "").trim(),
+      netPl: parseNum_(r[12], 0.0),
+      runBrRaw: (r.length > 13 && String(r[13] || "").trim() !== "") ? parseNum_(r[13], 0.0) : 0.0,
+      notes: String(r[14] || "").trim(),
+    });
+  }
 
-    const clvMatch = notes.match(/\[CLV:\s*([+-]?\d+(?:\.\d+)?)%/);
+  // Chronological order (BET-001 -> latest) for Equity Curve & Settled Bankroll regardless of sheet sort order
+  const chronoEntries = betEntries.slice().sort((a, b) => a.bet_num - b.bet_num);
+  for (let i = 0; i < chronoEntries.length; i++) {
+    const e = chronoEntries[i];
+    const clvMatch = e.notes.match(/\[CLV:\s*([+-]?\d+(?:\.\d+)?)%/);
     const clvVal = clvMatch ? parseFloat(clvMatch[1]) : null;
     if (clvVal !== null && !isNaN(clvVal)) {
       clvValues.push(clvVal);
     }
 
-    const resL = res.toLowerCase();
+    const resL = e.res.toLowerCase();
     if (resL === "won") {
       overallWins++;
-      totalStakedSettled += stake;
-      totalNetPl += netPl;
-      if (runBr > 0) settledBankroll = runBr;
-      equityCurve.push({ label: betId, bankroll: round2_(settledBankroll) });
+      totalStakedSettled += e.stake;
+      totalNetPl += e.netPl;
+      if (e.runBrRaw > 0) settledBankroll = e.runBrRaw;
+      else settledBankroll = round2_(100.0 + totalNetPl);
+      equityCurve.push({ label: e.bet_id, bankroll: round2_(settledBankroll) });
     } else if (resL === "lost") {
       overallLosses++;
-      totalStakedSettled += stake;
-      totalNetPl += netPl;
-      if (runBr > 0) settledBankroll = runBr;
-      equityCurve.push({ label: betId, bankroll: round2_(settledBankroll) });
+      totalStakedSettled += e.stake;
+      totalNetPl += e.netPl;
+      if (e.runBrRaw > 0) settledBankroll = e.runBrRaw;
+      else settledBankroll = round2_(100.0 + totalNetPl);
+      equityCurve.push({ label: e.bet_id, bankroll: round2_(settledBankroll) });
     } else if (resL === "push") {
       overallPushes++;
-      equityCurve.push({ label: betId, bankroll: round2_(settledBankroll) });
-    } else if (resL === "pending") {
-      pendingTotal += stake;
+      equityCurve.push({ label: e.bet_id, bankroll: round2_(settledBankroll) });
+    }
+  }
+
+  // Newest-first order for Pending, Today, and Yesterday ticket lists
+  const newestEntries = betEntries.slice().sort((a, b) => b.bet_num - a.bet_num);
+  for (let i = 0; i < newestEntries.length; i++) {
+    const e = newestEntries[i];
+    const clvMatch = e.notes.match(/\[CLV:\s*([+-]?\d+(?:\.\d+)?)%/);
+    const clvVal = clvMatch ? parseFloat(clvMatch[1]) : null;
+    const resL = e.res.toLowerCase();
+
+    if (resL === "pending") {
+      pendingTotal += e.stake;
       pendingTickets.push({
-        row_index: idx + 1,
-        bet_id: betId,
-        date: bDate,
-        sport: sport,
-        bet_type: bType,
-        selections: sel,
-        odds: odds,
-        stake: round2_(stake),
-        payout: round2_(payout),
+        row_index: e.row_index,
+        bet_id: e.bet_id,
+        date: e.bDate,
+        sport: e.sport,
+        bet_type: e.bType,
+        selections: e.sel,
+        odds: e.odds,
+        stake: round2_(e.stake),
+        payout: round2_(e.payout),
         clv: clvVal,
       });
     }
 
-    if (bDate === todayStr && (resL === "won" || resL === "lost" || resL === "push")) {
+    if (e.bDate === todayStr && (resL === "won" || resL === "lost" || resL === "push")) {
       if (resL === "won") todayWins++;
       else if (resL === "lost") todayLosses++;
       else if (resL === "push") todayPushes++;
-      todayPl += netPl;
+      todayPl += e.netPl;
       todayTickets.push({
-        bet_id: betId,
-        sport: sport,
-        selections: sel,
-        odds: odds,
-        stake: round2_(stake),
-        result: res,
-        net_pl: round2_(netPl),
+        bet_id: e.bet_id,
+        sport: e.sport,
+        selections: e.sel,
+        odds: e.odds,
+        stake: round2_(e.stake),
+        result: e.res,
+        net_pl: round2_(e.netPl),
       });
     }
 
-    if (bDate === yesterdayStr && (resL === "won" || resL === "lost" || resL === "push")) {
+    if (e.bDate === yesterdayStr && (resL === "won" || resL === "lost" || resL === "push")) {
       if (resL === "won") yestWins++;
       else if (resL === "lost") yestLosses++;
       else if (resL === "push") yestPushes++;
-      yestPl += netPl;
+      yestPl += e.netPl;
       yestTickets.push({
-        bet_id: betId,
-        sport: sport,
-        selections: sel,
-        odds: odds,
-        stake: round2_(stake),
-        result: res,
-        net_pl: round2_(netPl),
+        bet_id: e.bet_id,
+        sport: e.sport,
+        selections: e.sel,
+        odds: e.odds,
+        stake: round2_(e.stake),
+        result: e.res,
+        net_pl: round2_(e.netPl),
       });
     }
   }
@@ -563,7 +586,7 @@ function buildRowPayload_(betId, curRow, dateStr, sport, betType, sel, odds, sta
     "Pending",
     '=IF(K' + curRow + '="Won", J' + curRow + ', IF(K' + curRow + '="Lost", 0, IF(K' + curRow + '="Push", I' + curRow + ', "")))',
     '=IF(OR(K' + curRow + '="", K' + curRow + '="Pending"), "", IF(K' + curRow + '="Lost", -I' + curRow + ', IF(ISNUMBER(L' + curRow + '), L' + curRow + '-I' + curRow + ', "")))',
-    '=IF(OR(ISBLANK(I' + curRow + '), I' + curRow + '=""), "", IF(ISNUMBER(M' + curRow + '), N' + prevRow + '+M' + curRow + ', N' + prevRow + '))',
+    '=IF(OR(ISBLANK(I' + curRow + '), I' + curRow + '=""), "", ROUND(100 + SUM(M' + curRow + ':M), 2))',
     noteStr,
     "",
   ];
@@ -698,37 +721,31 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
     actionNotes.push("🔄 *Replaced " + slot.bId + "* -> *" + sel + " (" + (odds >= 0 ? "+" + odds : odds) + ")* — *$" + stake.toFixed(2) + "*");
   }
 
-  // 5. Clear remaining freed slots (preserve Running Bankroll chain in Col N so rows below never break)
+  // 5. Delete remaining freed slots bottom-to-top (SUM(M{r}:M) stays exact with zero blank rows)
+  freedSlots.sort((a, b) => b.rIdx - a.rIdx);
   for (let i = 0; i < freedSlots.length; i++) {
     const slot = freedSlots[i];
-    const prevRow = slot.rIdx - 1;
-    trackerWs.getRange("A" + slot.rIdx + ":P" + slot.rIdx).setValues([[
-      "", "", "", "", "", "", "", "", "", "", "", "", "", "=N" + prevRow, "", ""
-    ]]);
+    trackerWs.deleteRow(slot.rIdx);
     actionNotes.push("🗑️ *Removed " + slot.bId + "* (Row " + slot.rIdx + " — " + slot.reason + ")");
   }
 
-  // 6. Append remaining new tickets
+  // 6. Insert remaining new tickets at the TOP of the tracker (newest-first, right under header)
   if (validNew.length > 0) {
     const fresh = getSheetState_(trackerWs);
-    let lastBetNum = 0;
-    let lastBetRow = fresh.headerIdx + 1;
+    let maxBetNum = 0;
     for (let idx = fresh.headerIdx + 1; idx < fresh.allVals.length; idx++) {
       const r = fresh.allVals[idx];
       if (r && String(r[0] || "").trim().startsWith("BET-")) {
-        const num = parseInt(String(r[0]).trim().split("-")[1], 10);
-        if (!isNaN(num) && num >= lastBetNum) {
-          lastBetNum = num;
-          lastBetRow = idx + 1;
-        }
+        const num = parseBetNum_(String(r[0]).trim());
+        if (num > maxBetNum) maxBetNum = num;
       }
     }
 
+    const insertRow = fresh.headerIdx + 2;
     for (let i = 0; i < validNew.length; i++) {
       const t = validNew[i];
-      lastBetNum++;
-      lastBetRow++;
-      const betId = "BET-" + String(lastBetNum).padStart(3, "0");
+      maxBetNum++;
+      const betId = "BET-" + String(maxBetNum).padStart(3, "0");
       const stake = cleanFloat_(t.stake, 0.0);
       const odds = cleanInt_(t.odds, -110);
       const sport = String(t.sport || "CFB").trim();
@@ -738,8 +755,14 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
       const tId = String(t.ticket_id || "").trim();
       const extraNote = String(t.extra_note || "").trim();
 
-      const payload = buildRowPayload_(betId, lastBetRow, dateStr, sport, betType, sel, odds, stake, tId, extraNote);
-      trackerWs.getRange("A" + lastBetRow + ":P" + lastBetRow).setValues([payload]);
+      trackerWs.insertRowBefore(insertRow);
+      if (trackerWs.getLastRow() >= insertRow + 1) {
+        trackerWs
+          .getRange(insertRow + 1, 1, 1, 16)
+          .copyTo(trackerWs.getRange(insertRow, 1, 1, 16), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+      }
+      const payload = buildRowPayload_(betId, insertRow, dateStr, sport, betType, sel, odds, stake, tId, extraNote);
+      trackerWs.getRange("A" + insertRow + ":P" + insertRow).setValues([payload]);
       loggedIds.push(betId);
       actionNotes.push("✅ *Logged " + betId + "* ($" + stake.toFixed(2) + ") — " + sel + " (" + (odds >= 0 ? "+" + odds : odds) + ")");
     }
@@ -1006,9 +1029,125 @@ function testDashboardData() {
   Logger.log(JSON.stringify({
     updated_at: data.updated_at,
     bankroll: data.bankroll,
+    today_wl: data.today_stats.wins + "W-" + data.today_stats.losses + "L",
     pending_count: data.pending_tickets.length,
     curated_count: data.curated_plays.length,
   }, null, 2));
+}
+
+/**
+ * 1-Click Safe Migration: Reorders all BET-XXX rows to NEWEST-FIRST (highest BET-XXX at top, BET-001 at bottom),
+ * updates J/L/M/N formulas for newest-first order (preserving any manual partial-cashout numbers),
+ * anchors Rows 1-15 summary formulas to the header row so inserting new rows at top never shifts ranges,
+ * and verifies Settled Bankroll matches before & after.
+ */
+function reverseSheetToNewestFirst() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ws = ss.getSheetByName(TRACKER_SHEET_NAME) || ss.getSheets()[0];
+    const beforeData = buildDashboardData_();
+    const beforeBankroll = beforeData.bankroll;
+
+    const range = ws.getDataRange();
+    const displayVals = range.getDisplayValues();
+    const rawVals = range.getValues();
+    const formulas = range.getFormulas();
+    const headerIdx = findHeaderIdx_(displayVals);
+    const headerRow = headerIdx + 1;
+    const firstDataRow = headerIdx + 2;
+
+    const betRows = [];
+    for (let i = headerIdx + 1; i < displayVals.length; i++) {
+      const betId = String(displayVals[i][0] || "").trim();
+      if (!betId.startsWith("BET-")) continue;
+      betRows.push({
+        betNum: parseBetNum_(betId),
+        raw: rawVals[i].slice(0, 16),
+        formula: formulas[i].slice(0, 16),
+      });
+    }
+
+    if (betRows.length === 0) {
+      Logger.log("No BET-XXX rows found.");
+      return;
+    }
+
+    // Sort DESCENDING (newest BET-XXX at row firstDataRow, BET-001 at bottom)
+    betRows.sort((a, b) => b.betNum - a.betNum);
+
+    const outRows = [];
+    for (let idx = 0; idx < betRows.length; idx++) {
+      const r = firstDataRow + idx;
+      const item = betRows[idx];
+      const rowOut = [];
+      for (let c = 0; c < 16; c++) {
+        rowOut.push(item.raw[c] !== undefined ? item.raw[c] : "");
+      }
+      // Col J (idx 9): Potential Payout formula
+      rowOut[9] = '=IF(OR(ISBLANK(I' + r + '), ISBLANK(G' + r + '), I' + r + '="", G' + r + '=""), "", IF(G' + r + '>0, ROUND(I' + r + '*(1+G' + r + '/100), 2), ROUND(I' + r + '*(1+100/ABS(G' + r + ')), 2)))';
+      // Col L (idx 11): Preserve hardcoded partial cashout return if non-formula number; otherwise standard formula
+      const hadFormulaL = Boolean(item.formula[11]);
+      if (hadFormulaL || item.raw[11] === "" || item.raw[11] === null) {
+        rowOut[11] = '=IF(K' + r + '="Won", J' + r + ', IF(K' + r + '="Lost", 0, IF(K' + r + '="Push", I' + r + ', "")))';
+      }
+      // Col M (idx 12): Preserve hardcoded partial cashout net P/L if non-formula number; otherwise standard formula
+      const hadFormulaM = Boolean(item.formula[12]);
+      if (hadFormulaM || item.raw[12] === "" || item.raw[12] === null) {
+        rowOut[12] = '=IF(OR(K' + r + '="", K' + r + '="Pending"), "", IF(K' + r + '="Lost", -I' + r + ', IF(ISNUMBER(L' + r + '), L' + r + '-I' + r + ', "")))';
+      }
+      // Col N (idx 13): Order-proof newest-first Running Bankroll formula (sums from this row down to BET-001)
+      rowOut[13] = '=IF(OR(ISBLANK(I' + r + '), I' + r + '=""), "", ROUND(100 + SUM(M' + r + ':M), 2))';
+      outRows.push(rowOut);
+    }
+
+    // Write sorted newest-first rows starting right under the header
+    ws.getRange(firstDataRow, 1, outRows.length, 16).setValues(outRows);
+
+    // Clear any leftover trailing rows below the compacted table
+    const lastExistingRow = ws.getLastRow();
+    const newLastRow = firstDataRow + outRows.length - 1;
+    if (lastExistingRow > newLastRow) {
+      ws.getRange(newLastRow + 1, 1, lastExistingRow - newLastRow, 16).clearContent();
+    }
+
+    // Anchor summary formulas in Rows 1..(headerRow-1) from firstDataRow -> headerRow so inserting new rows at top never shifts them out
+    const topRange = ws.getRange(1, 1, headerIdx, Math.min(16, ws.getLastColumn()));
+    const topFormulas = topRange.getFormulas();
+    const rangeRe = new RegExp("(\\$?[A-P])\\$?" + firstDataRow + ":(\\$?[A-P])(?![0-9])", "g");
+    const fixedRangeRe = new RegExp("(\\$?[A-P])\\$?" + firstDataRow + ":(\\$?[A-P])\\$?(\\d+)", "g");
+    for (let r = 0; r < topFormulas.length; r++) {
+      for (let c = 0; c < topFormulas[r].length; c++) {
+        const f = topFormulas[r][c];
+        if (!f) continue;
+        // Fix A5 (Settled Bankroll) if it looked up the bottom of Col N
+        if (r === 4 && c === 0 && (/LOOKUP|INDEX|OFFSET/i.test(f) || /\bN\d/i.test(f))) {
+          ws.getRange(5, 1).setFormula("=ROUND(100 + SUM(M" + headerRow + ":M), 2)");
+          Logger.log("Updated A5 formula -> =ROUND(100 + SUM(M" + headerRow + ":M), 2)");
+          continue;
+        }
+        // Anchor SUM/SUMIF/SUMIFS/COUNTIF/COUNTIFS ranges to headerRow (ignores text headers safely)
+        if (/(?:SUM|COUNTIF)/i.test(f) && !/COUNTA\(/i.test(f)) {
+          let updated = f.replace(rangeRe, "$1" + headerRow + ":$2");
+          updated = updated.replace(fixedRangeRe, "$1" + headerRow + ":$2$3");
+          if (updated !== f) {
+            ws.getRange(r + 1, c + 1).setFormula(updated);
+            Logger.log("Anchored summary cell R" + (r + 1) + "C" + (c + 1) + ": " + f + " -> " + updated);
+          }
+        }
+      }
+    }
+
+    SpreadsheetApp.flush();
+    const afterData = buildDashboardData_();
+    Logger.log(
+      "Migration complete! Reversed " + outRows.length + " bets (Top: " + outRows[0][0] + ", Bottom: " + outRows[outRows.length - 1][0] + "). " +
+      "Settled Bankroll Before: $" + beforeBankroll.toFixed(2) + " | After: $" + afterData.bankroll.toFixed(2)
+    );
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function downloadTelegramFileBase64_(botToken, fileId) {
@@ -1106,7 +1245,13 @@ function getSheetState_(trackerWs) {
     recent.push(item);
     if (item.result.toLowerCase() === "pending") pending.push(item);
   }
+  recent.sort((a, b) => parseBetNum_(a.bet_id) - parseBetNum_(b.bet_id));
   return { allVals: allVals, headerIdx: headerIdx, pending: pending, recent: recent.slice(-10) };
+}
+
+function parseBetNum_(betId) {
+  const m = String(betId || "").match(/BET-(\d+)/i);
+  return m ? parseInt(m[1], 10) : 0;
 }
 
 function findHeaderIdx_(allRows) {

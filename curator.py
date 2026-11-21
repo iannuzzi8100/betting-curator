@@ -95,7 +95,18 @@ def read_tracker_context(gc):
     pending_total = 0.0
 
     header_idx = next((i for i, r in enumerate(tracker_rows) if "Bet ID" in r and "Result" in r), 12)
-    for r in tracker_rows[header_idx + 1 :]:
+
+    def _bet_num(row):
+        try:
+            return int(str(row[0]).strip().split("-")[1])
+        except Exception:
+            return 0
+
+    bet_rows_chrono = sorted(
+        [r for r in tracker_rows[header_idx + 1 :] if r and r[0].strip().startswith("BET-")],
+        key=_bet_num,
+    )
+    for r in bet_rows_chrono:
         if len(r) > 10 and r[0].strip() and r[10].strip().lower() == "pending":
             bet_id = r[0].strip()
             bet_type = r[3].strip() if len(r) > 3 else ""
@@ -136,8 +147,7 @@ def read_tracker_context(gc):
     )
 
     summary_block = verified_bankroll_banner + "\n\n" + "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
-    non_empty_rows = [r for r in tracker_rows[header_idx + 1 :] if r and r[0].strip()]
-    recent_bets = "\n".join([" | ".join(r[:20]) for r in non_empty_rows[-15:]])
+    recent_bets = "\n".join([" | ".join(r[:20]) for r in bet_rows_chrono[-15:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 

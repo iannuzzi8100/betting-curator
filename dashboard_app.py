@@ -135,94 +135,113 @@ def fetch_dashboard_data():
     equity_curve = [{"label": "START", "bankroll": 100.0}]
     clv_values = []
 
+    def _bet_num(bid):
+        try:
+            return int(str(bid).strip().split("-")[1])
+        except Exception:
+            return 0
+
+    bet_entries = []
     for idx_row, r in enumerate(all_rows[header_idx + 1 :], start=header_idx + 2):
         if not r or not r[0].strip().startswith("BET-"):
             continue
         bet_id = r[0].strip()
-        b_date = r[1].strip() if len(r) > 1 else ""
-        sport = r[2].strip() if len(r) > 2 else ""
-        b_type = r[3].strip() if len(r) > 3 else ""
-        sel = r[5].strip() if len(r) > 5 else ""
-        odds = r[6].strip() if len(r) > 6 else ""
-        stake = _parse_num(r[8]) if len(r) > 8 else 0.0
-        payout = _parse_num(r[9]) if len(r) > 9 else 0.0
-        res = r[10].strip() if len(r) > 10 else ""
-        net_pl = _parse_num(r[12]) if len(r) > 12 else 0.0
-        run_br = _parse_num(r[13]) if len(r) > 13 else settled_bankroll
-        notes = r[14].strip() if len(r) > 14 else ""
+        bet_entries.append({
+            "row_index": idx_row,
+            "bet_num": _bet_num(bet_id),
+            "bet_id": bet_id,
+            "b_date": r[1].strip() if len(r) > 1 else "",
+            "sport": r[2].strip() if len(r) > 2 else "",
+            "b_type": r[3].strip() if len(r) > 3 else "",
+            "sel": r[5].strip() if len(r) > 5 else "",
+            "odds": r[6].strip() if len(r) > 6 else "",
+            "stake": _parse_num(r[8]) if len(r) > 8 else 0.0,
+            "payout": _parse_num(r[9]) if len(r) > 9 else 0.0,
+            "res": r[10].strip() if len(r) > 10 else "",
+            "net_pl": _parse_num(r[12]) if len(r) > 12 else 0.0,
+            "run_br": _parse_num(r[13]) if (len(r) > 13 and r[13].strip()) else 0.0,
+            "notes": r[14].strip() if len(r) > 14 else "",
+        })
 
-        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", notes)
+    # Chronological order (BET-001 -> latest) for Equity Curve & Settled Bankroll regardless of sheet order
+    for e in sorted(bet_entries, key=lambda x: x["bet_num"]):
+        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", e["notes"])
         clv_val = float(clv_match.group(1)) if clv_match else None
         if clv_val is not None:
             clv_values.append(clv_val)
 
-        res_l = res.lower()
+        res_l = e["res"].lower()
         if res_l == "won":
             overall_wins += 1
-            total_staked_settled += stake
-            total_net_pl += net_pl
-            if run_br > 0:
-                settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
+            total_staked_settled += e["stake"]
+            total_net_pl += e["net_pl"]
+            settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
+            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
         elif res_l == "lost":
             overall_losses += 1
-            total_staked_settled += stake
-            total_net_pl += net_pl
-            if run_br > 0:
-                settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
+            total_staked_settled += e["stake"]
+            total_net_pl += e["net_pl"]
+            settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
+            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
         elif res_l == "push":
             overall_pushes += 1
-            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
-        elif res_l == "pending":
-            pending_total += stake
+            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
+
+    # Newest-first order for Pending, Today, and Yesterday ticket lists
+    for e in sorted(bet_entries, key=lambda x: x["bet_num"], reverse=True):
+        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", e["notes"])
+        clv_val = float(clv_match.group(1)) if clv_match else None
+        res_l = e["res"].lower()
+
+        if res_l == "pending":
+            pending_total += e["stake"]
             pending_tickets.append({
-                "row_index": idx_row,
-                "bet_id": bet_id,
-                "date": b_date,
-                "sport": sport,
-                "bet_type": b_type,
-                "selections": sel,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "payout": round(payout, 2),
+                "row_index": e["row_index"],
+                "bet_id": e["bet_id"],
+                "date": e["b_date"],
+                "sport": e["sport"],
+                "bet_type": e["b_type"],
+                "selections": e["sel"],
+                "odds": e["odds"],
+                "stake": round(e["stake"], 2),
+                "payout": round(e["payout"], 2),
                 "clv": clv_val,
             })
 
-        if b_date == today_str and res_l in ("won", "lost", "push"):
+        if e["b_date"] == today_str and res_l in ("won", "lost", "push"):
             if res_l == "won":
                 today_wins += 1
             elif res_l == "lost":
                 today_losses += 1
             elif res_l == "push":
                 today_pushes += 1
-            today_pl += net_pl
+            today_pl += e["net_pl"]
             today_tickets.append({
-                "bet_id": bet_id,
-                "sport": sport,
-                "selections": sel,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "result": res,
-                "net_pl": round(net_pl, 2),
+                "bet_id": e["bet_id"],
+                "sport": e["sport"],
+                "selections": e["sel"],
+                "odds": e["odds"],
+                "stake": round(e["stake"], 2),
+                "result": e["res"],
+                "net_pl": round(e["net_pl"], 2),
             })
 
-        if b_date == yesterday_str and res_l in ("won", "lost", "push"):
+        if e["b_date"] == yesterday_str and res_l in ("won", "lost", "push"):
             if res_l == "won":
                 yest_wins += 1
             elif res_l == "lost":
                 yest_losses += 1
             elif res_l == "push":
                 yest_pushes += 1
-            yest_pl += net_pl
+            yest_pl += e["net_pl"]
             yest_tickets.append({
-                "bet_id": bet_id,
-                "sport": sport,
-                "selections": sel,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "result": res,
-                "net_pl": round(net_pl, 2),
+                "bet_id": e["bet_id"],
+                "sport": e["sport"],
+                "selections": e["sel"],
+                "odds": e["odds"],
+                "stake": round(e["stake"], 2),
+                "result": e["res"],
+                "net_pl": round(e["net_pl"], 2),
             })
 
     overall_total = overall_wins + overall_losses
@@ -604,6 +623,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       max-width: 92vw;
       text-align: center;
     }
+    .card-btn {
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      font: inherit;
+      color: inherit;
+      transition: border-color 0.18s, transform 0.12s, background 0.18s;
+    }
+    .card-btn:hover {
+      border-color: rgba(59, 130, 246, 0.55);
+      background: #151f33;
+    }
+    .card-btn:active { transform: scale(0.99); }
+    .card-tap-hint {
+      font-size: 0.74rem;
+      color: #60a5fa;
+      font-weight: 700;
+      margin-left: auto;
+    }
     .toast.show { display: block; }
   </style>
 </head>
@@ -630,17 +668,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="sub-row" id="overall-sub"></div>
       </div>
 
-      <div class="card">
+      <button type="button" class="card card-btn" onclick="openGradedModal('today')">
         <div class="card-label" id="today-label">Today's Win / Loss</div>
         <div class="big-num" id="today-ratio">--</div>
         <div class="sub-row" id="today-sub"></div>
-      </div>
+      </button>
 
-      <div class="card">
+      <button type="button" class="card card-btn" onclick="openGradedModal('yesterday')">
         <div class="card-label" id="yest-label">Yesterday's Win / Loss Ratio</div>
         <div class="big-num" id="yest-ratio">--</div>
         <div class="sub-row" id="yest-sub"></div>
-      </div>
+      </button>
 
       <div class="card">
         <div class="card-label">Live Bankroll &amp; Exposure</div>
@@ -667,22 +705,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </div>
         </div>
         <div class="bet-list" id="pending-list"></div>
-      </div>
-
-      <div class="card">
-        <div class="section-title">
-          <span>🏁 Today's Graded Tickets (<span id="today-tickets-date">--</span>)</span>
-          <span class="pill pill-blue" id="today-count">0 Settled</span>
-        </div>
-        <div class="bet-list" id="today-list"></div>
-      </div>
-
-      <div class="card">
-        <div class="section-title">
-          <span>📅 Yesterday's Graded Tickets</span>
-          <span class="pill pill-blue" id="yest-count">0 Settled</span>
-        </div>
-        <div class="bet-list" id="yest-list"></div>
       </div>
 
       <div class="card">
@@ -860,6 +882,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <button class="btn-secondary" onclick="closeModal('settings-modal')">Cancel</button>
           <button class="btn-primary" id="cfg-save-btn" onclick="saveLiveConfig()">Save &amp; Connect</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 4: GRADED TICKETS (TODAY / YESTERDAY) -->
+  <div class="modal-backdrop" id="graded-modal" onclick="if(event.target===this) closeModal('graded-modal')">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="graded-modal-title">🏁 Graded Tickets</h3>
+        <button class="close-btn" onclick="closeModal('graded-modal')">&times;</button>
+      </div>
+      <div class="tabs">
+        <button class="tab-btn active" id="graded-tab-today" onclick="openGradedModal('today')">🏁 Today</button>
+        <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">📅 Yesterday</button>
+      </div>
+      <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:12px;"></div>
+      <div class="bet-list" id="graded-modal-list"></div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeModal('graded-modal')">Close</button>
       </div>
     </div>
   </div>
@@ -1195,6 +1236,48 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }
     }
 
+    function renderGradedModal(which) {
+      window.__activeGradedTab = which;
+      const statsMap = window.__gradedStats || {};
+      const st = statsMap[which] || { date: "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const isToday = which === "today";
+      document.getElementById("graded-tab-today").classList.toggle("active", isToday);
+      document.getElementById("graded-tab-yesterday").classList.toggle("active", !isToday);
+      document.getElementById("graded-modal-title").textContent =
+        (isToday ? "🏁 Today's Graded Tickets" : "📅 Yesterday's Graded Tickets") + (st.date ? ` (${st.date})` : "");
+
+      const tix = st.tickets || [];
+      const plCls = st.net_pl >= 0 ? "pos" : "neg";
+      document.getElementById("graded-modal-summary").innerHTML =
+        `<span class="pill pill-blue">${tix.length} Settled</span>` +
+        `<span>Record: <strong>${st.wins}W - ${st.losses}L${st.pushes ? ` - ${st.pushes}P` : ""} (${st.win_pct}%)</strong></span>` +
+        `<span>Daily P/L: <span class="${plCls}">${st.net_pl >= 0 ? "+" : ""}${fmtMoney(st.net_pl)}</span></span>`;
+
+      const listEl = document.getElementById("graded-modal-list");
+      if (tix.length > 0) {
+        listEl.innerHTML = tix.map(t => {
+          const rl = (t.result || "").toLowerCase();
+          const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
+          return `
+            <div class="bet-item">
+              <div class="bet-top">
+                <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
+                <span class="pill ${pClass}">${esc((t.result || "").toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
+              </div>
+              <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
+            </div>
+          `;
+        }).join("");
+      } else {
+        listEl.innerHTML = `<div class="empty-msg">No settled bets recorded ${isToday ? "yet " : ""}for ${esc(st.date || which)}.</div>`;
+      }
+    }
+
+    function openGradedModal(which) {
+      renderGradedModal(which);
+      openModal("graded-modal");
+    }
+
     function render(data) {
       currentData = data;
       updateSyncPill(Boolean(data.live_mode));
@@ -1213,25 +1296,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>` +
         clvHtml;
 
-      // 2a. Today W/L
+      // 2a. Today W/L (clickable -> opens Today's Graded Tickets modal)
       const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const tCount = (ts.tickets || []).length;
       document.getElementById("today-label").textContent = `Today (${ts.date}) Win / Loss`;
       document.getElementById("today-ratio").innerHTML =
         `${ts.wins}W - ${ts.losses}L` + (ts.pushes ? ` - ${ts.pushes}P` : "") +
         ` <span style="font-size:1.1rem;color:var(--muted)">(${ts.win_pct}%)</span>`;
       const tCls = ts.net_pl >= 0 ? "pos" : "neg";
       document.getElementById("today-sub").innerHTML =
-        `<span>Daily P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>`;
+        `<span>Daily P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>` +
+        `<span class="card-tap-hint">${tCount} bet${tCount === 1 ? "" : "s"} &rarr;</span>`;
 
-      // 2b. Yesterday W/L
-      const ys = data.yesterday_stats;
+      // 2b. Yesterday W/L (clickable -> opens Yesterday's Graded Tickets modal)
+      const ys = data.yesterday_stats || { date: data.yesterday || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const yCount = (ys.tickets || []).length;
       document.getElementById("yest-label").textContent = `Yesterday (${ys.date}) Win / Loss`;
       document.getElementById("yest-ratio").innerHTML =
         `${ys.wins}W - ${ys.losses}L` + (ys.pushes ? ` - ${ys.pushes}P` : "") +
         ` <span style="font-size:1.1rem;color:var(--muted)">(${ys.win_pct}%)</span>`;
       const yCls = ys.net_pl >= 0 ? "pos" : "neg";
       document.getElementById("yest-sub").innerHTML =
-        `<span>Daily P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>`;
+        `<span>Daily P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>` +
+        `<span class="card-tap-hint">${yCount} bet${yCount === 1 ? "" : "s"} &rarr;</span>`;
 
       // 3. Bankroll
       document.getElementById("bankroll-val").textContent = fmtMoney(data.bankroll);
@@ -1342,39 +1429,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         pList.innerHTML = `<div class="empty-msg">No active pending bets right now.</div>`;
       }
 
-      // 6a. Today's Graded Tickets
-      function renderGradedTicket(t) {
-        const rl = (t.result || "").toLowerCase();
-        const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
-        return `
-          <div class="bet-item">
-            <div class="bet-top">
-              <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
-              <span class="pill ${pClass}">${esc((t.result || "").toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
-            </div>
-            <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
-          </div>
-        `;
-      }
-
-      document.getElementById("today-tickets-date").textContent = ts.date || data.today || "--";
-      const tList = document.getElementById("today-list");
-      const tTix = ts.tickets || [];
-      document.getElementById("today-count").textContent = `${tTix.length} Settled`;
-      if (tTix.length > 0) {
-        tList.innerHTML = tTix.map(renderGradedTicket).join("");
-      } else {
-        tList.innerHTML = `<div class="empty-msg">No settled bets recorded yet for ${esc(ts.date || data.today || "today")}.</div>`;
-      }
-
-      // 6b. Yesterday's Graded Tickets
-      const yList = document.getElementById("yest-list");
-      const yTix = ys.tickets || [];
-      document.getElementById("yest-count").textContent = `${yTix.length} Settled`;
-      if (yTix.length > 0) {
-        yList.innerHTML = yTix.map(renderGradedTicket).join("");
-      } else {
-        yList.innerHTML = `<div class="empty-msg">No settled bets recorded for ${esc(ys.date)}.</div>`;
+      // 6. Store latest graded stats for Today / Yesterday modal
+      window.__gradedStats = { today: ts, yesterday: ys };
+      if (document.getElementById("graded-modal").classList.contains("open") && window.__activeGradedTab) {
+        renderGradedModal(window.__activeGradedTab);
       }
 
       // 7. Equity Curve Chart
