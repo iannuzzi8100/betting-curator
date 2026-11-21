@@ -1102,6 +1102,20 @@ function reverseSheetToNewestFirst() {
       outRows.push(rowOut);
     }
 
+    // Relax any strict Data Validation rules on data rows (and expand Col C Sport dropdown to include NCAAM/EPL/UCL/ATP/WTA)
+    const maxDataRows = Math.max(outRows.length, ws.getMaxRows() - firstDataRow + 1);
+    ws.getRange(firstDataRow, 1, maxDataRows, 16).clearDataValidations();
+    const sportRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["CFB", "NFL", "NBA", "CBB", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "ATP", "WTA", "Multi-Sport", "Other"], true)
+      .setAllowInvalid(true)
+      .build();
+    ws.getRange(firstDataRow, 3, maxDataRows, 1).setDataValidation(sportRule);
+    const resultRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(["Pending", "Won", "Lost", "Push"], true)
+      .setAllowInvalid(true)
+      .build();
+    ws.getRange(firstDataRow, 11, maxDataRows, 1).setDataValidation(resultRule);
+
     // Write sorted newest-first rows starting right under the header
     ws.getRange(firstDataRow, 1, outRows.length, 16).setValues(outRows);
 
