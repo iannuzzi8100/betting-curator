@@ -118,8 +118,15 @@ function buildDashboardData_() {
   let totalStakedSettled = 0.0;
   let totalNetPl = 0.0;
 
+  let todayWins = 0;
+  let todayLosses = 0;
+  let todayPushes = 0;
+  let todayPl = 0.0;
+  const todayTickets = [];
+
   let yestWins = 0;
   let yestLosses = 0;
+  let yestPushes = 0;
   let yestPl = 0.0;
   const yestTickets = [];
 
@@ -183,9 +190,26 @@ function buildDashboardData_() {
       });
     }
 
+    if (bDate === todayStr && (resL === "won" || resL === "lost" || resL === "push")) {
+      if (resL === "won") todayWins++;
+      else if (resL === "lost") todayLosses++;
+      else if (resL === "push") todayPushes++;
+      todayPl += netPl;
+      todayTickets.push({
+        bet_id: betId,
+        sport: sport,
+        selections: sel,
+        odds: odds,
+        stake: round2_(stake),
+        result: res,
+        net_pl: round2_(netPl),
+      });
+    }
+
     if (bDate === yesterdayStr && (resL === "won" || resL === "lost" || resL === "push")) {
       if (resL === "won") yestWins++;
       else if (resL === "lost") yestLosses++;
+      else if (resL === "push") yestPushes++;
       yestPl += netPl;
       yestTickets.push({
         bet_id: betId,
@@ -202,6 +226,9 @@ function buildDashboardData_() {
   const overallTotal = overallWins + overallLosses;
   const overallWinPct = overallTotal > 0 ? round1_((overallWins / overallTotal) * 100.0) : 0.0;
   const overallRoi = totalStakedSettled > 0 ? round1_((totalNetPl / totalStakedSettled) * 100.0) : 0.0;
+
+  const todayTotal = todayWins + todayLosses;
+  const todayWinPct = todayTotal > 0 ? round1_((todayWins / todayTotal) * 100.0) : 0.0;
 
   const yestTotal = yestWins + yestLosses;
   const yestWinPct = yestTotal > 0 ? round1_((yestWins / yestTotal) * 100.0) : 0.0;
@@ -226,10 +253,20 @@ function buildDashboardData_() {
       avg_clv: clvValues.length > 0 ? round2_(clvValues.reduce((a, b) => a + b, 0) / clvValues.length) : null,
       clv_count: clvValues.length,
     },
+    today_stats: {
+      date: todayStr,
+      wins: todayWins,
+      losses: todayLosses,
+      pushes: todayPushes,
+      win_pct: todayWinPct,
+      net_pl: round2_(todayPl),
+      tickets: todayTickets,
+    },
     yesterday_stats: {
       date: yesterdayStr,
       wins: yestWins,
       losses: yestLosses,
+      pushes: yestPushes,
       win_pct: yestWinPct,
       net_pl: round2_(yestPl),
       tickets: yestTickets,
