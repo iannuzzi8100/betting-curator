@@ -172,12 +172,13 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta"),
     )
-    # Sequential Time-Slot Compounding Sizing (Up to 50% of Resulting Bankroll per Window):
-    # Because each time slot settles before the next window kicks off, only 1 bet is live at a time!
-    # Stake 50% of settled bankroll on A+ / Top Window Edges (or 35% on solid B+ Window Edges), rolling 50% of the new resulting bankroll into the next window!
+    # Confidence Meter Bankroll Allocation Tiers (Single-Bet Window vs. Same-Window Multi-Bet Split):
     settled_bankroll = ledger_meta["settled"]
-    stake_50 = round(min(available_bankroll, max(2.00, settled_bankroll * 0.50)), 2)
-    stake_35 = round(min(available_bankroll, max(2.00, settled_bankroll * 0.35)), 2)
+    stake_t1_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.50)), 2)   # 88-99% Tier 1 Solo: 50% BR
+    stake_t2_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.35)), 2)   # 78-87% Tier 2 Solo: 35% BR
+    stake_t2_dual = round(min(available_bankroll / 2.0, max(2.00, settled_bankroll * 0.25)), 2)  # Two 78-87% in same window: 25% BR each (50% total)
+    stake_t3_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.20)), 2)   # 68-77% Tier 3 Solo: 20% BR
+    stake_t3_dual = round(min(available_bankroll / 2.0, max(2.00, settled_bankroll * 0.18)), 2)  # Two 68-77% in same window: 18% BR each (36% total)
 
     # Detect Weekend Football + EPL Mode automatically from scraped intel / day of week
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
@@ -195,7 +196,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
             "     • **Window 5 — Primetime (6:30–9:00 PM CFB):** 6:15 PM – 9:15 PM EST\n"
             "     • **Window 6 — Late Night (9:30 PM+ CFB):** 9:15 PM – 11:30 PM EST"
         )
-        slate_header_tag = "Saturday CFB + EPL 50% Time-Slot Roll"
+        slate_header_tag = "Saturday CFB + EPL Confidence Meter Slate"
     elif "SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or (dow == 6 and "[NFL QUANT]" in intel_text):
         league_rule = (
             "**SUNDAY FOOTBALL + EPL ONLY (STRICT):** Today is Sunday during NFL season. "
@@ -207,17 +208,17 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
             "     • **Window 3 — Late Afternoon (4:05 / 4:25 PM NFL):** 4:00 PM – 7:30 PM EST\n"
             "     • **Window 4 — Primetime (8:20 PM NFL SNF):** 8:00 PM – 11:30 PM EST"
         )
-        slate_header_tag = "Sunday NFL + EPL 50% Time-Slot Roll"
+        slate_header_tag = "Sunday NFL + EPL Confidence Meter Slate"
     else:
         league_rule = (
             "**ALL-LEAGUE BEST-EV TIME-SLOT MODE:** Pick the highest-conviction plays across any active league "
             "(NBA, NHL, CFB, NFL, CBB, EPL, MLB) — staggered across every remaining ~3-hour betting window "
-            "so each bet settles and rolls up to 50% of the resulting bankroll into the next window."
+            "so each window settles and compounds the resulting bankroll into the next window."
         )
-        slate_header_tag = "50% Time-Slot Compounding Slate"
+        slate_header_tag = "Confidence Meter Time-Slot Slate"
 
     prompt = f"""
-You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using **50% Sequential Time-Slot Compounding** (betting up to 50% of current bankroll on the immediate window, then rolling up to 50% of the resulting bankroll into each subsequent time-slot window all day!).
+You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using our **Deterministic 0–100 Confidence Meter** and **Sequential Time-Slot Compounding**.
 Today's Date: {today_str} | Current Time: {est_now.strftime('%I:%M %p EST').lstrip('0')}
 
 ### 1. LIVE BANKROLL & RECENT LEDGER
@@ -231,45 +232,45 @@ Recent Bets:
 
 {audit_text}
 
-### 3. SCRAPED SLATE INTEL (TIME-SLOT TAGGED MATCHUPS + POWER-DEVIGGED +EV% + L5 FORM MARGIN + BPI/FPI + STEAM + INJURIES)
+### 3. SCRAPED SLATE INTEL (INCLUDES DETERMINISTIC `[CONFIDENCE METER: XX% | ████████░░ | TIER ...]` TAGS)
 {intel_text[:34000]}
 
-### 4. 50% SEQUENTIAL TIME-SLOT COMPOUNDING STRATEGY (9 HARD MANDATES):
-1. **HIT EVERY UPCOMING TIME-SLOT WINDOW (OR EXPLICITLY PASS IF NO GOOD PLAY):**
+### 4. CONFIDENCE METER & SEQUENTIAL TIME-SLOT COMPOUNDING RULES (9 HARD MANDATES):
+1. **USE THE PRE-COMPUTED `[CONFIDENCE METER: XX% ...]` SCORES FROM SECTION 3:**
+   - Every matchup in Section 3 has a deterministic Python-computed `[CONFIDENCE METER: XX% | ... | TIER ... -> Top Play: ...]` tag.
+   - Use those exact Confidence Meter scores and factor breakdowns to rank and select plays for each remaining upcoming Time-Slot Window (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}`).
    - {league_rule}
-   - Only include windows that have NOT started yet (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}`).
-   - For **EACH remaining upcoming window today**, pick the **1 single best play** in that window so the user can settle a bet in every window and compound to $1,000 as fast as possible.
-   - **IF A TIME-SLOT WINDOW HAS NO GOOD PLAY** (no clear quantitative edge, or only bad/already-steamed lines), do NOT force a bad bet — explicitly write:
-     `*[Window Time EST] — NO GOOD PLAY / PASS* (Wait for next window)` so the user knows you checked that window and passed!
-2. **UP TO 50% SEQUENTIAL BANKROLL SIZING PER WINDOW:**
-   - Because each window settles before the next window kicks off, only **1 bet is live at a time**!
-   - Size the **Immediate Next Window (#1)** using exact current bankroll (**${settled_bankroll:.2f}**):
-     * **A+ / Strong Window Play (50% Bankroll):** **${stake_50:.2f}**
-     * **Solid B+ Window Play (35% Bankroll):** **${stake_35:.2f}**
-   - For **Subsequent Windows (#2, #3, #4...)** later today, display:
-     **`50% of Resulting BR (Currently ${stake_50:.2f})`** (or `35% of Resulting BR (Currently ${stake_35:.2f})` for a moderate B+ edge).
-   - As soon as each window finishes, our automated Settler + Curator will re-run and update the exact dollar amount from the new resulting bankroll!
+2. **CONFIDENCE METER BANKROLL SIZING & SAME-WINDOW MULTI-BET RULES (CURRENT BR = ${settled_bankroll:.2f}):**
+   - **🔥 TIER 1: MAX HAMMER (`88% – 99%` Confidence):**
+     * **Standout Solo Play:** Wager **50% of Bankroll = ${stake_t1_solo:.2f}** (or `50% of Resulting BR (Est. ${stake_t1_solo:.2f})` for later windows).
+     * *Multi-Bet Rule:* Put the full 50% on this standout lock unless a 2nd game in the exact same time window is `82%+`, in which case split **35% (${stake_t2_solo:.2f}) / 20% (${stake_t3_solo:.2f})**.
+   - **💎 TIER 2: STRONG CONVICTION (`78% – 87%` Confidence):**
+     * **Solo Play in Window:** Wager **35% of Bankroll = ${stake_t2_solo:.2f}** (or `35% of Resulting BR (Est. ${stake_t2_solo:.2f})` for later windows).
+     * **Dual-Bet Same Window:** If **2 separate games in the same window** both score **`78% – 87%`**, recommend **BOTH at 25% of Bankroll each = ${stake_t2_dual:.2f} each** (`50%` total window allocation).
+   - **✅ TIER 3: SOLID EDGE (`68% – 77%` Confidence):**
+     * **Solo Play in Window:** Wager **20% of Bankroll = ${stake_t3_solo:.2f}** (or `20% of Resulting BR (Est. ${stake_t3_solo:.2f})` for later windows).
+     * **Dual-Bet Same Window:** If **2 separate games in the same window** both score **`68% – 77%`**, recommend **BOTH at 18% of Bankroll each = ${stake_t3_dual:.2f} each** (`36%` total window allocation).
+   - **⛔ TIER 4: PASS / NO EDGE (`Below 68%` Confidence):**
+     * **0% Wager ($0.00):** If a time-slot window has NO game scoring `>= 68%`, explicitly output:
+       `*[Window Time EST] — ⛔ PASS (<68% Confidence — Hold bankroll for next window)*`.
 3. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
    - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop). Never recommend SGPs or Parlays.
 4. **MODERATE FAVORITE PRIORITY & "-155 TO +130" SWEET-SPOT BAND:**
-   - Empirical ledger audit: Moderate Favorites (`-1.5` to `-6.5` spreads or `-110` to `-150` MLs) hit **`11W-3L (78.6% win rate)`** (including today's Bournemouth 2-0 win!), while Plus-Money Underdogs (`+110` to `+190`) went **`0W-4L (0.0%)`**.
-   - **Strongly prioritize Moderate Favorites (`-110` to `-150` ML or `-1.5` to `-6.5` spreads; or EPL ML/Spread/O2.5/U2.5 in `-155` to `+125`)** over coin-flip underdogs unless an underdog has `[🏆 A+ CONFLUENCE]`.
+   - Strongly prioritize Moderate Favorites (`-110` to `-150` ML or `-1.5` to `-6.5` spreads; `-7.5` max in CFB) which are `11W-3L (78.6%)` in our ledger audit.
    - Restrict all plays to **`-155` to `+130`**. Never lay `-175+` heavy juice and never chase `+150+` longshots.
-5. **THE "-6.5 FAVORITE SPREAD CAP" (ANTI-GARBAGE-TIME BACKDOOR RULE):**
-   - **NEVER recommend laying more than `-6.5` points on an NFL/NBA/NHL spread (`-7.5` max in CFB)**. If a heavy favorite has a strong form/FPI edge, pivot to a **1st-Half Spread**, **Game Total**, or **Moneyline** (if `-155` or better).
+5. **THE "-6.5 FAVORITE SPREAD CAP" (`-7.5` MAX IN CFB):**
+   - Never lay more than `-6.5` points (`-7.5` in CFB) on a full-game spread.
 6. **NEVER CHASE LATE STEAM:**
-   - **STRICTLY IGNORE** any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`.
-7. **MULTI-SIGNAL CONFLUENCE PRIORITY:**
-   - **Tier 1:** `[🏆 A+ CONFLUENCE]`, `[🔥 STALE LINE]`, `[+EV Consensus]` -> Stake **50% (${stake_50:.2f})**
-   - **Tier 2:** `[📈 FORM EDGE]`, `[📊 BPI/FPI +EV (Sweet-Spot)]`, `[🔥 SPREAD STEAM]`, `[🔥 ML STEAM]`, `[🎯 GOALIE MISMATCH EDGE]`, `[⚠️ FATIGUE EDGE]` -> Stake **50% (${stake_50:.2f})**
-   - **Tier 3:** Clean Moderate Favorite ML/Spread or EPL Total backed by L5 Form & record superiority -> Stake **35% (${stake_35:.2f})**
+   - Strictly ignore any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`.
+7. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
+   - Even when placing 2 dual bets in the same time window, they MUST come from **2 different games**.
 8. **STRICT FACTUAL GROUNDING (ZERO HALLUCINATIONS):**
-   - ONLY cite odds, records, L5 form, FPI/BPI numbers, and player names that appear **verbatim** in Section 3 above. NEVER invent stats or assign a player/goalie to the wrong team!
+   - ONLY cite odds, records, L5 form, FPI/BPI numbers, and Confidence Meter scores that appear **verbatim** in Section 3 above.
 9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
 
 ### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
 - Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps.
-- Always include the **Window time in EST + League** on every play!
+- Every play MUST show its **`[Confidence: XX% | ████████░░ | Tier Badge]`** line!
 
 🎯 *{today_str} {slate_header_tag}*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
@@ -277,12 +278,14 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 *Pending ($XX.XX):*
 • *None* (or list active pending BET-XXX rows if any)
 
-*Today's Sequential 50% Time-Slot Roll (Settle each window -> roll up to 50% of resulting BR into next):*
-1. *[NEXT WINDOW: Time EST — League] Selection (Odds)* — *${stake_50:.2f} (50% BR)*
-   - Edge: [1 short line using ONLY verified stats from scraped intel]
-2. *[WINDOW 2: Time EST — League] Selection (Odds)* — *50% of Resulting BR (Est. ${stake_50:.2f})*
-   - Edge: [1 short line using ONLY verified stats from scraped intel]
-(Continue in chronological order for every remaining time-slot window today; if any window has no good play, list `X. *[Window Time EST] — NO GOOD PLAY / PASS*`)
+*Today's Confidence-Meter Time-Slot Plays:*
+1. *[Window Time EST — League] Selection (Odds)* — *$XX.XX (XX% BR)*
+   - Confidence: `[XX% | ████████░░ | 🔥 TIER 1: MAX HAMMER]`
+   - Edge: [1 short line citing the exact pillars from Section 3]
+2. *[Window Time EST — League] Selection (Odds)* — *XX% of Resulting BR (Est. $XX.XX)*
+   - Confidence: `[XX% | ████████░░ | 💎 TIER 2: STRONG CONVICTION]`
+   - Edge: [1 short line citing the exact pillars from Section 3]
+(Continue in chronological order for every remaining time-slot window today; if a window has 2 qualifying dual plays, list both; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
 """
     candidate_models = [
         "gemini-3.6-flash",

@@ -175,10 +175,22 @@ def fetch_dashboard_data():
                 if cur_play:
                     curated_plays.append(cur_play)
                 clean_title = m.group(1).replace("*", "").strip()
-                cur_play = {"title": clean_title, "edge": ""}
+                cur_play = {"title": clean_title, "edge": "", "confidence_pct": None, "confidence_tier": ""}
             elif cur_play and (s.startswith("- ") or s.startswith("• ")):
-                edge_txt = re.sub(r"^[-•]\s*(Edge:\s*)?", "", s, flags=re.I).replace("*", "").strip()
-                cur_play["edge"] = (cur_play["edge"] + " " + edge_txt).strip()
+                raw_bullet = re.sub(r"^[-•]\s*", "", s).replace("*", "").replace("`", "").strip()
+                if raw_bullet.lower().startswith("confidence:"):
+                    conf_body = re.sub(r"^confidence:\s*", "", raw_bullet, flags=re.I).strip(" []")
+                    pm = re.search(r"(\d{2,3})\s*%", conf_body)
+                    if pm:
+                        cur_play["confidence_pct"] = int(pm.group(1))
+                    parts = [p.strip() for p in conf_body.split("|") if p.strip()]
+                    if len(parts) >= 3:
+                        cur_play["confidence_tier"] = parts[-1]
+                    else:
+                        cur_play["confidence_tier"] = conf_body
+                else:
+                    edge_txt = re.sub(r"^Edge:\s*", "", raw_bullet, flags=re.I).strip()
+                    cur_play["edge"] = (cur_play["edge"] + " " + edge_txt).strip()
         if cur_play:
             curated_plays.append(cur_play)
 
@@ -446,15 +458,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const plays = data.curated_plays || [];
       document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
       if (plays.length > 0) {
-        cList.innerHTML = plays.map((p, idx) => `
+        cList.innerHTML = plays.map((p, idx) => {
+          const cp = p.confidence_pct;
+          let meterHtml = "";
+          let pillCls = "pill-blue";
+          let pillTxt = "CURATED";
+          if (cp !== null && cp !== undefined) {
+            const barColor = cp >= 88 ? "#10b981" : (cp >= 78 ? "#3b82f6" : (cp >= 68 ? "#f59e0b" : "#ef4444"));
+            pillCls = cp >= 88 ? "pill-green" : (cp >= 78 ? "pill-blue" : (cp >= 68 ? "pill-amber" : "pill-red"));
+            pillTxt = `${cp}% CONFIDENCE`;
+            meterHtml = `
+              <div style="margin-top:8px;">
+                <div style="display:flex;justify-content:space-between;font-size:0.77rem;font-weight:700;color:${barColor};margin-bottom:4px;">
+                  <span>${p.confidence_tier || "Confidence Meter"}</span>
+                  <span>${cp}%</span>
+                </div>
+                <div style="width:100%;height:7px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
+                  <div style="width:${Math.min(100, Math.max(0, cp))}%;height:100%;background:${barColor};border-radius:999px;"></div>
+                </div>
+              </div>
+            `;
+          }
+          return `
           <div class="bet-item">
             <div class="bet-top">
               <div class="bet-title">${idx + 1}. ${p.title}</div>
-              <span class="pill pill-blue">CURATED</span>
+              <span class="pill ${pillCls}">${pillTxt}</span>
             </div>
-            ${p.edge ? `<div class="bet-meta">Edge: ${p.edge}</div>` : ""}
+            ${meterHtml}
+            ${p.edge ? `<div class="bet-meta" style="margin-top:6px;">Edge: ${p.edge}</div>` : ""}
           </div>
-        `).join("");
+        `;
+        }).join("");
       } else {
         cList.innerHTML = `<div class="empty-msg">${(data.curated_raw || "No curated plays found yet.").replace(/\\n/g, "<br>")}</div>`;
       }

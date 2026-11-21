@@ -429,6 +429,230 @@ def _safe_float_line(val):
         return None
 
 
+def _format_confidence_meter(score):
+    score = max(25, min(99, int(round(score))))
+    filled = max(1, min(10, int(round(score / 10.0))))
+    bar = "█" * filled + "░" * (10 - filled)
+    if score >= 88:
+        tier = "🔥 TIER 1: MAX HAMMER (50% BR)"
+    elif score >= 78:
+        tier = "💎 TIER 2: STRONG CONVICTION (35% BR Solo / 25% Dual)"
+    elif score >= 68:
+        tier = "✅ TIER 3: SOLID EDGE (20% BR Solo / 18% Dual)"
+    else:
+        tier = "⛔ TIER 4: PASS (<68%)"
+    return score, bar, tier
+
+
+def _parse_rec_wins_losses(rec_str):
+    if not rec_str:
+        return 0, 0
+    m = re.match(r"(\d+)-(\d+)", str(rec_str).strip())
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return 0, 0
+
+
+def _compute_matchup_confidence(
+    label,
+    a_abbr,
+    h_abbr,
+    a_rec,
+    h_rec,
+    a_ml,
+    h_ml,
+    h_sp,
+    a_sp_odds,
+    h_sp_odds,
+    a_bpi,
+    h_bpi,
+    l5_parsed,
+    tags,
+):
+    """
+    Deterministic 0-99 Confidence Meter across 6 Pillars:
+    1. TrueWin Probability & Odds Sweet-Spot (+14 Moderate Fav, +8 Light Fav/Even, -10 Dog without 2+ signals, -25 Big Fav Spread Cap)
+    2. Model & Market +EV% Edge (+15 for >=5% EV, +9 for 2.5-4.9% EV, -12 if model disagrees)
+    3. Last-5-Games Form & Scoring Margin (+12 Major Form Edge, +6 Moderate Form Edge, -10 Cold 0-5/1-4 team)
+    4. Sharp Line Movement & Timing (+10 Early Sharp Steam, -30 Late Chased Steam Auto-Kill, -15 Reverse Steam)
+    5. Situational & Matchup Mismatch (+12 Rested vs B2B or NHL Goalie >=.025 SV% Edge, +4 Home winning record)
+    6. Multi-Signal Confluence Bonus (+8 for 3+ aligned pillars, +4 for 2 aligned pillars)
+    """
+    tags_joined = " ".join(tags)
+    max_fav_cap = -7.5 if label == "CFB" else -6.5
+    a_sp = (-h_sp) if h_sp is not None else None
+
+    mkt_a = mkt_h = None
+    if a_ml is not None and h_ml is not None:
+        imp_a = american_to_implied(a_ml)
+        imp_h = american_to_implied(h_ml)
+        if (imp_a + imp_h) > 0:
+            mkt_a = power_devig_prob(imp_a, imp_h) * 100.0
+            mkt_h = power_devig_prob(imp_h, imp_a) * 100.0
+
+    best_score = -999
+    best_pick_label = "No Playable Side"
+    best_reasons = []
+
+    sides = [
+        (False, a_abbr, h_abbr, a_rec, h_rec, a_ml, a_sp, a_sp_odds, a_bpi, mkt_a),
+        (True, h_abbr, a_abbr, h_rec, a_rec, h_ml, h_sp, h_sp_odds, h_bpi, mkt_h),
+    ]
+
+    for is_home, s_abbr, o_abbr, s_rec, o_rec, s_ml, s_sp, s_sp_odds, s_bpi, s_mkt in sides:
+        score = 50
+        pillars = 0
+        reasons = []
+
+        # Determine best playable straight market for this side
+        pick_str = None
+        is_mod_fav = False
+        is_even_fav = False
+        is_plus_dog = False
+        is_big_fav_blocked = False
+
+        if s_ml is not None and -155 <= s_ml <= -115:
+            pick_str = f"{s_abbr} ML ({s_ml:+d})"
+            is_mod_fav = True
+        elif s_sp is not None and s_sp_odds is not None and max_fav_cap <= s_sp <= -1.5 and -135 <= s_sp_odds <= 110:
+            pick_str = f"{s_abbr} {s_sp:+.1f} ({s_sp_odds:+d})"
+            is_mod_fav = True
+        elif s_ml is not None and -114 <= s_ml <= 105:
+            pick_str = f"{s_abbr} ML ({s_ml:+d})"
+            is_even_fav = True
+        elif s_sp is not None and s_sp_odds is not None and -1.0 <= s_sp <= 3.5 and -130 <= s_sp_odds <= 110:
+            pick_str = f"{s_abbr} {s_sp:+.1f} ({s_sp_odds:+d})"
+            is_even_fav = True
+        elif s_ml is not None and 106 <= s_ml <= 130:
+            pick_str = f"{s_abbr} ML ({s_ml:+d})"
+            is_plus_dog = True
+        elif s_sp is not None and s_sp_odds is not None and 3.5 < s_sp <= 7.5 and -125 <= s_sp_odds <= 110:
+            pick_str = f"{s_abbr} {s_sp:+.1f} ({s_sp_odds:+d})"
+            is_plus_dog = True
+        elif s_sp is not None and s_sp < max_fav_cap:
+            pick_str = f"{s_abbr} {s_sp:+.1f} (EXCEEDS {max_fav_cap} CAP — PIVOT 1H/TOTAL OR PASS)"
+            is_big_fav_blocked = True
+        elif s_ml is not None:
+            pick_str = f"{s_abbr} ML ({s_ml:+d})"
+            if s_ml < -155 or s_ml > 130:
+                is_big_fav_blocked = True
+        else:
+            continue
+
+        # Pillar 1: TrueWin Probability & Odds Sweet-Spot
+        if is_mod_fav:
+            score += 14
+            pillars += 1
+            reasons.append("ModFav Sweet-Spot (+14)")
+        elif is_even_fav:
+            score += 8
+            pillars += 1
+            reasons.append("Even/LightFav (+8)")
+        elif is_big_fav_blocked:
+            score -= 25
+            reasons.append("Outside Odds/Spread Cap (-25)")
+
+        # Pillar 2: Model & Market +EV% Edge (BPI/FPI vs Power-NoVig)
+        if s_bpi is not None and s_mkt is not None and s_ml is not None and label in ("NBA", "NFL", "CFB"):
+            dec_o = american_to_decimal(s_ml)
+            ev_pct = ((s_bpi / 100.0) * dec_o - 1.0) * 100.0
+            if ev_pct >= 5.0 and (s_bpi - s_mkt) >= 3.5:
+                score += 15
+                pillars += 1
+                reasons.append(f"BPI/FPI +{ev_pct:.1f}% EV (+15)")
+            elif ev_pct >= 2.5 and (s_bpi - s_mkt) >= 2.0:
+                score += 9
+                pillars += 1
+                reasons.append(f"BPI/FPI +{ev_pct:.1f}% EV (+9)")
+            elif (s_bpi - s_mkt) <= -4.0:
+                score -= 12
+                reasons.append("Model Disagrees (-12)")
+        elif s_bpi is not None and s_bpi >= 58.0 and (is_mod_fav or is_even_fav):
+            score += 7
+            pillars += 1
+            reasons.append(f"BPI WinProb {s_bpi:.0f}% (+7)")
+
+        # Pillar 3: Last-5-Games Form & Scoring Margin (or EPL Form)
+        if f"FORM EDGE: {s_abbr}" in tags_joined:
+            score += 12
+            pillars += 1
+            reasons.append("Major L5 Form Edge (+12)")
+        elif s_abbr in l5_parsed and o_abbr in l5_parsed:
+            sw, sl, sm = l5_parsed[s_abbr]
+            ow, ol, om = l5_parsed[o_abbr]
+            if sw > ow and sm > om:
+                score += 6
+                pillars += 1
+                reasons.append(f"L5 Edge {sw}-{sl} ({sm:+.1f}) (+6)")
+            elif sw <= 1 and sl >= 4:
+                score -= 10
+                reasons.append(f"Cold L5 {sw}-{sl} (-10)")
+            elif sw >= 4 and sm >= 3.0:
+                score += 5
+                reasons.append(f"Hot L5 {sw}-{sl} (+5)")
+
+        # Pillar 4: Sharp Line Movement & Timing
+        if f"ALREADY STEAMED" in tags_joined and f"toward {s_abbr}" in tags_joined:
+            score -= 30
+            reasons.append("Late Chased Steam (-30)")
+        elif (f"SPREAD STEAM: Moved" in tags_joined and f"toward {s_abbr}" in tags_joined) or (
+            f"ML STEAM: Sharp action steamed {s_abbr}" in tags_joined
+        ):
+            score += 10
+            pillars += 1
+            reasons.append("Sharp Steam (+10)")
+        elif (f"SPREAD STEAM: Moved" in tags_joined and f"toward {o_abbr}" in tags_joined) or (
+            f"ML STEAM: Sharp action steamed {o_abbr}" in tags_joined
+        ):
+            score -= 15
+            reasons.append("Fighting Reverse Steam (-15)")
+
+        # Pillar 5: Situational & Matchup Mismatch (B2B Fatigue, NHL Goalies, Home Record)
+        if f"FATIGUE EDGE: {o_abbr} on" in tags_joined:
+            score += 12
+            pillars += 1
+            reasons.append(f"Vs {o_abbr} 0d-Rest B2B (+12)")
+        elif f"FATIGUE EDGE: {s_abbr} on" in tags_joined:
+            score -= 15
+            reasons.append("On 0d-Rest B2B (-15)")
+
+        if f"GOALIE MISMATCH EDGE: {s_abbr}" in tags_joined:
+            score += 12
+            pillars += 1
+            reasons.append("NHL Goalie Mismatch (+12)")
+
+        sw_rec, sl_rec = _parse_rec_wins_losses(s_rec)
+        ow_rec, ol_rec = _parse_rec_wins_losses(o_rec)
+        if is_home and sw_rec > sl_rec:
+            score += 4
+            reasons.append("Home Winning Rec (+4)")
+        if (sw_rec - sl_rec) - (ow_rec - ol_rec) >= 4:
+            score += 5
+            pillars += 1
+            reasons.append("Record Superiority (+5)")
+
+        # Plus-Money Underdog Penalty (unless 2+ independent signals align)
+        if is_plus_dog and pillars < 2:
+            score -= 10
+            reasons.append("Unconfirmed Underdog (-10)")
+
+        # Pillar 6: Multi-Signal Confluence Bonus
+        if pillars >= 3:
+            score += 8
+            reasons.append(f"{pillars}-Pillar Confluence (+8)")
+        elif pillars == 2:
+            score += 4
+            reasons.append("2-Pillar Confluence (+4)")
+
+        if score > best_score:
+            best_score = score
+            best_pick_label = pick_str
+            best_reasons = reasons
+
+    final_score, bar, tier = _format_confidence_meter(best_score)
+    return f"[CONFIDENCE METER: {final_score}% | {bar} | {tier} -> Top Play: {best_pick_label} ({', '.join(best_reasons)})]"
+
+
 def fetch_espn_quant_matchups_and_props():
     """
     100% Free Unlimited Quantitative Engine via ESPN API:
@@ -596,6 +820,10 @@ def fetch_espn_quant_matchups_and_props():
             odds_list = comp.get("odds", [])
             odds_summary = []
             h_ml_close = a_ml_close = None
+            h_sp_close = None
+            h_sp_odds = a_sp_odds = None
+            h_bpi = a_bpi = None
+            l5_parsed = {}
             if odds_list:
                 od = odds_list[0]
                 details = od.get("details", "")
@@ -796,6 +1024,28 @@ def fetch_espn_quant_matchups_and_props():
             except Exception:
                 pass
 
+            # Compute Deterministic 0-99 Confidence Meter across the 6 Pillars
+            try:
+                conf_tag = _compute_matchup_confidence(
+                    label=label,
+                    a_abbr=a_abbr,
+                    h_abbr=h_abbr,
+                    a_rec=a_rec,
+                    h_rec=h_rec,
+                    a_ml=a_ml_close,
+                    h_ml=h_ml_close,
+                    h_sp=h_sp_close,
+                    a_sp_odds=a_sp_odds,
+                    h_sp_odds=h_sp_odds,
+                    a_bpi=a_bpi,
+                    h_bpi=h_bpi,
+                    l5_parsed=l5_parsed,
+                    tags=tags,
+                )
+                tags.append(conf_tag)
+            except Exception:
+                pass
+
             if odds_summary or tags:
                 quant_games.append(
                     f"- [{label} QUANT] {slot_tag} ({time_est_str}) {matchup} {rec_str} -> {' | '.join(odds_summary)}"
@@ -840,7 +1090,7 @@ def fetch_espn_quant_matchups_and_props():
                             )
 
                     steamed_candidates.sort(key=lambda x: x[0], reverse=True)
-                    for _, ath_ref, prop_name, open_line, cur_line, open_odds, cur_odds in steamed_candidates[:4]:
+                    for imp_s, ath_ref, prop_name, open_line, cur_line, open_odds, cur_odds in steamed_candidates[:4]:
                         if ath_ref not in athlete_cache:
                             try:
                                 ath_info = requests.get(ath_ref.replace("http://", "https://"), timeout=6).json()
@@ -854,9 +1104,12 @@ def fetch_espn_quant_matchups_and_props():
                             dir_side = "Over" if cur_line > open_line else "Under"
                         else:
                             dir_side = "Over" if cur_odds < (open_odds or cur_odds) else "Under"
+                        p_score = 64 + (10 if -145 <= cur_odds <= -110 else 6) + min(12, int(imp_s))
+                        ps_val, ps_bar, ps_tier = _format_confidence_meter(p_score)
                         quant_props.append(
-                            f"- [{label} PROP STEAM] {p_name} ({a_abbr} @ {h_abbr}) {prop_name} {dir_side} {cur_line} ({cur_odds:+d}) "
-                            f"[Steamed from Open {open_line} ({open_odds:+d}) -> Now {cur_line} ({cur_odds:+d})]"
+                            f"- [{label} PROP STEAM] {slot_tag} ({time_est_str}) {p_name} ({a_abbr} @ {h_abbr}) {prop_name} {dir_side} {cur_line} ({cur_odds:+d}) "
+                            f"[Steamed from Open {open_line} ({open_odds:+d}) -> Now {cur_line} ({cur_odds:+d})] "
+                            f"[CONFIDENCE METER: {ps_val}% | {ps_bar} | {ps_tier}]"
                         )
                 except Exception:
                     pass
