@@ -711,6 +711,19 @@ function handleTelegramWebhook_(update) {
   const allowedChatId = String(getProp_("TELEGRAM_CHAT_ID") || "").trim();
   if (!botToken) return;
 
+  // Deduplicate Telegram webhook retries (Apps Script redirects/latency can cause Telegram to retry the same update_id)
+  const updId = Number(update.update_id || 0);
+  if (updId > 0) {
+    const cache = CacheService.getScriptCache();
+    const cacheKey = "tg_upd_" + updId;
+    if (cache.get(cacheKey)) return;
+    const props = PropertiesService.getScriptProperties();
+    const lastId = Number(props.getProperty("LAST_TG_UPDATE_ID") || 0);
+    if (updId <= lastId) return;
+    cache.put(cacheKey, "1", 21600);
+    props.setProperty("LAST_TG_UPDATE_ID", String(updId));
+  }
+
   // A. Inline keyboard button taps (1-tap "Log #1", "Status", etc.)
   if (update.callback_query) {
     const cq = update.callback_query;
@@ -915,13 +928,14 @@ function setupTelegramWebhook() {
     PropertiesService.getScriptProperties().setProperty("TG_WEBHOOK_SECRET", secret);
   }
   const hookUrl = webAppUrl + (webAppUrl.indexOf("?") === -1 ? "?" : "&") + "tg_secret=" + encodeURIComponent(secret);
+  PropertiesService.getScriptProperties().deleteProperty("LAST_TG_UPDATE_ID");
   const resp = UrlFetchApp.fetch("https://api.telegram.org/bot" + botToken + "/setWebhook", {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify({
       url: hookUrl,
       allowed_updates: ["message", "edited_message", "callback_query"],
-      drop_pending_updates: false,
+      drop_pending_updates: true,
     }),
   });
   Logger.log("setWebhook response: " + resp.getContentText());
@@ -930,7 +944,8 @@ function setupTelegramWebhook() {
 function removeTelegramWebhook() {
   const botToken = getProp_("TELEGRAM_BOT_TOKEN");
   if (!botToken) throw new Error("Set TELEGRAM_BOT_TOKEN in Script Properties first.");
-  const resp = UrlFetchApp.fetch("https://api.telegram.org/bot" + botToken + "/deleteWebhook");
+  PropertiesService.getScriptProperties().deleteProperty("LAST_TG_UPDATE_ID");
+  const resp = UrlFetchApp.fetch("https://api.telegram.org/bot" + botToken + "/deleteWebhook?drop_pending_updates=true");
   Logger.log("deleteWebhook response: " + resp.getContentText());
 }
 
