@@ -69,6 +69,15 @@ That's it! From now on:
 
 ---
 
+## Step 6: Turn On Automatic Game-Finish Settlement (1 Click)
+1. In the Apps Script **Editor (`<>`)**, select **`setupAutoSettlerTriggers`** from the function dropdown and click **Run**.
+2. That installs:
+   - **Dynamic per-game finish triggers:** Every time you log a bet with a start time (e.g. `3:30 PM EST`), Apps Script automatically schedules a one-shot trigger for the expected final whistle (`+2h 15m` Soccer, `+2h 45m` NBA/NHL/NCAAM, `+3h 45m` CFB/NFL/MLB).
+   - **15-minute watchdog:** Checks ESPN every 15 minutes while bets are `Pending` (exits immediately when 0 bets are pending), grades as soon as any game goes **FINAL**, updates the sheet, and sends a Telegram receipt.
+3. *(Optional)* To also automatically run `scraper.py` + `curator.py` on GitHub right after a bet settles (re-curating the next time-slot with your updated bankroll), add a `GITHUB_PAT` (fine-grained token with **Actions: Read and write** on `betting-curator`) to Script Properties.
+
+---
+
 ## Bonus: iPhone Share Sheet Shortcut ("Log Bet Screenshot")
 Want to share a screenshot straight from Hard Rock Bet without even opening Telegram?
 1. Open the **Shortcuts** app on your iPhone → tap **+** → name it **`Log Hard Rock Bet`**

@@ -13,6 +13,8 @@
  *   GEMINI_API_KEY     (optional) Gemini API key (for instant screenshot & natural-language parsing)
  *   TG_WEBHOOK_SECRET  (optional) Random string appended to webhook URL (?tg_secret=...)
  *   WEB_APP_URL        (optional) Deployed /exec URL (used by setupTelegramWebhook())
+ *   GITHUB_PAT         (optional) GitHub Personal Access Token (workflow scope) to auto-trigger daily_curator.yml after settlement
+ *   GITHUB_REPO        (optional) Defaults to "iannuzzi8100/betting-curator"
  */
 
 const TRACKER_SHEET_NAME = "Challenge Tracker ($100-$1k)";
@@ -605,20 +607,21 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
 
   const actionNotes = [];
   const loggedIds = [];
+  const loggedTickets = [];
   const freedSlots = [];
 
-  // 1. Removals / cashouts
+  // 1. Removals / cashouts (resolve by bet_id first so shifted rows never miss)
   for (let i = 0; i < removals.length; i++) {
     const rem = removals[i];
-    let rIdx = rem.row_index ? parseInt(rem.row_index, 10) : null;
     const bId = String(rem.bet_id || "").trim();
+    let rIdx = bId ? findRowByBetId_(allVals, headerIdx, bId) : null;
+    if (!rIdx && rem.row_index) {
+      rIdx = parseInt(rem.row_index, 10);
+    }
     const isFull = rem.is_full_refund !== false;
     const cRet = rem.cashout_return;
     const reason = String(rem.reason || "Cashed out").trim();
 
-    if (!rIdx && bId) {
-      rIdx = findRowByBetId_(allVals, headerIdx, bId);
-    }
     if (!rIdx || rIdx <= headerIdx + 1) continue;
 
     if (isFull) {
@@ -637,13 +640,13 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
     }
   }
 
-  // 2. In-place edits
+  // 2. In-place edits (resolve by bet_id first so shifted rows never miss)
   for (let i = 0; i < updates.length; i++) {
     const upd = updates[i];
-    let rIdx = upd.row_index ? parseInt(upd.row_index, 10) : null;
     const bId = String(upd.bet_id || "").trim();
-    if (!rIdx && bId) {
-      rIdx = findRowByBetId_(allVals, headerIdx, bId);
+    let rIdx = bId ? findRowByBetId_(allVals, headerIdx, bId) : null;
+    if (!rIdx && upd.row_index) {
+      rIdx = parseInt(upd.row_index, 10);
     }
     if (!rIdx || rIdx <= headerIdx + 1) continue;
 
@@ -718,6 +721,7 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
     const payload = buildRowPayload_(slot.bId, slot.rIdx, dateStr, sport, betType, sel, odds, stake, tId, "Replaced cashed-out ticket: " + slot.reason);
     trackerWs.getRange("A" + slot.rIdx + ":P" + slot.rIdx).setValues([payload]);
     loggedIds.push(slot.bId);
+    loggedTickets.push({ bet_id: slot.bId, date: dateStr, sport: sport, selections: sel });
     actionNotes.push("🔄 *Replaced " + slot.bId + "* -> *" + sel + " (" + (odds >= 0 ? "+" + odds : odds) + ")* — *$" + stake.toFixed(2) + "*");
   }
 
@@ -764,7 +768,17 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
       const payload = buildRowPayload_(betId, insertRow, dateStr, sport, betType, sel, odds, stake, tId, extraNote);
       trackerWs.getRange("A" + insertRow + ":P" + insertRow).setValues([payload]);
       loggedIds.push(betId);
+      loggedTickets.push({ bet_id: betId, date: dateStr, sport: sport, selections: sel });
       actionNotes.push("✅ *Logged " + betId + "* ($" + stake.toFixed(2) + ") — " + sel + " (" + (odds >= 0 ? "+" + odds : odds) + ")");
+    }
+  }
+
+  // 7. Auto-schedule finish-time settlement triggers for newly logged bets
+  if (loggedTickets.length > 0) {
+    try {
+      scheduleFinishTriggers_(loggedTickets);
+    } catch (e) {
+      // Non-fatal: 15-min watchdog still catches it
     }
   }
 
@@ -1229,6 +1243,433 @@ function answerCallback_(botToken, callbackId, text) {
       contentType: "application/json",
       muteHttpExceptions: true,
       payload: JSON.stringify({ callback_query_id: callbackId, text: text }),
+    });
+  } catch (e) {}
+}
+
+// ============================================================================
+// SMART GAME-FINISH AUTO-SETTLER (Dynamic Finish Triggers + 15m Watchdog)
+// ============================================================================
+
+const ESPN_LEAGUE_ENDPOINTS_ = {
+  CFB: { path: "football/college-football", groups: "80" },
+  NCAAF: { path: "football/college-football", groups: "80" },
+  NFL: { path: "football/nfl", groups: null },
+  NBA: { path: "basketball/nba", groups: null },
+  NCAAM: { path: "basketball/mens-college-basketball", groups: "50" },
+  CBB: { path: "basketball/mens-college-basketball", groups: "50" },
+  NHL: { path: "hockey/nhl", groups: null },
+  MLB: { path: "baseball/mlb", groups: null },
+  EPL: { path: "soccer/eng.1", groups: null },
+  SOCCER: { path: "soccer/eng.1", groups: null },
+  UCL: { path: "soccer/uefa.champions", groups: null },
+};
+
+const ALLOWED_SETTLER_TAGS_ = [
+  "WIN: Correlated Home Favorite + Alt Total Cushion",
+  "WIN: Fatigue / Back-to-Back Fade",
+  "WIN: Trench / Pace Mismatch",
+  "WIN: Disciplined Straight / Floor Play",
+  "FAIL: Totals Blowout / Late Garbage Time",
+  "FAIL: Road Favorite Upset (Parlay Bust)",
+  "FAIL: Hook / Half-Point Variance",
+  "FAIL: Juice Parlay / Multi-Leg Bust",
+];
+
+/**
+ * 1-Click Setup: Installs the lightweight 15-minute watchdog trigger (exits in ~50ms when 0 bets are pending)
+ * and schedules exact one-shot finish-time triggers for all currently pending bets.
+ */
+function setupAutoSettlerTriggers() {
+  ensureWatchdogTrigger_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName(TRACKER_SHEET_NAME) || ss.getSheets()[0];
+  const state = getSheetState_(ws);
+  scheduleFinishTriggers_(state.pending);
+  Logger.log("Auto-settler triggers active! Pending bets scheduled: " + state.pending.length);
+}
+
+function removeAutoSettlerTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  let removed = 0;
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "checkAndAutoSettle") {
+      ScriptApp.deleteTrigger(triggers[i]);
+      removed++;
+    }
+  }
+  PropertiesService.getScriptProperties().deleteProperty("SCHEDULED_FINISH_TIMES");
+  Logger.log("Removed " + removed + " checkAndAutoSettle trigger(s).");
+}
+
+function ensureWatchdogTrigger_() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const hasRepeating = triggers.some(t =>
+    t.getHandlerFunction() === "checkAndAutoSettle" &&
+    t.getTriggerSource() === ScriptApp.TriggerSource.CLOCK &&
+    !isOneShotTrigger_(t)
+  );
+  if (!hasRepeating) {
+    ScriptApp.newTrigger("checkAndAutoSettle").timeBased().everyMinutes(15).create();
+  }
+}
+
+function isOneShotTrigger_(trigger) {
+  // Repeating triggers have no saved timestamp in our SCHEDULED_FINISH_TIMES map
+  const map = getScheduledFinishMap_();
+  return Boolean(map[trigger.getUniqueId()]);
+}
+
+function getScheduledFinishMap_() {
+  try {
+    return JSON.parse(getProp_("SCHEDULED_FINISH_TIMES") || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveScheduledFinishMap_(map) {
+  PropertiesService.getScriptProperties().setProperty("SCHEDULED_FINISH_TIMES", JSON.stringify(map));
+}
+
+function cleanupExpiredOneShotTriggers_() {
+  const nowMs = Date.now();
+  const map = getScheduledFinishMap_();
+  const triggers = ScriptApp.getProjectTriggers();
+  const liveIds = {};
+  for (let i = 0; i < triggers.length; i++) {
+    const t = triggers[i];
+    const id = t.getUniqueId();
+    liveIds[id] = true;
+    if (map[id] && map[id] < nowMs - 5 * 60 * 1000) {
+      try { ScriptApp.deleteTrigger(t); } catch (e) {}
+      delete map[id];
+    }
+  }
+  Object.keys(map).forEach(id => {
+    if (!liveIds[id]) delete map[id];
+  });
+  saveScheduledFinishMap_(map);
+}
+
+function estimateFinishDate_(bet) {
+  const sel = String(bet.selections || "");
+  const m = sel.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!m) return null;
+
+  let hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  const ampm = m[3].toUpperCase();
+  if (ampm === "PM" && hour !== 12) hour += 12;
+  if (ampm === "AM" && hour === 12) hour = 0;
+
+  const dateStr = String(bet.date || Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd")).trim();
+  const dm = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dm) return null;
+
+  // Build America/New_York offset cleanly (handles EST -05:00 and EDT -04:00)
+  const probe = new Date(parseInt(dm[1], 10), parseInt(dm[2], 10) - 1, parseInt(dm[3], 10), 12, 0, 0);
+  const tzOffset = Utilities.formatDate(probe, TIMEZONE, "XXX"); // e.g. "-05:00" or "-04:00"
+  const hh = String(hour).padStart(2, "0");
+  const mm = String(minute).padStart(2, "0");
+  const startDate = new Date(dateStr + "T" + hh + ":" + mm + ":00" + tzOffset);
+  if (isNaN(startDate.getTime())) return null;
+
+  const sp = String(bet.sport || "").toUpperCase();
+  let durationMin = 195; // default 3h 15m
+  if (sp === "EPL" || sp === "UCL" || sp === "SOCCER") durationMin = 135; // 2h 15m
+  else if (sp === "NBA" || sp === "NHL" || sp === "NCAAM" || sp === "CBB" || sp === "ATP" || sp === "WTA") durationMin = 165; // 2h 45m
+  else if (sp === "CFB" || sp === "NCAAF" || sp === "NFL" || sp === "MLB") durationMin = 225; // 3h 45m
+
+  return new Date(startDate.getTime() + durationMin * 60 * 1000);
+}
+
+function scheduleFinishTriggers_(bets) {
+  if (!bets || bets.length === 0) return;
+  cleanupExpiredOneShotTriggers_();
+  ensureWatchdogTrigger_();
+
+  const nowMs = Date.now();
+  const map = getScheduledFinishMap_();
+  const existingTimes = Object.values(map);
+
+  for (let i = 0; i < bets.length; i++) {
+    const finishDate = estimateFinishDate_(bets[i]);
+    if (!finishDate) continue;
+    const finishMs = finishDate.getTime();
+    if (finishMs <= nowMs + 2 * 60 * 1000) continue; // Already past or imminent (watchdog handles)
+    // Skip if another one-shot trigger is already within +/- 10 minutes
+    const alreadyNear = existingTimes.some(ts => Math.abs(ts - finishMs) < 10 * 60 * 1000);
+    if (alreadyNear) continue;
+    // Stay comfortably under Apps Script's 20-trigger cap
+    if (ScriptApp.getProjectTriggers().length >= 16) break;
+
+    const trig = ScriptApp.newTrigger("checkAndAutoSettle").timeBased().at(finishDate).create();
+    map[trig.getUniqueId()] = finishMs;
+    existingTimes.push(finishMs);
+  }
+  saveScheduledFinishMap_(map);
+}
+
+/**
+ * Trigger handler: checks ESPN only for pending bets' sports/dates.
+ * Grades immediately with Gemini when a pending game goes FINAL, updates the sheet,
+ * sends a Telegram receipt, and optionally dispatches daily_curator.yml if GITHUB_PAT is set.
+ */
+function checkAndAutoSettle() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return;
+  try {
+    cleanupExpiredOneShotTriggers_();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ws = ss.getSheetByName(TRACKER_SHEET_NAME) || ss.getSheets()[0];
+    const state = getSheetState_(ws);
+    if (state.pending.length === 0) return;
+
+    const completedGames = fetchCompletedEspnGames_(state.pending);
+    if (completedGames.length === 0) return;
+
+    const settlements = gradePendingBetsWithGemini_(state.pending, completedGames);
+    if (!settlements || settlements.length === 0) return;
+
+    const freshState = getSheetState_(ws);
+    let updatedCount = 0;
+    let wins = 0;
+    let losses = 0;
+    let pushes = 0;
+    const settledLines = [];
+
+    for (let i = 0; i < settlements.length; i++) {
+      const s = settlements[i];
+      const betId = String(s.bet_id || "").trim();
+      const newRes = String(s.result || "Pending").trim();
+      if (newRes !== "Won" && newRes !== "Lost" && newRes !== "Push") continue;
+
+      const rIdx = betId ? findRowByBetId_(freshState.allVals, freshState.headerIdx, betId) : parseInt(s.row_index, 10);
+      if (!rIdx || rIdx <= freshState.headerIdx + 1) continue;
+
+      // Double-check still Pending so we never re-grade
+      const curStatus = String(freshState.allVals[rIdx - 1][10] || "").trim().toLowerCase();
+      if (curStatus !== "pending") continue;
+
+      ws.getRange("K" + rIdx).setValue(newRes);
+      const note = String(s.verification_note || "").trim();
+      if (note) {
+        const oldNote = String(freshState.allVals[rIdx - 1][14] || "").trim();
+        ws.getRange("O" + rIdx).setValue((oldNote ? oldNote + " | " : "") + "[Settled: " + note + "]");
+      }
+      const tag = String(s.edge_tag || "").trim();
+      if (tag && ALLOWED_SETTLER_TAGS_.indexOf(tag) !== -1) {
+        ws.getRange("P" + rIdx).setValue(tag);
+      }
+
+      if (newRes === "Won") wins++;
+      else if (newRes === "Lost") losses++;
+      else pushes++;
+
+      const icon = newRes === "Won" ? "🟢" : (newRes === "Lost" ? "🔴" : "⚪");
+      settledLines.push(icon + " *" + betId + "* (" + newRes + ") — " + note);
+      updatedCount++;
+    }
+
+    if (updatedCount > 0) {
+      SpreadsheetApp.flush();
+      const header = "✅ *Auto-Settlement Complete* (" + wins + "W - " + losses + "L" + (pushes ? " - " + pushes + "P" : "") + ")";
+      sendTelegramReceipt_(ws, settledLines, header);
+      triggerGithubRefresh_();
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function fetchCompletedEspnGames_(pendingBets) {
+  const neededSports = {};
+  const datesSet = {};
+  const now = new Date();
+  datesSet[Utilities.formatDate(now, TIMEZONE, "yyyyMMdd")] = true;
+  datesSet[Utilities.formatDate(new Date(now.getTime() - 24 * 3600 * 1000), TIMEZONE, "yyyyMMdd")] = true;
+
+  const pendingText = pendingBets.map(b => (b.sport + " " + b.selections).toLowerCase()).join(" ");
+  const hasPropKw = /(rebound|assist|point|shot|sog|goal|pra|over |under )/i.test(pendingText);
+
+  for (let i = 0; i < pendingBets.length; i++) {
+    const sp = String(pendingBets[i].sport || "").toUpperCase();
+    if (ESPN_LEAGUE_ENDPOINTS_[sp]) {
+      neededSports[sp] = ESPN_LEAGUE_ENDPOINTS_[sp];
+    } else if (sp === "MULTI-SPORT" || !sp) {
+      ["CFB", "NFL", "NBA", "NHL", "NCAAM", "EPL"].forEach(k => { neededSports[k] = ESPN_LEAGUE_ENDPOINTS_[k]; });
+    }
+    const cleanD = String(pendingBets[i].date || "").replace(/-/g, "");
+    if (/^\d{8}$/.test(cleanD)) {
+      datesSet[cleanD] = true;
+    }
+  }
+
+  const completedMatches = [];
+  const seenEventIds = {};
+  const sportsKeys = Object.keys(neededSports);
+  const dateKeys = Object.keys(datesSet);
+
+  for (let s = 0; s < sportsKeys.length; s++) {
+    const league = sportsKeys[s];
+    const info = neededSports[league];
+    for (let d = 0; d < dateKeys.length; d++) {
+      let url = "https://site.api.espn.com/apis/site/v2/sports/" + info.path + "/scoreboard?dates=" + dateKeys[d];
+      if (info.groups) url += "&groups=" + info.groups;
+      try {
+        const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+        if (resp.getResponseCode() !== 200) continue;
+        const events = (JSON.parse(resp.getContentText()).events) || [];
+        for (let e = 0; e < events.length; e++) {
+          const ev = events[e];
+          const evId = String(ev.id || "");
+          if (evId && seenEventIds[league + ":" + evId]) continue;
+          const stType = (ev.status && ev.status.type) || {};
+          if (!stType.completed) continue;
+
+          const comp = (ev.competitions && ev.competitions[0]) || null;
+          const competitors = (comp && comp.competitors) || [];
+          if (competitors.length < 2) continue;
+          const home = competitors.find(c => c.homeAway === "home");
+          const away = competitors.find(c => c.homeAway === "away");
+          if (!home || !away) continue;
+
+          const hTeam = home.team || {};
+          const aTeam = away.team || {};
+          const tokens = [
+            hTeam.shortDisplayName, hTeam.name, hTeam.displayName, hTeam.abbreviation,
+            aTeam.shortDisplayName, aTeam.name, aTeam.displayName, aTeam.abbreviation,
+          ].map(t => String(t || "").toLowerCase()).filter(t => t.length >= 3);
+
+          const isRelevant = tokens.some(tok => pendingText.indexOf(tok) !== -1);
+          if (!isRelevant) continue;
+
+          if (evId) seenEventIds[league + ":" + evId] = true;
+          const hScore = parseInt(parseFloat(home.score || "0"), 10) || 0;
+          const aScore = parseInt(parseFloat(away.score || "0"), 10) || 0;
+          const rec = {
+            league: league,
+            date: dateKeys[d],
+            matchup: (aTeam.displayName || "") + " @ " + (hTeam.displayName || ""),
+            away_team: aTeam.displayName || "",
+            away_score: aScore,
+            home_team: hTeam.displayName || "",
+            home_score: hScore,
+            total_points: hScore + aScore,
+            completed: true,
+            status: stType.description || stType.state || "Final",
+          };
+          if (hasPropKw && evId && (league === "NBA" || league === "NHL" || league === "NCAAM" || league === "CBB")) {
+            const box = fetchEspnBoxscorePlayers_(info.path, evId, league);
+            if (box && Object.keys(box).length > 0) rec.player_boxscore = box;
+          }
+          completedMatches.push(rec);
+        }
+      } catch (err) {
+        // Continue checking other leagues/dates
+      }
+    }
+  }
+  return completedMatches;
+}
+
+function fetchEspnBoxscorePlayers_(path, eventId, league) {
+  const out = {};
+  try {
+    const resp = UrlFetchApp.fetch("https://site.api.espn.com/apis/site/v2/sports/" + path + "/summary?event=" + encodeURIComponent(eventId), { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return out;
+    const players = ((JSON.parse(resp.getContentText()).boxscore || {}).players) || [];
+    for (let t = 0; t < players.length; t++) {
+      const groups = players[t].statistics || [];
+      for (let g = 0; g < groups.length; g++) {
+        const labels = (groups[g].labels || []).map(l => String(l).toUpperCase());
+        const athletes = groups[g].athletes || [];
+        for (let a = 0; a < athletes.length; a++) {
+          const name = (athletes[a].athlete && athletes[a].athlete.displayName) || "";
+          const vals = athletes[a].stats || [];
+          if (!name || vals.length !== labels.length) continue;
+          const map = {};
+          for (let k = 0; k < labels.length; k++) map[labels[k]] = vals[k];
+          if (league === "NHL" && (map.G !== undefined || map.S !== undefined)) {
+            const gl = parseInt(map.G || 0, 10) || 0;
+            const as = parseInt(map.A || 0, 10) || 0;
+            const sog = parseInt(map.S || map.SOG || 0, 10) || 0;
+            out[name] = { G: gl, A: as, PTS: gl + as, SOG: sog };
+          } else if ((league === "NBA" || league === "NCAAM" || league === "CBB") && map.PTS !== undefined) {
+            const pts = parseInt(map.PTS || 0, 10) || 0;
+            const reb = parseInt(map.REB || 0, 10) || 0;
+            const ast = parseInt(map.AST || 0, 10) || 0;
+            out[name] = { PTS: pts, REB: reb, AST: ast, PRA: pts + reb + ast };
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  return out;
+}
+
+function gradePendingBetsWithGemini_(pendingBets, completedGames) {
+  const apiKey = getProp_("GEMINI_API_KEY");
+  if (!apiKey) return [];
+
+  const prompt = [
+    "You are a deterministic sportsbook settlement auditor.",
+    "Verify each pending bet against the official completed ESPN scoreboard results below.",
+    "GRADING RULES:",
+    "1. Parlay/SGP is Won ONLY if every leg is completed and won; Lost if ANY leg completed and lost; else Pending.",
+    "2. Keep status Pending if a game is not present in the completed ESPN data.",
+    "3. Totals (Over/Under): compare total_points vs line; exact tie on whole number = Push.",
+    "4. Moneylines (ML / TO WIN): selected team score > opponent score. For Soccer/EPL/UCL 3-way ML, a draw is Lost.",
+    "5. Point spreads (e.g. -7.5, +4.5, -7.0): (selected_team_score + spread) vs opponent_score; > = Won, < = Lost, == = Push.",
+    "6. Player props: check player_boxscore stats strictly against the line.",
+    "7. Pick best matching WIN:/FAIL: tag from ALLOWED_EDGE_TAGS (or \"\" for Pending/Push).",
+    "",
+    "ALLOWED_EDGE_TAGS: " + JSON.stringify(ALLOWED_SETTLER_TAGS_),
+    "PENDING BETS: " + JSON.stringify(pendingBets),
+    "COMPLETED ESPN GAMES: " + JSON.stringify(completedGames),
+    "",
+    "Respond ONLY with JSON: {\"settlements\": [{\"row_index\": 17, \"bet_id\": \"BET-052\", \"result\": \"Won|Lost|Push|Pending\", \"edge_tag\": \"...\", \"verification_note\": \"Short score proof\"}]}",
+  ].join("\n");
+
+  for (let i = 0; i < GEMINI_MODELS.length; i++) {
+    const model = GEMINI_MODELS[i];
+    try {
+      const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(apiKey);
+      const resp = UrlFetchApp.fetch(url, {
+        method: "post",
+        contentType: "application/json",
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0.0 },
+        }),
+      });
+      if (resp.getResponseCode() !== 200) continue;
+      const json = JSON.parse(resp.getContentText());
+      const outText = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text;
+      if (outText) {
+        return JSON.parse(outText).settlements || [];
+      }
+    } catch (e) {}
+  }
+  return [];
+}
+
+function triggerGithubRefresh_() {
+  const pat = getProp_("GITHUB_PAT");
+  if (!pat) return;
+  const repo = getProp_("GITHUB_REPO") || "iannuzzi8100/betting-curator";
+  try {
+    UrlFetchApp.fetch("https://api.github.com/repos/" + repo + "/actions/workflows/daily_curator.yml/dispatches", {
+      method: "post",
+      contentType: "application/json",
+      muteHttpExceptions: true,
+      headers: {
+        Authorization: "Bearer " + pat,
+        Accept: "application/vnd.github+json",
+      },
+      payload: JSON.stringify({ ref: "main", inputs: { stage: "all" } }),
     });
   } catch (e) {}
 }
