@@ -546,8 +546,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         "NHL": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
         "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
         "CFB": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80",
+        "NCAAF": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80",
         "NCAAM": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50",
         "CBB": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50",
+        "EPL": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+        "SOCCER": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+        "PREMIER LEAGUE": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+        "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
       };
       const neededSports = [...new Set(pendingTickets.map(t => (t.sport || "").toUpperCase()).filter(s => sportMap[s]))];
       const eventsBySport = {};
@@ -627,7 +632,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         btn.textContent = "↻ Refresh Live";
       } else {
-        window.location.reload();
+        btn.textContent = "Refreshing...";
+        if (STATIC_DATA && STATIC_DATA.pending && STATIC_DATA.pending.length) {
+          await fetchLiveScoresForPending(STATIC_DATA.pending);
+        }
+        window.location.href = window.location.pathname + "?t=" + Date.now();
       }
     }
 
