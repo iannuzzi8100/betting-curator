@@ -229,7 +229,7 @@ def build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, sta
         stake,
         f'=IF(OR(ISBLANK(I{cur_row}), ISBLANK(G{cur_row}), I{cur_row}="", G{cur_row}=""), "", IF(G{cur_row}>0, ROUND(I{cur_row}*(1+G{cur_row}/100), 2), ROUND(I{cur_row}*(1+100/ABS(G{cur_row})), 2)))',
         "Pending",
-        f'=IF(K{cur_row}="Won", J{cur_row}, IF(K{cur_row}="Lost", 0, ""))',
+        f'=IF(K{cur_row}="Won", J{cur_row}, IF(K{cur_row}="Lost", 0, IF(K{cur_row}="Push", I{cur_row}, "")))',
         f'=IF(OR(K{cur_row}="", K{cur_row}="Pending"), "", IF(K{cur_row}="Lost", -I{cur_row}, IF(ISNUMBER(L{cur_row}), L{cur_row}-I{cur_row}, "")))',
         f'=IF(OR(ISBLANK(I{cur_row}), I{cur_row}=""), "", IF(ISNUMBER(M{cur_row}), N{prev_row}+M{cur_row}, N{prev_row}))',
         note_str,
@@ -285,17 +285,15 @@ def apply_actions_to_sheet(tracker_ws, actions):
         if is_full:
             freed_slots.append((r_idx, b_id, reason))
         else:
-            # Partial cashout: record actual return & mark Cashed Out / Lost
-            tracker_ws.update_acell(f"K{r_idx}", "Lost")
+            # Partial cashout: record actual return & mark Won if profitable, Lost otherwise
+            c_ret_f = _clean_float(c_ret, 0.0)
+            stake_f = _clean_float(all_vals[r_idx - 1][8] if len(all_vals[r_idx - 1]) > 8 else "0", 0.0)
+            net_pl = round(c_ret_f - stake_f, 2)
+            tracker_ws.update_acell(f"K{r_idx}", "Won" if net_pl > 0 else "Lost")
             if c_ret is not None:
-                tracker_ws.update_acell(f"L{r_idx}", float(c_ret))
-                stake_cell = all_vals[r_idx - 1][8].replace("$", "").strip() if len(all_vals[r_idx - 1]) > 8 else "0"
-                try:
-                    net_pl = round(float(c_ret) - float(stake_cell), 2)
-                    tracker_ws.update_acell(f"M{r_idx}", net_pl)
-                except Exception:
-                    pass
-            action_notes.append(f"🔄 *Partial Cashout on {b_id}* (Row {r_idx}): Returned ${float(c_ret or 0):.2f}")
+                tracker_ws.update_acell(f"L{r_idx}", c_ret_f)
+                tracker_ws.update_acell(f"M{r_idx}", net_pl)
+            action_notes.append(f"🔄 *Partial Cashout on {b_id}* (Row {r_idx}): Returned ${c_ret_f:.2f} (Net {net_pl:+.2f})")
 
     # 2. Process in-place field updates
     for upd in updates:
@@ -362,15 +360,14 @@ def apply_actions_to_sheet(tracker_ws, actions):
         tracker_ws.update(range_name=f"A{r_idx}:P{r_idx}", values=[row_payload], value_input_option="USER_ENTERED")
         action_notes.append(f"🔄 *Replaced {b_id}* (Row {r_idx} full refund) -> *{sel} ({odds:+d})* — *${stake:.2f}*")
 
-    # 5. If any freed_slots remain without replacement tickets, clear/shift remaining pending rows up
+    # 5. If any freed_slots remain without replacement tickets, clear row while preserving Col N Running Bankroll chain
     for r_idx, b_id, reason in freed_slots:
+        prev_row = r_idx - 1
         tracker_ws.update(
-            range_name=f"A{r_idx}:I{r_idx}",
-            values=[["", "", "", "", "", "", "", "", ""]],
+            range_name=f"A{r_idx}:P{r_idx}",
+            values=[["", "", "", "", "", "", "", "", "", "", "", "", "", f"=N{prev_row}", "", ""]],
             value_input_option="USER_ENTERED",
         )
-        tracker_ws.update_acell(f"K{r_idx}", "")
-        tracker_ws.update(range_name=f"O{r_idx}:P{r_idx}", values=[["", ""]], value_input_option="USER_ENTERED")
         action_notes.append(f"🗑️ *Removed Cashed-Out {b_id}* (Row {r_idx} — {reason})")
 
     # 6. Append any remaining new tickets to the next available BET-XXX row

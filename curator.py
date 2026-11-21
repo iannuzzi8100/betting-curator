@@ -385,6 +385,7 @@ Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total'
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
+        "gemini-2.5-flash",
     ]:
         try:
             resp = client.models.generate_content(model=model_id, contents=prompt)
@@ -432,6 +433,10 @@ def _build_curated_inline_keyboard(message):
         if not m:
             continue
         clean = m.group(1).replace("*", "").strip()
+        # Keep play_idx aligned with Curator Feed parser, but don't add a Log button for PASS windows
+        if "⛔" in clean or re.search(r"\bPASS\b", clean):
+            play_idx += 1
+            continue
         # Strip leading [Time — Sport] bracket for a crisp iPhone button label
         short_label = re.sub(r"^\[[^\]]+\]\s*", "", clean).strip()
         if len(short_label) > 40:
@@ -441,7 +446,7 @@ def _build_curated_inline_keyboard(message):
             "callback_data": f"log_curated:{play_idx}",
         }])
         play_idx += 1
-        if play_idx >= 10:
+        if len(rows) >= 10:
             break
     rows.append([
         {"text": "📊 Live Status", "callback_data": "status"},
@@ -520,7 +525,7 @@ Respond ONLY with valid JSON:
   ]
 }}
 """
-        for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]:
+        for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
             try:
                 resp = client.models.generate_content(
                     model=model_id,

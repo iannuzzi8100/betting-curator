@@ -174,7 +174,8 @@ def fetch_final_scores(target_dates, pending_bets=None):
                     "status": status_type.get("description", state)
                 }
 
-                # Attach player box-score stats for completed NBA/NHL/NCAAM games mentioned in pending bets
+                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM games that match a pending bet team (or prop)
+                has_prop_kw = any(kw in pending_text for kw in ("rebound", "assist", "point", "shot", "sog", "goal", "pra", "over ", "under "))
                 if (
                     is_completed
                     and event_id
@@ -182,7 +183,7 @@ def fetch_final_scores(target_dates, pending_bets=None):
                     and (
                         (home_short and home_short in pending_text)
                         or (away_short and away_short in pending_text)
-                        or league_name.lower() in pending_text
+                        or (has_prop_kw and league_name.lower() in pending_text)
                     )
                 ):
                     player_stats = fetch_boxscore_players(path, event_id, league_name)
@@ -210,9 +211,10 @@ GRADING RULES:
 3. A parlay/SGP is "Lost" if ANY single leg has completed AND lost (even if other legs are still in progress).
 4. Keep the status "Pending" if any required game is not yet completed ("completed": false) and no leg has lost yet, or if a game cannot be matched in the scoreboard data.
 5. Match short team names (e.g., "Celtics", "Thunder", "Lakers", "Magic", "Pennsylvania") to ESPN full display names (e.g., "Boston Celtics", "Oklahoma City Thunder", "Los Angeles Lakers", "Orlando Magic", "Pennsylvania Quakers").
-6. For totals (e.g., "Under 57.5"), compare "total_points" (away_score + home_score) strictly against the line.
-7. For moneylines (e.g., "Toledo ML", "Thunder ML"), verify the selected team's score is strictly greater than the opponent's score.
-8. For player props (e.g., "Over 0.5 Points", "Under 0.5 Points", "Over 1.5 Shots", "Over 22.5 Points"), check the player's entry in "player_boxscore" on the completed game (NHL: PTS = G + A, Shots = SOG; NBA/NCAAM: PTS, REB, AST, PRA). If the game is completed and the player is in "player_boxscore", grade strictly against the prop line.
+6. For totals (e.g., "Under 57.5", "Over 216.0"), compare "total_points" (away_score + home_score) strictly against the line; if total_points equals the exact whole-number line, grade "Push".
+7. For moneylines (e.g., "Toledo ML", "Tennessee TO WIN"), verify the selected team's score is strictly greater than the opponent's score. For Soccer/EPL/UCL 3-way moneylines (team to win), a draw is "Lost" (not Push).
+8. For point spreads (e.g., "Middle Tennessee -7.5", "Kentucky +4.5", "Oregon State -7.0"), compute (selected_team_score + spread) vs opponent_score: > opponent is "Won", < opponent is "Lost", exact equality is "Push".
+9. For player props (e.g., "Over 0.5 Points", "Under 0.5 Points", "Over 1.5 Shots", "Over 22.5 Points"), check the player's entry in "player_boxscore" on the completed game (NHL: PTS = G + A, Shots = SOG; NBA/NCAAM: PTS, REB, AST, PRA). If the game is completed and the player is in "player_boxscore", grade strictly against the prop line.
 
 TAGGING RULES:
 - If result is "Won", select the single best matching "WIN: ..." tag from ALLOWED_EDGE_TAGS based on the bet's notes and structure.
@@ -249,6 +251,7 @@ Respond ONLY with valid JSON matching this exact schema:
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
+        "gemini-2.5-flash",
     ]
 
     response = None

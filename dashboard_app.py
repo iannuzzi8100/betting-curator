@@ -154,17 +154,19 @@ def fetch_dashboard_data():
             overall_wins += 1
             total_staked_settled += stake
             total_net_pl += net_pl
-            settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(run_br, 2)})
+            if run_br > 0:
+                settled_bankroll = run_br
+            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
         elif res_l == "lost":
             overall_losses += 1
             total_staked_settled += stake
             total_net_pl += net_pl
-            settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(run_br, 2)})
+            if run_br > 0:
+                settled_bankroll = run_br
+            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
         elif res_l == "push":
             overall_pushes += 1
-            equity_curve.append({"label": bet_id, "bankroll": round(run_br, 2)})
+            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
         elif res_l == "pending":
             pending_total += stake
             pending_tickets.append({
@@ -1172,18 +1174,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
         `<span>Avail Cash: <span class="pos">${fmtMoney(data.available_cash)}</span></span>`;
 
-      // 4. Today's Curated Bets (with 1-Tap Log Bet button)
+      // 4. Today's Curated Bets (with 1-Tap Log Bet button + duplicate-pending guard)
       document.getElementById("curated-date").textContent = data.curated_date;
       const cList = document.getElementById("curated-list");
       const plays = data.curated_plays || [];
+      const pendingList = data.pending_tickets || [];
       window.__curatedPlays = plays;
       document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
+
+      function findMatchingPending(play) {
+        const fb = parseTitleFallback(play.title);
+        const selRaw = (play.selection || fb.selection || play.title || "").toLowerCase();
+        // Extract core team/subject phrase before ML, spread (+/-), over/under, or parentheses
+        const core = selRaw.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\()/i)[0].replace(/[^a-z0-9\s]/g, "").trim();
+        if (!core || core.length < 3) return null;
+        return pendingList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+      }
+
       if (plays.length > 0) {
         cList.innerHTML = plays.map((p, idx) => {
+          const isPass = (p.title || "").includes("⛔") || /\bPASS\b/.test(p.title || "");
+          const existingPend = isPass ? null : findMatchingPending(p);
           const cp = p.confidence_pct;
           let meterHtml = "";
-          let pillCls = "pill-blue";
-          let pillTxt = "CURATED";
+          let pillCls = isPass ? "pill-red" : "pill-blue";
+          let pillTxt = isPass ? "PASS" : "CURATED";
           if (cp !== null && cp !== undefined) {
             const barColor = cp >= 88 ? "#10b981" : (cp >= 78 ? "#3b82f6" : (cp >= 68 ? "#f59e0b" : "#ef4444"));
             pillCls = cp >= 88 ? "pill-green" : (cp >= 78 ? "pill-blue" : (cp >= 68 ? "pill-amber" : "pill-red"));
@@ -1200,6 +1215,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               </div>
             `;
           }
+          let actionHtml = "";
+          if (!isPass) {
+            if (existingPend) {
+              actionHtml = `
+                <div class="bet-actions">
+                  <span class="pill pill-green">✓ Already Pending (${esc(existingPend.bet_id)})</span>
+                  <button class="btn-mini" onclick="if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
+                </div>`;
+            } else {
+              actionHtml = `
+                <div class="bet-actions">
+                  <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This</button>
+                </div>`;
+            }
+          }
           return `
           <div class="bet-item">
             <div class="bet-top">
@@ -1208,9 +1238,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </div>
             ${meterHtml}
             ${p.edge ? `<div class="bet-meta" style="margin-top:6px;">Edge: ${esc(p.edge)}</div>` : ""}
-            <div class="bet-actions">
-              <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This</button>
-            </div>
+            ${actionHtml}
           </div>
         `;
         }).join("");
@@ -1349,7 +1377,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           return teams.some(tm =>
             (tm.short && tm.short.length > 2 && selLower.includes(tm.short)) ||
             (tm.name && tm.name.length > 2 && selLower.includes(tm.name)) ||
-            (tm.display && selLower.includes(tm.display))
+            (tm.display && selLower.includes(tm.display)) ||
+            (tm.abbr && tm.abbr.length >= 3 && new RegExp(`\\b${tm.abbr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(selLower))
           );
         });
         if (!match) return;
