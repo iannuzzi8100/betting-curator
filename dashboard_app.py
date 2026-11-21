@@ -135,94 +135,113 @@ def fetch_dashboard_data():
     equity_curve = [{"label": "START", "bankroll": 100.0}]
     clv_values = []
 
+    def _bet_num(bid):
+        try:
+            return int(str(bid).strip().split("-")[1])
+        except Exception:
+            return 0
+
+    bet_entries = []
     for idx_row, r in enumerate(all_rows[header_idx + 1 :], start=header_idx + 2):
         if not r or not r[0].strip().startswith("BET-"):
             continue
         bet_id = r[0].strip()
-        b_date = r[1].strip() if len(r) > 1 else ""
-        sport = r[2].strip() if len(r) > 2 else ""
-        b_type = r[3].strip() if len(r) > 3 else ""
-        sel = r[5].strip() if len(r) > 5 else ""
-        odds = r[6].strip() if len(r) > 6 else ""
-        stake = _parse_num(r[8]) if len(r) > 8 else 0.0
-        payout = _parse_num(r[9]) if len(r) > 9 else 0.0
-        res = r[10].strip() if len(r) > 10 else ""
-        net_pl = _parse_num(r[12]) if len(r) > 12 else 0.0
-        run_br = _parse_num(r[13]) if len(r) > 13 else settled_bankroll
-        notes = r[14].strip() if len(r) > 14 else ""
+        bet_entries.append({
+            "row_index": idx_row,
+            "bet_num": _bet_num(bet_id),
+            "bet_id": bet_id,
+            "b_date": r[1].strip() if len(r) > 1 else "",
+            "sport": r[2].strip() if len(r) > 2 else "",
+            "b_type": r[3].strip() if len(r) > 3 else "",
+            "sel": r[5].strip() if len(r) > 5 else "",
+            "odds": r[6].strip() if len(r) > 6 else "",
+            "stake": _parse_num(r[8]) if len(r) > 8 else 0.0,
+            "payout": _parse_num(r[9]) if len(r) > 9 else 0.0,
+            "res": r[10].strip() if len(r) > 10 else "",
+            "net_pl": _parse_num(r[12]) if len(r) > 12 else 0.0,
+            "run_br": _parse_num(r[13]) if (len(r) > 13 and r[13].strip()) else 0.0,
+            "notes": r[14].strip() if len(r) > 14 else "",
+        })
 
-        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", notes)
+    # Chronological order (BET-001 -> latest) for Equity Curve & Settled Bankroll regardless of sheet order
+    for e in sorted(bet_entries, key=lambda x: x["bet_num"]):
+        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", e["notes"])
         clv_val = float(clv_match.group(1)) if clv_match else None
         if clv_val is not None:
             clv_values.append(clv_val)
 
-        res_l = res.lower()
+        res_l = e["res"].lower()
         if res_l == "won":
             overall_wins += 1
-            total_staked_settled += stake
-            total_net_pl += net_pl
-            if run_br > 0:
-                settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
+            total_staked_settled += e["stake"]
+            total_net_pl += e["net_pl"]
+            settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
+            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
         elif res_l == "lost":
             overall_losses += 1
-            total_staked_settled += stake
-            total_net_pl += net_pl
-            if run_br > 0:
-                settled_bankroll = run_br
-            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
+            total_staked_settled += e["stake"]
+            total_net_pl += e["net_pl"]
+            settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
+            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
         elif res_l == "push":
             overall_pushes += 1
-            equity_curve.append({"label": bet_id, "bankroll": round(settled_bankroll, 2)})
-        elif res_l == "pending":
-            pending_total += stake
+            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
+
+    # Newest-first order for Pending, Today, and Yesterday ticket lists
+    for e in sorted(bet_entries, key=lambda x: x["bet_num"], reverse=True):
+        clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", e["notes"])
+        clv_val = float(clv_match.group(1)) if clv_match else None
+        res_l = e["res"].lower()
+
+        if res_l == "pending":
+            pending_total += e["stake"]
             pending_tickets.append({
-                "row_index": idx_row,
-                "bet_id": bet_id,
-                "date": b_date,
-                "sport": sport,
-                "bet_type": b_type,
-                "selections": sel,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "payout": round(payout, 2),
+                "row_index": e["row_index"],
+                "bet_id": e["bet_id"],
+                "date": e["b_date"],
+                "sport": e["sport"],
+                "bet_type": e["b_type"],
+                "selections": e["sel"],
+                "odds": e["odds"],
+                "stake": round(e["stake"], 2),
+                "payout": round(e["payout"], 2),
                 "clv": clv_val,
             })
 
-        if b_date == today_str and res_l in ("won", "lost", "push"):
+        if e["b_date"] == today_str and res_l in ("won", "lost", "push"):
             if res_l == "won":
                 today_wins += 1
             elif res_l == "lost":
                 today_losses += 1
             elif res_l == "push":
                 today_pushes += 1
-            today_pl += net_pl
+            today_pl += e["net_pl"]
             today_tickets.append({
-                "bet_id": bet_id,
-                "sport": sport,
-                "selections": sel,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "result": res,
-                "net_pl": round(net_pl, 2),
+                "bet_id": e["bet_id"],
+                "sport": e["sport"],
+                "selections": e["sel"],
+                "odds": e["odds"],
+                "stake": round(e["stake"], 2),
+                "result": e["res"],
+                "net_pl": round(e["net_pl"], 2),
             })
 
-        if b_date == yesterday_str and res_l in ("won", "lost", "push"):
+        if e["b_date"] == yesterday_str and res_l in ("won", "lost", "push"):
             if res_l == "won":
                 yest_wins += 1
             elif res_l == "lost":
                 yest_losses += 1
             elif res_l == "push":
                 yest_pushes += 1
-            yest_pl += net_pl
+            yest_pl += e["net_pl"]
             yest_tickets.append({
-                "bet_id": bet_id,
-                "sport": sport,
-                "selections": sel,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "result": res,
-                "net_pl": round(net_pl, 2),
+                "bet_id": e["bet_id"],
+                "sport": e["sport"],
+                "selections": e["sel"],
+                "odds": e["odds"],
+                "stake": round(e["stake"], 2),
+                "result": e["res"],
+                "net_pl": round(e["net_pl"], 2),
             })
 
     overall_total = overall_wins + overall_losses
