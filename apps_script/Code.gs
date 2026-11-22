@@ -60,6 +60,9 @@ function doGet(e) {
     if (action === "ping") {
       return jsonOut_({ ok: true, status: "connected", ts: new Date().toISOString() });
     }
+    if (action === "settle" || action === "settle_refresh" || action === "settle_bets") {
+      return jsonOut_(handleSettleBetsApi_(params));
+    }
     const data = buildDashboardData_();
     return jsonOut_({ ok: true, dashboard: data });
   } catch (err) {
@@ -93,6 +96,9 @@ function doPost(e) {
     if (action === "dashboard") {
       return jsonOut_({ ok: true, dashboard: buildDashboardData_() });
     }
+    if (action === "settle" || action === "settle_refresh" || action === "settle_bets") {
+      return jsonOut_(handleSettleBetsApi_(body));
+    }
     if (action === "log_bet") {
       return jsonOut_(handleLogBetApi_(body));
     }
@@ -122,8 +128,10 @@ function buildDashboardData_() {
 
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const weekStart = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
   const todayStr = Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd");
   const yesterdayStr = Utilities.formatDate(yesterday, TIMEZONE, "yyyy-MM-dd");
+  const weekStartStr = Utilities.formatDate(weekStart, TIMEZONE, "yyyy-MM-dd");
   const updatedAtStr = Utilities.formatDate(now, TIMEZONE, "yyyy-MM-dd hh:mm a") + " ET";
 
   const allRows = trackerWs.getDataRange().getDisplayValues();
@@ -148,6 +156,13 @@ function buildDashboardData_() {
   let yestPl = 0.0;
   const yestTickets = [];
 
+  let weekWins = 0;
+  let weekLosses = 0;
+  let weekPushes = 0;
+  let weekPl = 0.0;
+  const weekTickets = [];
+
+  const settledTickets = [];
   const pendingTickets = [];
   let pendingTotal = 0.0;
   const equityCurve = [{ label: "START", bankroll: 100.0 }];
@@ -207,7 +222,7 @@ function buildDashboardData_() {
     }
   }
 
-  // Newest-first order for Pending, Today, and Yesterday ticket lists
+  // Newest-first order for Pending, Today, Yesterday, This Week, and full Settled history lists
   const newestEntries = betEntries.slice().sort((a, b) => b.bet_num - a.bet_num);
   for (let i = 0; i < newestEntries.length; i++) {
     const e = newestEntries[i];
@@ -229,44 +244,52 @@ function buildDashboardData_() {
         payout: round2_(e.payout),
         clv: clvVal,
       });
-    }
-
-    if (e.bDate === todayStr && (resL === "won" || resL === "lost" || resL === "push")) {
-      if (resL === "won") todayWins++;
-      else if (resL === "lost") todayLosses++;
-      else if (resL === "push") todayPushes++;
-      todayPl += e.netPl;
-      todayTickets.push({
+    } else if (resL === "won" || resL === "lost" || resL === "push") {
+      const tObj = {
         bet_id: e.bet_id,
+        date: e.bDate,
         sport: e.sport,
+        bet_type: e.bType,
         selections: e.sel,
         odds: e.odds,
         stake: round2_(e.stake),
         result: e.res,
         net_pl: round2_(e.netPl),
-      });
-    }
+      };
+      settledTickets.push(tObj);
 
-    if (e.bDate === yesterdayStr && (resL === "won" || resL === "lost" || resL === "push")) {
-      if (resL === "won") yestWins++;
-      else if (resL === "lost") yestLosses++;
-      else if (resL === "push") yestPushes++;
-      yestPl += e.netPl;
-      yestTickets.push({
-        bet_id: e.bet_id,
-        sport: e.sport,
-        selections: e.sel,
-        odds: e.odds,
-        stake: round2_(e.stake),
-        result: e.res,
-        net_pl: round2_(e.netPl),
-      });
+      if (e.bDate >= weekStartStr && e.bDate <= todayStr) {
+        if (resL === "won") weekWins++;
+        else if (resL === "lost") weekLosses++;
+        else if (resL === "push") weekPushes++;
+        weekPl += e.netPl;
+        weekTickets.push(tObj);
+      }
+
+      if (e.bDate === todayStr) {
+        if (resL === "won") todayWins++;
+        else if (resL === "lost") todayLosses++;
+        else if (resL === "push") todayPushes++;
+        todayPl += e.netPl;
+        todayTickets.push(tObj);
+      }
+
+      if (e.bDate === yesterdayStr) {
+        if (resL === "won") yestWins++;
+        else if (resL === "lost") yestLosses++;
+        else if (resL === "push") yestPushes++;
+        yestPl += e.netPl;
+        yestTickets.push(tObj);
+      }
     }
   }
 
   const overallTotal = overallWins + overallLosses;
   const overallWinPct = overallTotal > 0 ? round1_((overallWins / overallTotal) * 100.0) : 0.0;
   const overallRoi = totalStakedSettled > 0 ? round1_((totalNetPl / totalStakedSettled) * 100.0) : 0.0;
+
+  const weekTotal = weekWins + weekLosses;
+  const weekWinPct = weekTotal > 0 ? round1_((weekWins / weekTotal) * 100.0) : 0.0;
 
   const todayTotal = todayWins + todayLosses;
   const todayWinPct = todayTotal > 0 ? round1_((todayWins / todayTotal) * 100.0) : 0.0;
@@ -275,12 +298,20 @@ function buildDashboardData_() {
   const yestWinPct = yestTotal > 0 ? round1_((yestWins / yestTotal) * 100.0) : 0.0;
 
   const curated = getLatestCuratedPlays_(feedWs, todayStr);
+  adjustCuratedPlaysForBankroll_(
+    curated,
+    round2_(settledBankroll),
+    round2_(pendingTotal),
+    pendingTickets,
+    todayTickets
+  );
 
   return {
     live_mode: true,
     updated_at: updatedAtStr,
     today: todayStr,
     yesterday: yesterdayStr,
+    week_start: weekStartStr,
     bankroll: round2_(settledBankroll),
     pending_total: round2_(pendingTotal),
     available_cash: round2_(Math.max(0.0, settledBankroll - pendingTotal)),
@@ -293,6 +324,16 @@ function buildDashboardData_() {
       roi: overallRoi,
       avg_clv: clvValues.length > 0 ? round2_(clvValues.reduce((a, b) => a + b, 0) / clvValues.length) : null,
       clv_count: clvValues.length,
+    },
+    week_stats: {
+      start_date: weekStartStr,
+      end_date: todayStr,
+      wins: weekWins,
+      losses: weekLosses,
+      pushes: weekPushes,
+      win_pct: weekWinPct,
+      net_pl: round2_(weekPl),
+      tickets: weekTickets,
     },
     today_stats: {
       date: todayStr,
@@ -312,6 +353,7 @@ function buildDashboardData_() {
       net_pl: round2_(yestPl),
       tickets: yestTickets,
     },
+    settled_tickets: settledTickets,
     pending_tickets: pendingTickets,
     curated_date: curated.date,
     curated_plays: curated.plays,
@@ -321,12 +363,14 @@ function buildDashboardData_() {
 }
 
 function getLatestCuratedPlays_(feedWs, fallbackDate) {
-  if (!feedWs) return { date: fallbackDate, plays: [], raw: "" };
+  if (!feedWs) return { date: fallbackDate, plays: [], raw: "", rowIndex: null };
   const vals = feedWs.getDataRange().getDisplayValues();
   let latestText = "";
   let latestDate = fallbackDate;
+  let latestRow = null;
   let fbText = "";
   let fbDate = fallbackDate;
+  let fbRow = null;
   for (let i = vals.length - 1; i >= 0; i--) {
     const r = vals[i];
     if (r.length >= 12 && String(r[11] || "").trim()) {
@@ -335,10 +379,12 @@ function getLatestCuratedPlays_(feedWs, fallbackDate) {
       if (!fbText) {
         fbText = txt;
         fbDate = dt;
+        fbRow = i + 1;
       }
       if (/^\s*1\.\s+/m.test(txt)) {
         latestDate = dt;
         latestText = txt;
+        latestRow = i + 1;
         break;
       }
     }
@@ -346,9 +392,154 @@ function getLatestCuratedPlays_(feedWs, fallbackDate) {
   if (!latestText) {
     latestText = fbText;
     latestDate = fbDate;
+    latestRow = fbRow;
   }
   const plays = parseCuratedPlaysText_(latestText);
-  return { date: latestDate, plays: plays, raw: latestText };
+  return { date: latestDate, plays: plays, raw: latestText, rowIndex: latestRow };
+}
+
+function extractSelectionCore_(text) {
+  let s = String(text || "").trim();
+  s = s.replace(/^\d+\.\s*/, "").replace(/\*/g, "").trim();
+  s = s.replace(/^\[[^\]]+\]\s*/, "").trim();
+  const core = s.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)/i)[0];
+  return core.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+}
+
+function adjustCuratedPlaysForBankroll_(curated, settledBankroll, pendingTotal, pendingTickets, todayTickets) {
+  if (!curated || !curated.plays || curated.plays.length === 0) return [];
+  const plays = curated.plays;
+  const raw = String(curated.raw || "");
+  const brMatch = raw.match(/Bankroll:\s*\$(\d+(?:\.\d{1,2})?)/i);
+  const feedBr = brMatch ? parseFloat(brMatch[1]) : settledBankroll;
+  const availCash = round2_(Math.max(0.0, settledBankroll - pendingTotal));
+
+  const winCounts = {};
+  for (let i = 0; i < plays.length; i++) {
+    const p = plays[i];
+    const isPass = (p.title || "").indexOf("⛔") !== -1 || /\bPASS\b/.test(p.title || "");
+    if (!isPass && p.game_time) {
+      winCounts[p.game_time] = (winCounts[p.game_time] || 0) + 1;
+    }
+  }
+
+  const adjustments = [];
+  for (let i = 0; i < plays.length; i++) {
+    const p = plays[i];
+    const title = String(p.title || "");
+    const isPass = title.indexOf("⛔") !== -1 || /\bPASS\b/.test(title);
+    if (isPass) {
+      p.status = "pass";
+      continue;
+    }
+
+    const core = extractSelectionCore_(p.selection || title);
+    const matchPend = (core && core.length >= 3)
+      ? (pendingTickets || []).find(t => String(t.selections || "").toLowerCase().indexOf(core) !== -1)
+      : null;
+    const matchSettled = (!matchPend && core && core.length >= 3)
+      ? (todayTickets || []).find(t => String(t.selections || "").toLowerCase().indexOf(core) !== -1)
+      : null;
+
+    let wagerPct = null;
+    const pctMatch = title.match(/(\d{1,2}(?:\.\d+)?)\s*%\s*(?:of\s+(?:Resulting\s+)?)?(?:BR|Bankroll)/i);
+    if (pctMatch) {
+      wagerPct = parseFloat(pctMatch[1]);
+    } else if (p.confidence_pct !== null && p.confidence_pct !== undefined) {
+      const cp = Number(p.confidence_pct);
+      const dual = (winCounts[p.game_time] || 1) >= 2;
+      if (cp >= 88) wagerPct = dual ? 35 : 50;
+      else if (cp >= 78) wagerPct = dual ? 25 : 35;
+      else if (cp >= 68) wagerPct = dual ? 18 : 20;
+    } else if (feedBr > 0 && p.stake > 0) {
+      wagerPct = round1_((p.stake / feedBr) * 100.0);
+    }
+    if (wagerPct) p.wager_pct = wagerPct;
+
+    if (matchPend) {
+      p.status = "pending";
+      p.pending_bet_id = matchPend.bet_id;
+      p.stake = round2_(matchPend.stake);
+      if (wagerPct && settledBankroll > 0) {
+        p.recalculated_stake = round2_(settledBankroll >= 2.0 ? Math.max(2.0, settledBankroll * (wagerPct / 100.0)) : settledBankroll);
+      }
+      continue;
+    }
+    if (matchSettled) {
+      p.status = "settled";
+      p.settled_bet_id = matchSettled.bet_id;
+      p.settled_result = matchSettled.result;
+      p.settled_pl = round2_(matchSettled.net_pl);
+      continue;
+    }
+
+    p.status = "remaining";
+    if (!wagerPct || wagerPct <= 0 || settledBankroll <= 0) continue;
+
+    const oldStake = round2_(p.stake || 0);
+    const newStake = round2_(settledBankroll >= 2.0 ? Math.max(2.0, settledBankroll * (wagerPct / 100.0)) : settledBankroll);
+    p.stake = newStake;
+    if (oldStake > 0 && Math.abs(newStake - oldStake) >= 0.01) {
+      p.original_stake = oldStake;
+      p.stake_adjusted = true;
+    } else {
+      p.stake_adjusted = false;
+    }
+
+    // Replace the last $XX.XX in the play title with the recalculated wager amount
+    p.title = title.replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, "$" + newStake.toFixed(2));
+    adjustments.push({
+      selection: p.selection || title.split("—")[0].trim(),
+      wager_pct: wagerPct,
+      old_stake: oldStake,
+      new_stake: newStake,
+      changed: Math.abs(newStake - oldStake) >= 0.01,
+    });
+  }
+
+  if (raw) {
+    let updatedRaw = raw.replace(
+      /Bankroll:\s*\$\d+(?:\.\d{1,2})?\s*\|\s*Pending:\s*\$\d+(?:\.\d{1,2})?\s*\|\s*Available:\s*\$\d+(?:\.\d{1,2})?/i,
+      "Bankroll: $" + settledBankroll.toFixed(2) + " | Pending: $" + pendingTotal.toFixed(2) + " | Available: $" + availCash.toFixed(2)
+    );
+    const rawLines = updatedRaw.split(/\r?\n/);
+    let playIdx = 0;
+    for (let l = 0; l < rawLines.length; l++) {
+      if (/^\s*\d+\.\s+/.test(rawLines[l]) && playIdx < plays.length) {
+        const pl = plays[playIdx++];
+        if (pl.status === "remaining" && pl.stake > 0) {
+          rawLines[l] = rawLines[l].replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, "$" + pl.stake.toFixed(2));
+        }
+      }
+    }
+    curated.raw = rawLines.join("\n");
+  }
+  curated.adjustments = adjustments;
+  return adjustments;
+}
+
+function recalculateCuratorFeedInSheet_(ss, dash) {
+  try {
+    const feedWs = ss.getSheetByName(FEED_SHEET_NAME);
+    if (!feedWs || !dash) return [];
+    const curated = getLatestCuratedPlays_(feedWs, dash.today);
+    if (!curated.rowIndex || !curated.raw) return [];
+    const beforeRaw = curated.raw;
+    const adjustments = adjustCuratedPlaysForBankroll_(
+      curated,
+      dash.bankroll,
+      dash.pending_total,
+      dash.pending_tickets,
+      dash.today_stats ? dash.today_stats.tickets : []
+    );
+    if (curated.raw && curated.raw !== beforeRaw) {
+      feedWs.getRange("L" + curated.rowIndex).setValue(curated.raw.slice(0, 4500));
+      SpreadsheetApp.flush();
+    }
+    return adjustments;
+  } catch (e) {
+    return [];
+  }
 }
 
 function parseCuratedPlaysText_(text) {
@@ -516,12 +707,15 @@ function handleCashoutBetApi_(body) {
     });
 
     SpreadsheetApp.flush();
+    let dash = buildDashboardData_();
+    recalculateCuratorFeedInSheet_(ss, dash);
+    dash = buildDashboardData_();
 
     if (res.notes.length > 0 && body.notify_telegram !== false) {
       sendTelegramReceipt_(trackerWs, res.notes, "🔄 *Bet Updated via Live Dashboard:*");
     }
 
-    return { ok: true, notes: res.notes, dashboard: buildDashboardData_() };
+    return { ok: true, notes: res.notes, dashboard: dash };
   } finally {
     lock.releaseLock();
   }
@@ -550,12 +744,15 @@ function handleEditBetApi_(body) {
     });
 
     SpreadsheetApp.flush();
+    let dash = buildDashboardData_();
+    recalculateCuratorFeedInSheet_(ss, dash);
+    dash = buildDashboardData_();
 
     if (res.notes.length > 0 && body.notify_telegram !== false) {
       sendTelegramReceipt_(trackerWs, res.notes, "✏️ *Bet Edited via Live Dashboard:*");
     }
 
-    return { ok: true, notes: res.notes, dashboard: buildDashboardData_() };
+    return { ok: true, notes: res.notes, dashboard: dash };
   } finally {
     lock.releaseLock();
   }
@@ -1386,12 +1583,23 @@ function cleanupExpiredOneShotTriggers_() {
 
 function estimateFinishDate_(bet) {
   const sel = String(bet.selections || "");
-  const m = sel.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-  if (!m) return null;
+  let m = sel.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  let ampm = m ? m[3].toUpperCase() : "";
+  if (!m) {
+    m = sel.match(/Window\s*\d+\s*:\s*(\d{1,2}):(\d{2})/i);
+    if (!m) return null;
+  }
 
   let hour = parseInt(m[1], 10);
   const minute = parseInt(m[2], 10);
-  const ampm = m[3].toUpperCase();
+  const sp = String(bet.sport || "").toUpperCase();
+  if (!ampm) {
+    if ((sp === "EPL" || sp === "UCL" || sp === "SOCCER") && hour >= 7 && hour <= 11) {
+      ampm = "AM";
+    } else {
+      ampm = "PM";
+    }
+  }
   if (ampm === "PM" && hour !== 12) hour += 12;
   if (ampm === "AM" && hour === 12) hour = 0;
 
@@ -1407,7 +1615,6 @@ function estimateFinishDate_(bet) {
   const startDate = new Date(dateStr + "T" + hh + ":" + mm + ":00" + tzOffset);
   if (isNaN(startDate.getTime())) return null;
 
-  const sp = String(bet.sport || "").toUpperCase();
   let durationMin = 195; // default 3h 15m
   if (sp === "EPL" || sp === "UCL" || sp === "SOCCER") durationMin = 135; // 2h 15m
   else if (sp === "NBA" || sp === "NHL" || sp === "NCAAM" || sp === "CBB" || sp === "ATP" || sp === "WTA") durationMin = 165; // 2h 45m
@@ -1444,72 +1651,143 @@ function scheduleFinishTriggers_(bets) {
 }
 
 /**
+ * Dashboard API action: triggered when user taps "Settle Refresh" in the web app.
+ * Grades any completed ESPN games for pending bets, recalculates remaining bets' wager amounts
+ * for the day when the bankroll changes, and optionally dispatches daily_curator.yml on GitHub.
+ */
+function handleSettleBetsApi_(body) {
+  body = body || {};
+  return runAutoSettlementCore_({
+    forceRecalc: true,
+    notifyTelegram: body.notify_telegram !== false,
+    stage: body.stage || "settler",
+  });
+}
+
+/**
  * Trigger handler: checks ESPN only for pending bets' sports/dates.
  * Grades immediately with Gemini when a pending game goes FINAL, updates the sheet,
- * sends a Telegram receipt, and optionally dispatches daily_curator.yml if GITHUB_PAT is set.
+ * recalculates remaining bets for the day if bankroll changed, sends a Telegram receipt,
+ * and optionally dispatches daily_curator.yml if GITHUB_PAT is set.
  */
 function checkAndAutoSettle() {
+  runAutoSettlementCore_({
+    forceRecalc: false,
+    notifyTelegram: true,
+    stage: "settler",
+  });
+}
+
+function runAutoSettlementCore_(opts) {
+  opts = opts || {};
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(15000)) return;
+  if (!lock.tryLock(opts.forceRecalc ? 20000 : 15000)) {
+    if (opts.forceRecalc) {
+      return { ok: false, error: "Another settlement or sync operation is currently in progress. Try again in a moment." };
+    }
+    return null;
+  }
   try {
     cleanupExpiredOneShotTriggers_();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const ws = ss.getSheetByName(TRACKER_SHEET_NAME) || ss.getSheets()[0];
+    const beforeDash = buildDashboardData_();
+    const prevBankroll = beforeDash.bankroll;
     const state = getSheetState_(ws);
-    if (state.pending.length === 0) return;
 
-    const completedGames = fetchCompletedEspnGames_(state.pending);
-    if (completedGames.length === 0) return;
-
-    const settlements = gradePendingBetsWithGemini_(state.pending, completedGames);
-    if (!settlements || settlements.length === 0) return;
-
-    const freshState = getSheetState_(ws);
     let updatedCount = 0;
     let wins = 0;
     let losses = 0;
     let pushes = 0;
     const settledLines = [];
 
-    for (let i = 0; i < settlements.length; i++) {
-      const s = settlements[i];
-      const betId = String(s.bet_id || "").trim();
-      const newRes = String(s.result || "Pending").trim();
-      if (newRes !== "Won" && newRes !== "Lost" && newRes !== "Push") continue;
+    if (state.pending.length > 0) {
+      const completedGames = fetchCompletedEspnGames_(state.pending);
+      if (completedGames.length > 0) {
+        const settlements = gradePendingBetsWithGemini_(state.pending, completedGames);
+        if (settlements && settlements.length > 0) {
+          const freshState = getSheetState_(ws);
+          for (let i = 0; i < settlements.length; i++) {
+            const s = settlements[i];
+            const betId = String(s.bet_id || "").trim();
+            const newRes = String(s.result || "Pending").trim();
+            if (newRes !== "Won" && newRes !== "Lost" && newRes !== "Push") continue;
 
-      const rIdx = betId ? findRowByBetId_(freshState.allVals, freshState.headerIdx, betId) : parseInt(s.row_index, 10);
-      if (!rIdx || rIdx <= freshState.headerIdx + 1) continue;
+            const rIdx = betId ? findRowByBetId_(freshState.allVals, freshState.headerIdx, betId) : parseInt(s.row_index, 10);
+            if (!rIdx || rIdx <= freshState.headerIdx + 1) continue;
 
-      // Double-check still Pending so we never re-grade
-      const curStatus = String(freshState.allVals[rIdx - 1][10] || "").trim().toLowerCase();
-      if (curStatus !== "pending") continue;
+            // Double-check still Pending so we never re-grade
+            const curStatus = String(freshState.allVals[rIdx - 1][10] || "").trim().toLowerCase();
+            if (curStatus !== "pending") continue;
 
-      ws.getRange("K" + rIdx).setValue(newRes);
-      const note = String(s.verification_note || "").trim();
-      if (note) {
-        const oldNote = String(freshState.allVals[rIdx - 1][14] || "").trim();
-        ws.getRange("O" + rIdx).setValue((oldNote ? oldNote + " | " : "") + "[Settled: " + note + "]");
+            ws.getRange("K" + rIdx).setValue(newRes);
+            const note = String(s.verification_note || "").trim();
+            if (note) {
+              const oldNote = String(freshState.allVals[rIdx - 1][14] || "").trim();
+              ws.getRange("O" + rIdx).setValue((oldNote ? oldNote + " | " : "") + "[Settled: " + note + "]");
+            }
+            const tag = String(s.edge_tag || "").trim();
+            if (tag && ALLOWED_SETTLER_TAGS_.indexOf(tag) !== -1) {
+              ws.getRange("P" + rIdx).setValue(tag);
+            }
+
+            if (newRes === "Won") wins++;
+            else if (newRes === "Lost") losses++;
+            else pushes++;
+
+            const icon = newRes === "Won" ? "🟢" : (newRes === "Lost" ? "🔴" : "⚪");
+            settledLines.push(icon + " *" + betId + "* (" + newRes + ") — " + note);
+            updatedCount++;
+          }
+        }
       }
-      const tag = String(s.edge_tag || "").trim();
-      if (tag && ALLOWED_SETTLER_TAGS_.indexOf(tag) !== -1) {
-        ws.getRange("P" + rIdx).setValue(tag);
-      }
-
-      if (newRes === "Won") wins++;
-      else if (newRes === "Lost") losses++;
-      else pushes++;
-
-      const icon = newRes === "Won" ? "🟢" : (newRes === "Lost" ? "🔴" : "⚪");
-      settledLines.push(icon + " *" + betId + "* (" + newRes + ") — " + note);
-      updatedCount++;
     }
 
     if (updatedCount > 0) {
       SpreadsheetApp.flush();
-      const header = "✅ *Auto-Settlement Complete* (" + wins + "W - " + losses + "L" + (pushes ? " - " + pushes + "P" : "") + ")";
-      sendTelegramReceipt_(ws, settledLines, header);
-      triggerGithubRefresh_();
     }
+
+    let afterDash = buildDashboardData_();
+    const bankrollChanged = Math.abs(afterDash.bankroll - prevBankroll) >= 0.01;
+    let adjustedPlays = [];
+
+    if (updatedCount > 0 || bankrollChanged || opts.forceRecalc) {
+      adjustedPlays = recalculateCuratorFeedInSheet_(ss, afterDash);
+      afterDash = buildDashboardData_();
+    }
+
+    let ghTriggered = false;
+    if (updatedCount > 0) {
+      const receiptLines = settledLines.slice();
+      if (adjustedPlays && adjustedPlays.length > 0) {
+        receiptLines.push("");
+        receiptLines.push("🔄 *Adjusted Wagers for Remaining Bets Today ($" + afterDash.bankroll.toFixed(2) + " BR):*");
+        for (let a = 0; a < adjustedPlays.length; a++) {
+          const ap = adjustedPlays[a];
+          const wasTxt = (ap.changed && ap.old_stake > 0) ? (" • was $" + ap.old_stake.toFixed(2)) : "";
+          receiptLines.push("• *" + ap.selection + "* — *$" + ap.new_stake.toFixed(2) + "* (" + ap.wager_pct + "% BR" + wasTxt + ")");
+        }
+      }
+      if (opts.notifyTelegram !== false) {
+        const header = "✅ *Auto-Settlement Complete* (" + wins + "W - " + losses + "L" + (pushes ? " - " + pushes + "P" : "") + ")";
+        sendTelegramReceipt_(ws, receiptLines, header);
+      }
+      ghTriggered = triggerGithubRefresh_(opts.stage || "settler");
+    } else if (opts.forceRecalc) {
+      ghTriggered = triggerGithubRefresh_(opts.stage || "settler");
+    }
+
+    return {
+      ok: true,
+      settled_count: updatedCount,
+      settled_lines: settledLines,
+      prev_bankroll: prevBankroll,
+      new_bankroll: afterDash.bankroll,
+      bankroll_changed: bankrollChanged,
+      adjusted_plays: adjustedPlays,
+      github_triggered: ghTriggered,
+      dashboard: afterDash,
+    };
   } finally {
     lock.releaseLock();
   }
@@ -1688,12 +1966,12 @@ function gradePendingBetsWithGemini_(pendingBets, completedGames) {
   return [];
 }
 
-function triggerGithubRefresh_() {
+function triggerGithubRefresh_(stage) {
   const pat = getProp_("GITHUB_PAT");
-  if (!pat) return;
+  if (!pat) return false;
   const repo = getProp_("GITHUB_REPO") || "iannuzzi8100/betting-curator";
   try {
-    UrlFetchApp.fetch("https://api.github.com/repos/" + repo + "/actions/workflows/daily_curator.yml/dispatches", {
+    const resp = UrlFetchApp.fetch("https://api.github.com/repos/" + repo + "/actions/workflows/daily_curator.yml/dispatches", {
       method: "post",
       contentType: "application/json",
       muteHttpExceptions: true,
@@ -1701,9 +1979,13 @@ function triggerGithubRefresh_() {
         Authorization: "Bearer " + pat,
         Accept: "application/vnd.github+json",
       },
-      payload: JSON.stringify({ ref: "main", inputs: { stage: "all" } }),
+      payload: JSON.stringify({ ref: "main", inputs: { stage: stage || "settler" } }),
     });
-  } catch (e) {}
+    const code = resp.getResponseCode();
+    return code >= 200 && code < 300;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ============================================================================

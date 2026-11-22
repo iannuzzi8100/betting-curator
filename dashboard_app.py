@@ -103,6 +103,7 @@ def fetch_dashboard_data():
     now_est = datetime.datetime.now(est_tz)
     today_str = now_est.strftime("%Y-%m-%d")
     yesterday_str = (now_est - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    week_start_str = (now_est - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
 
     sh = get_workbook()
     tracker_ws = sh.worksheets()[0]
@@ -130,6 +131,13 @@ def fetch_dashboard_data():
     yest_pl = 0.0
     yest_tickets = []
 
+    week_wins = 0
+    week_losses = 0
+    week_pushes = 0
+    week_pl = 0.0
+    week_tickets = []
+
+    settled_tickets = []
     pending_tickets = []
     pending_total = 0.0
     equity_curve = [{"label": "START", "bankroll": 100.0}]
@@ -187,7 +195,7 @@ def fetch_dashboard_data():
             overall_pushes += 1
             equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
 
-    # Newest-first order for Pending, Today, and Yesterday ticket lists
+    # Newest-first order for Pending, Today, Yesterday, This Week, and full Settled history lists
     for e in sorted(bet_entries, key=lambda x: x["bet_num"], reverse=True):
         clv_match = re.search(r"\[CLV:\s*([+-]?\d+(?:\.\d+)?)%", e["notes"])
         clv_val = float(clv_match.group(1)) if clv_match else None
@@ -207,46 +215,56 @@ def fetch_dashboard_data():
                 "payout": round(e["payout"], 2),
                 "clv": clv_val,
             })
-
-        if e["b_date"] == today_str and res_l in ("won", "lost", "push"):
-            if res_l == "won":
-                today_wins += 1
-            elif res_l == "lost":
-                today_losses += 1
-            elif res_l == "push":
-                today_pushes += 1
-            today_pl += e["net_pl"]
-            today_tickets.append({
+        elif res_l in ("won", "lost", "push"):
+            t_obj = {
                 "bet_id": e["bet_id"],
+                "date": e["b_date"],
                 "sport": e["sport"],
+                "bet_type": e["b_type"],
                 "selections": e["sel"],
                 "odds": e["odds"],
                 "stake": round(e["stake"], 2),
                 "result": e["res"],
                 "net_pl": round(e["net_pl"], 2),
-            })
+            }
+            settled_tickets.append(t_obj)
 
-        if e["b_date"] == yesterday_str and res_l in ("won", "lost", "push"):
-            if res_l == "won":
-                yest_wins += 1
-            elif res_l == "lost":
-                yest_losses += 1
-            elif res_l == "push":
-                yest_pushes += 1
-            yest_pl += e["net_pl"]
-            yest_tickets.append({
-                "bet_id": e["bet_id"],
-                "sport": e["sport"],
-                "selections": e["sel"],
-                "odds": e["odds"],
-                "stake": round(e["stake"], 2),
-                "result": e["res"],
-                "net_pl": round(e["net_pl"], 2),
-            })
+            if week_start_str <= e["b_date"] <= today_str:
+                if res_l == "won":
+                    week_wins += 1
+                elif res_l == "lost":
+                    week_losses += 1
+                elif res_l == "push":
+                    week_pushes += 1
+                week_pl += e["net_pl"]
+                week_tickets.append(t_obj)
+
+            if e["b_date"] == today_str:
+                if res_l == "won":
+                    today_wins += 1
+                elif res_l == "lost":
+                    today_losses += 1
+                elif res_l == "push":
+                    today_pushes += 1
+                today_pl += e["net_pl"]
+                today_tickets.append(t_obj)
+
+            if e["b_date"] == yesterday_str:
+                if res_l == "won":
+                    yest_wins += 1
+                elif res_l == "lost":
+                    yest_losses += 1
+                elif res_l == "push":
+                    yest_pushes += 1
+                yest_pl += e["net_pl"]
+                yest_tickets.append(t_obj)
 
     overall_total = overall_wins + overall_losses
     overall_win_pct = round((overall_wins / overall_total) * 100.0, 1) if overall_total > 0 else 0.0
     overall_roi = round((total_net_pl / total_staked_settled) * 100.0, 1) if total_staked_settled > 0 else 0.0
+
+    week_total = week_wins + week_losses
+    week_win_pct = round((week_wins / week_total) * 100.0, 1) if week_total > 0 else 0.0
 
     today_total = today_wins + today_losses
     today_win_pct = round((today_wins / today_total) * 100.0, 1) if today_total > 0 else 0.0
@@ -312,10 +330,20 @@ def fetch_dashboard_data():
         if cur_play:
             curated_plays.append(cur_play)
 
+    latest_curated_text = _adjust_curated_plays_for_bankroll(
+        curated_plays,
+        latest_curated_text,
+        round(settled_bankroll, 2),
+        round(pending_total, 2),
+        pending_tickets,
+        today_tickets,
+    )
+
     return {
         "updated_at": now_est.strftime("%Y-%m-%d %I:%M %p EST"),
         "today": today_str,
         "yesterday": yesterday_str,
+        "week_start": week_start_str,
         "bankroll": round(settled_bankroll, 2),
         "pending_total": round(pending_total, 2),
         "available_cash": round(max(0.0, settled_bankroll - pending_total), 2),
@@ -328,6 +356,16 @@ def fetch_dashboard_data():
             "roi": overall_roi,
             "avg_clv": round(sum(clv_values) / len(clv_values), 2) if clv_values else None,
             "clv_count": len(clv_values),
+        },
+        "week_stats": {
+            "start_date": week_start_str,
+            "end_date": today_str,
+            "wins": week_wins,
+            "losses": week_losses,
+            "pushes": week_pushes,
+            "win_pct": week_win_pct,
+            "net_pl": round(week_pl, 2),
+            "tickets": week_tickets,
         },
         "today_stats": {
             "date": today_str,
@@ -347,12 +385,143 @@ def fetch_dashboard_data():
             "net_pl": round(yest_pl, 2),
             "tickets": yest_tickets,
         },
+        "settled_tickets": settled_tickets,
         "pending_tickets": pending_tickets,
         "curated_date": latest_curated_date,
         "curated_plays": curated_plays,
         "curated_raw": latest_curated_text,
         "equity_curve": equity_curve,
     }
+
+
+def _extract_selection_core(text):
+    s = str(text or "").strip()
+    s = re.sub(r"^\d+\.\s*", "", s).replace("*", "").strip()
+    s = re.sub(r"^\[[^\]]+\]\s*", "", s).strip()
+    core = re.split(
+        r"(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)",
+        s,
+        flags=re.I,
+    )[0]
+    return re.sub(r"[^a-z0-9\s]", "", core.lower()).strip()
+
+
+def _adjust_curated_plays_for_bankroll(
+    curated_plays, curated_raw, settled_bankroll, pending_total, pending_tickets, today_tickets
+):
+    """
+    Deterministically recalculates the wager amounts for remaining unplaced curated bets
+    for the day whenever a bet settles and the settled bankroll changes.
+    """
+    if not curated_plays:
+        return curated_raw
+
+    m_br = re.search(r"Bankroll:\s*\$(\d+(?:\.\d{1,2})?)", str(curated_raw or ""))
+    feed_br = float(m_br.group(1)) if m_br else settled_bankroll
+    avail_cash = round(max(0.0, settled_bankroll - pending_total), 2)
+
+    win_counts = {}
+    for p in curated_plays:
+        title = str(p.get("title", ""))
+        is_pass = ("⛔" in title) or bool(re.search(r"\bPASS\b", title))
+        gt = p.get("game_time", "")
+        if not is_pass and gt:
+            win_counts[gt] = win_counts.get(gt, 0) + 1
+
+    for p in curated_plays:
+        title = str(p.get("title", ""))
+        is_pass = ("⛔" in title) or bool(re.search(r"\bPASS\b", title))
+        if is_pass:
+            p["status"] = "pass"
+            continue
+
+        core = _extract_selection_core(p.get("selection") or title)
+        match_pend = (
+            next((t for t in (pending_tickets or []) if core and len(core) >= 3 and core in str(t.get("selections", "")).lower()), None)
+            if core
+            else None
+        )
+        match_settled = (
+            next((t for t in (today_tickets or []) if core and len(core) >= 3 and core in str(t.get("selections", "")).lower()), None)
+            if (core and not match_pend)
+            else None
+        )
+
+        wager_pct = None
+        m_pct = re.search(r"(\d{1,2}(?:\.\d+)?)\s*%\s*(?:of\s+(?:Resulting\s+)?)?(?:BR|Bankroll)", title, flags=re.I)
+        if m_pct:
+            wager_pct = float(m_pct.group(1))
+        elif p.get("confidence_pct") is not None:
+            cp = int(p["confidence_pct"])
+            dual = win_counts.get(p.get("game_time", ""), 1) >= 2
+            if cp >= 88:
+                wager_pct = 35.0 if dual else 50.0
+            elif cp >= 78:
+                wager_pct = 25.0 if dual else 35.0
+            elif cp >= 68:
+                wager_pct = 18.0 if dual else 20.0
+        elif feed_br > 0 and float(p.get("stake") or 0) > 0:
+            wager_pct = round((float(p["stake"]) / feed_br) * 100.0, 1)
+
+        if wager_pct is not None:
+            p["wager_pct"] = int(wager_pct) if float(wager_pct).is_integer() else wager_pct
+
+        if match_pend:
+            p["status"] = "pending"
+            p["pending_bet_id"] = match_pend.get("bet_id")
+            p["stake"] = round(float(match_pend.get("stake") or p.get("stake") or 0.0), 2)
+            if wager_pct and settled_bankroll > 0:
+                p["recalculated_stake"] = round(
+                    max(2.00, settled_bankroll * (wager_pct / 100.0)) if settled_bankroll >= 2.0 else settled_bankroll,
+                    2,
+                )
+            continue
+
+        if match_settled:
+            p["status"] = "settled"
+            p["settled_bet_id"] = match_settled.get("bet_id")
+            p["settled_result"] = match_settled.get("result")
+            p["settled_pl"] = round(float(match_settled.get("net_pl") or 0.0), 2)
+            continue
+
+        p["status"] = "remaining"
+        if not wager_pct or wager_pct <= 0 or settled_bankroll <= 0:
+            continue
+
+        old_stake = round(float(p.get("stake") or 0.0), 2)
+        new_stake = round(max(2.00, settled_bankroll * (wager_pct / 100.0)) if settled_bankroll >= 2.0 else settled_bankroll, 2)
+        p["stake"] = new_stake
+        if old_stake > 0 and abs(new_stake - old_stake) >= 0.01:
+            p["original_stake"] = old_stake
+            p["stake_adjusted"] = True
+        else:
+            p["stake_adjusted"] = False
+
+        m_stakes = list(re.finditer(r"\$(\d+(?:\.\d{1,2})?)", title))
+        if m_stakes:
+            last_m = m_stakes[-1]
+            p["title"] = title[: last_m.start()] + f"${new_stake:.2f}" + title[last_m.end() :]
+
+    if curated_raw:
+        updated_raw = re.sub(
+            r"Bankroll:\s*\$\d+(?:\.\d{1,2})?\s*\|\s*Pending:\s*\$\d+(?:\.\d{1,2})?\s*\|\s*Available:\s*\$\d+(?:\.\d{1,2})?",
+            f"Bankroll: ${settled_bankroll:.2f} | Pending: ${pending_total:.2f} | Available: ${avail_cash:.2f}",
+            curated_raw,
+        )
+        raw_lines = updated_raw.splitlines()
+        play_idx = 0
+        for idx, ln in enumerate(raw_lines):
+            if re.match(r"^\s*\d+\.\s+", ln) and play_idx < len(curated_plays):
+                pl = curated_plays[play_idx]
+                play_idx += 1
+                if pl.get("status") == "remaining" and float(pl.get("stake") or 0) > 0:
+                    m_st = list(re.finditer(r"\$(\d+(?:\.\d{1,2})?)", ln))
+                    if m_st:
+                        lm = m_st[-1]
+                        raw_lines[idx] = ln[: lm.start()] + f"${float(pl['stake']):.2f}" + ln[lm.end() :]
+        curated_raw = "\n".join(raw_lines)
+
+    return curated_raw
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -409,6 +578,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       transition: opacity 0.2s;
     }
     .refresh-btn:hover { opacity: 0.9; }
+    .settle-btn {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 9px 14px;
+      font-weight: 700;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.12s;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25);
+    }
+    .settle-btn:hover { opacity: 0.92; }
+    .settle-btn:active { transform: scale(0.98); }
+    .settle-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .btn-secondary {
       background: rgba(255,255,255,0.06);
       color: var(--text);
@@ -653,6 +837,58 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       font-weight: 700;
       margin-left: auto;
     }
+    .wl-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .wl-cell {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 11px 13px;
+    }
+    .wl-cell-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .wl-cell-val {
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .wl-cell-sub {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 4px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .day-group {
+      border: 1px solid var(--card-border);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.015);
+      padding: 11px 12px;
+      margin-bottom: 12px;
+    }
+    .day-group-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-bottom: 8px;
+      margin-bottom: 9px;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
     .toast.show { display: block; }
   </style>
 </head>
@@ -668,37 +904,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       <div class="header-actions">
         <button class="btn-secondary" onclick="openSettingsModal()">⚙️ Live Sync</button>
+        <button class="settle-btn" id="settle-btn" onclick="triggerSettleWorkflow()">🏁 Settle Refresh</button>
         <button class="refresh-btn" id="refresh-btn" onclick="loadData()">↻ Refresh Live</button>
       </div>
     </header>
 
-    <div class="grid-3">
+    <div class="stack">
+      <!-- 1. BANKROLL AT THE TOP -->
       <div class="card">
-        <div class="card-label">Overall Win / Loss Ratio</div>
-        <div class="big-num" id="overall-ratio">--</div>
-        <div class="sub-row" id="overall-sub"></div>
-      </div>
-
-      <button type="button" class="card card-btn" onclick="openGradedModal('today')">
-        <div class="card-label" id="today-label">Today's Win / Loss</div>
-        <div class="big-num" id="today-ratio">--</div>
-        <div class="sub-row" id="today-sub"></div>
-      </button>
-
-      <button type="button" class="card card-btn" onclick="openGradedModal('yesterday')">
-        <div class="card-label" id="yest-label">Yesterday's Win / Loss Ratio</div>
-        <div class="big-num" id="yest-ratio">--</div>
-        <div class="sub-row" id="yest-sub"></div>
-      </button>
-
-      <div class="card">
-        <div class="card-label">Live Bankroll &amp; Exposure</div>
+        <div class="card-label">💰 Live Bankroll &amp; Exposure</div>
         <div class="big-num" id="bankroll-val">--</div>
         <div class="sub-row" id="bankroll-sub"></div>
       </div>
-    </div>
 
-    <div class="stack">
+      <!-- 2. ACTIVE PENDING TICKETS -->
+      <div class="card">
+        <div class="section-title">
+          <span>⏳ Active Pending Tickets</span>
+          <div class="section-right">
+            <span class="pill pill-amber" id="pending-count">0 Active</span>
+            <button class="btn-mini" id="settle-mini-btn" onclick="triggerSettleWorkflow()" style="border-color:rgba(16,185,129,0.45);color:#34d399;">🏁 Settle Refresh</button>
+            <button class="btn-green" onclick="openLogModal()">+ Log Bet</button>
+          </div>
+        </div>
+        <div class="bet-list" id="pending-list"></div>
+      </div>
+
+      <!-- 3. TODAY'S CURATED PICKS -->
       <div class="card">
         <div class="section-title">
           <span>🔥 Today's Curated Bets (<span id="curated-date">--</span>)</span>
@@ -707,17 +939,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="bet-list" id="curated-list"></div>
       </div>
 
-      <div class="card">
-        <div class="section-title">
-          <span>⏳ Active Pending Tickets</span>
-          <div class="section-right">
-            <span class="pill pill-amber" id="pending-count">0 Active</span>
-            <button class="btn-green" onclick="openLogModal()">+ Log Bet</button>
+      <!-- 4. COMBINED WIN-LOSS RECORDS BUTTON (OVERALL, THIS WEEK, YESTERDAY, TODAY) -->
+      <button type="button" class="card card-btn" onclick="openGradedModal('all')">
+        <div class="section-title" style="margin-bottom:4px;">
+          <span>📊 Win / Loss Records &amp; Bet History</span>
+          <span class="card-tap-hint" id="wl-tap-hint">Tap for Bet History by Day &rarr;</span>
+        </div>
+        <div class="wl-grid">
+          <div class="wl-cell">
+            <div class="wl-cell-label">Overall</div>
+            <div class="wl-cell-val" id="overall-ratio">--</div>
+            <div class="wl-cell-sub" id="overall-sub"></div>
+          </div>
+          <div class="wl-cell">
+            <div class="wl-cell-label" id="week-label">This Week</div>
+            <div class="wl-cell-val" id="week-ratio">--</div>
+            <div class="wl-cell-sub" id="week-sub"></div>
+          </div>
+          <div class="wl-cell">
+            <div class="wl-cell-label" id="yest-label">Yesterday</div>
+            <div class="wl-cell-val" id="yest-ratio">--</div>
+            <div class="wl-cell-sub" id="yest-sub"></div>
+          </div>
+          <div class="wl-cell">
+            <div class="wl-cell-label" id="today-label">Today</div>
+            <div class="wl-cell-val" id="today-ratio">--</div>
+            <div class="wl-cell-sub" id="today-sub"></div>
           </div>
         </div>
-        <div class="bet-list" id="pending-list"></div>
-      </div>
+      </button>
 
+      <!-- 5. BANKROLL EQUITY CURVE GRAPH -->
       <div class="card">
         <div class="section-title">
           <span>📈 Bankroll Equity Curve ($100 Start)</span>
@@ -873,12 +1125,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="modal-backdrop" id="settings-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3>⚙️ Instant Live Sheet Sync</h3>
+        <h3>⚙️ Instant Live Sheet &amp; Settle Sync</h3>
         <button class="close-btn" onclick="closeModal('settings-modal')">&times;</button>
       </div>
       <div class="form-grid">
         <p class="help-text">
-          Connect your deployed Google Apps Script Web App (see <code>apps_script/SETUP.md</code>) for instant 1-tap bet logging, direct sheet refresh, and screenshot OCR. Stored only on this device.
+          Connect your deployed Google Apps Script Web App (see <code>apps_script/SETUP.md</code>) for instant 1-tap bet logging, direct sheet settlement, and screenshot OCR — or add a GitHub PAT to dispatch the GitHub Actions Settle Workflow directly. Stored only on this device.
         </p>
         <div class="field">
           <label>Apps Script Web App URL (/exec)</label>
@@ -887,6 +1139,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="field">
           <label>Dashboard PIN</label>
           <input id="cfg-pin" type="password" placeholder="Your DASHBOARD_PIN secret" />
+        </div>
+        <div class="field">
+          <label>GitHub Token (Optional — Triggers Settle Workflow)</label>
+          <input id="cfg-gh-pat" type="password" placeholder="github_pat_... or ghp_... (Actions write scope)" />
         </div>
         <div class="modal-footer">
           <button class="btn-danger" onclick="clearLiveConfig()">Disconnect</button>
@@ -897,19 +1153,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- MODAL 4: GRADED TICKETS (TODAY / YESTERDAY) -->
+  <!-- MODAL 4: BET HISTORY & GRADED TICKETS BY DAY -->
   <div class="modal-backdrop" id="graded-modal" onclick="if(event.target===this) closeModal('graded-modal')">
-    <div class="modal">
+    <div class="modal" style="max-width:560px;">
       <div class="modal-header">
-        <h3 id="graded-modal-title">🏁 Graded Tickets</h3>
+        <h3 id="graded-modal-title">📊 Bet History by Day</h3>
         <button class="close-btn" onclick="closeModal('graded-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="graded-tab-today" onclick="openGradedModal('today')">🏁 Today</button>
+        <button class="tab-btn active" id="graded-tab-all" onclick="openGradedModal('all')">📊 Overall</button>
+        <button class="tab-btn" id="graded-tab-week" onclick="openGradedModal('week')">📆 This Week</button>
         <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">📅 Yesterday</button>
+        <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">🏁 Today</button>
       </div>
       <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:12px;"></div>
-      <div class="bet-list" id="graded-modal-list"></div>
+      <div id="graded-modal-list"></div>
       <div class="modal-footer">
         <button class="btn-secondary" onclick="closeModal('graded-modal')">Close</button>
       </div>
@@ -922,6 +1180,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     const STATIC_DATA = __INITIAL_DATA_JSON__;
     const LS_URL_KEY = "bc_live_api_url";
     const LS_PIN_KEY = "bc_live_api_pin";
+    const LS_GH_PAT_KEY = "bc_gh_pat";
+    const GH_REPO = "iannuzzi8100/betting-curator";
     let chartInstance = null;
     let currentData = STATIC_DATA || null;
 
@@ -944,13 +1204,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       el.textContent = msg;
       el.classList.add("show");
       clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => el.classList.remove("show"), ms || 3200);
+      window.__toastTimer = setTimeout(() => el.classList.remove("show"), ms || 3600);
     }
 
     function getLiveConfig() {
       return {
         url: (localStorage.getItem(LS_URL_KEY) || "").trim(),
         pin: (localStorage.getItem(LS_PIN_KEY) || "").trim(),
+        ghPat: (localStorage.getItem(LS_GH_PAT_KEY) || "").trim(),
       };
     }
 
@@ -978,16 +1239,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const cfg = getLiveConfig();
       document.getElementById("cfg-url").value = cfg.url;
       document.getElementById("cfg-pin").value = cfg.pin;
+      const ghEl = document.getElementById("cfg-gh-pat");
+      if (ghEl) ghEl.value = cfg.ghPat;
       openModal("settings-modal");
     }
 
     async function saveLiveConfig() {
       const url = document.getElementById("cfg-url").value.trim();
       const pin = document.getElementById("cfg-pin").value.trim();
-      if (!url || !pin) {
-        showToast("Enter both the Apps Script /exec URL and PIN.");
+      const ghEl = document.getElementById("cfg-gh-pat");
+      const ghPat = ghEl ? ghEl.value.trim() : "";
+
+      if ((!url || !pin) && !ghPat) {
+        showToast("Enter your Apps Script /exec URL + PIN, or a GitHub Token.");
         return;
       }
+
+      if (ghPat) {
+        localStorage.setItem(LS_GH_PAT_KEY, ghPat);
+      } else {
+        localStorage.removeItem(LS_GH_PAT_KEY);
+      }
+
+      if (!url || !pin) {
+        closeModal("settings-modal");
+        showToast("✅ Saved GitHub Token for Settle Workflow dispatch!");
+        return;
+      }
+
       const btn = document.getElementById("cfg-save-btn");
       btn.disabled = true;
       btn.textContent = "Testing...";
@@ -1018,6 +1297,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function clearLiveConfig() {
       localStorage.removeItem(LS_URL_KEY);
       localStorage.removeItem(LS_PIN_KEY);
+      localStorage.removeItem(LS_GH_PAT_KEY);
       updateSyncPill(false);
       closeModal("settings-modal");
       showToast("Disconnected Live Sync (using static snapshot).");
@@ -1038,6 +1318,134 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "API error");
       return j;
+    }
+
+    async function dispatchGithubSettleWorkflow(ghPat) {
+      const r = await fetch(`https://api.github.com/repos/${GH_REPO}/actions/workflows/daily_curator.yml/dispatches`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${ghPat}`,
+          "Accept": "application/vnd.github+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ref: "main", inputs: { stage: "settler" } }),
+      });
+      if (!r.ok) {
+        let errTxt = `GitHub HTTP ${r.status}`;
+        try {
+          const ej = await r.json();
+          if (ej && ej.message) errTxt = ej.message;
+        } catch (_) {}
+        throw new Error(errTxt);
+      }
+      return true;
+    }
+
+    function pollAfterSettleDispatch() {
+      clearInterval(window.__settlePollTimer);
+      const startBr = currentData ? currentData.bankroll : null;
+      const startPendCnt = currentData && currentData.pending_tickets ? currentData.pending_tickets.length : null;
+      const startUpd = currentData ? currentData.updated_at : null;
+      let attempts = 0;
+      window.__settlePollTimer = setInterval(async () => {
+        attempts++;
+        await loadData();
+        if (currentData && (currentData.bankroll !== startBr || (currentData.pending_tickets || []).length !== startPendCnt || currentData.updated_at !== startUpd)) {
+          clearInterval(window.__settlePollTimer);
+          const brChanged = startBr !== null && Math.abs(Number(currentData.bankroll) - Number(startBr)) >= 0.01;
+          showToast(
+            brChanged
+              ? `✅ Settle workflow complete! Bankroll: ${fmtMoney(startBr)} → ${fmtMoney(currentData.bankroll)} (remaining wagers adjusted)`
+              : `✅ Settle workflow complete! Ledger synced (${currentData.updated_at})`,
+            5200
+          );
+        } else if (attempts >= 9) {
+          clearInterval(window.__settlePollTimer);
+        }
+      }, 10000);
+    }
+
+    async function triggerSettleWorkflow() {
+      const btn = document.getElementById("settle-btn");
+      const miniBtn = document.getElementById("settle-mini-btn");
+      const setBusy = (busy) => {
+        if (btn) {
+          btn.disabled = busy;
+          btn.textContent = busy ? "⏳ Settling..." : "🏁 Settle Refresh";
+        }
+        if (miniBtn) {
+          miniBtn.disabled = busy;
+          miniBtn.textContent = busy ? "⏳ Settling..." : "🏁 Settle Refresh";
+        }
+      };
+
+      setBusy(true);
+      try {
+        const cfg = getLiveConfig();
+        const isLocalServer = (window.location.protocol.startsWith("http") && !STATIC_DATA) || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+
+        // 1. Live Google Apps Script settlement + wager recalculation
+        if (cfg.url && cfg.pin) {
+          const res = await postLiveApi({ action: "settle", stage: "settler" });
+          if (res.dashboard) render(res.dashboard);
+
+          // If user also saved a GitHub PAT in browser and Apps Script didn't trigger GitHub, dispatch GitHub workflow too
+          let ghDispatched = Boolean(res.github_triggered);
+          if (!ghDispatched && cfg.ghPat) {
+            try {
+              await dispatchGithubSettleWorkflow(cfg.ghPat);
+              ghDispatched = true;
+            } catch (_) {}
+          }
+
+          const settledCnt = Number(res.settled_count || 0);
+          const adjList = (res.adjusted_plays || []).filter(a => a && a.new_stake > 0);
+          if (settledCnt > 0) {
+            const adjSummary = adjList.length > 0
+              ? ` • Adjusted ${adjList.length} remaining bet${adjList.length === 1 ? "" : "s"} (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`
+              : "";
+            showToast(`✅ Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(res.prev_bankroll)} → ${fmtMoney(res.new_bankroll)}${adjSummary}`, 5500);
+          } else if (adjList.length > 0 && adjList.some(a => a.changed)) {
+            showToast(`🔄 Recalculated remaining wagers for ${fmtMoney(res.new_bankroll)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
+          } else {
+            showToast(`🏁 Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(res.new_bankroll)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
+          }
+          return;
+        }
+
+        // 2. Local Python server mode (/api/settle)
+        if (isLocalServer) {
+          const r = await fetch("/api/settle", { method: "POST" });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.error || "Settlement failed");
+          if (j.dashboard) render(j.dashboard);
+          const settledCnt = Number(j.settled_count || 0);
+          if (settledCnt > 0) {
+            showToast(`✅ Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(j.prev_bankroll)} → ${fmtMoney(j.new_bankroll)} (remaining wagers adjusted)`, 5200);
+          } else {
+            showToast(`🏁 Settlement checked • Remaining wagers synced to ${fmtMoney(j.new_bankroll)} BR`, 4000);
+          }
+          return;
+        }
+
+        // 3. Direct GitHub Actions Workflow Dispatch from browser
+        if (cfg.ghPat) {
+          await dispatchGithubSettleWorkflow(cfg.ghPat);
+          await loadData();
+          pollAfterSettleDispatch();
+          showToast("🚀 Settle Workflow triggered on GitHub! Auto-refreshing ledger & wager amounts...", 5200);
+          return;
+        }
+
+        // 4. Fallback: refresh latest data.json, recalculate remaining wagers client-side, and prompt 1-time setup
+        await loadData();
+        openSettingsModal();
+        showToast("Connect Live Sync or paste a GitHub Token once to trigger the Settle Workflow in 1 tap.", 5000);
+      } catch (e) {
+        showToast("❌ " + (e.message || "Could not run Settle Refresh"), 4800);
+      } finally {
+        setBusy(false);
+      }
     }
 
     function switchLogTab(tab) {
@@ -1076,6 +1484,97 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         odds: om ? parseInt(om[1], 10) : -110,
         stake: sm ? parseFloat(sm[1]) : 0,
       };
+    }
+
+    function extractSelectionCore(text) {
+      let s = String(text || "").trim();
+      s = s.replace(/^\d+\.\s*/, "").replace(/\*/g, "").trim();
+      s = s.replace(/^\[[^\]]+\]\s*/, "").trim();
+      const core = s.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)/i)[0];
+      return core.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+    }
+
+    function adjustCuratedPlaysClientSide(data) {
+      if (!data || !Array.isArray(data.curated_plays) || data.curated_plays.length === 0) return;
+      const settledBr = Number(data.bankroll || 0);
+      if (settledBr <= 0) return;
+      const pendingList = data.pending_tickets || [];
+      const todayList = (data.today_stats && data.today_stats.tickets) || [];
+      const raw = String(data.curated_raw || "");
+      const brMatch = raw.match(/Bankroll:\s*\$(\d+(?:\.\d{1,2})?)/i);
+      const feedBr = brMatch ? parseFloat(brMatch[1]) : settledBr;
+
+      const winCounts = {};
+      data.curated_plays.forEach(p => {
+        const t = String(p.title || "");
+        const isPass = t.includes("⛔") || /\bPASS\b/.test(t);
+        if (!isPass && p.game_time) {
+          winCounts[p.game_time] = (winCounts[p.game_time] || 0) + 1;
+        }
+      });
+
+      data.curated_plays.forEach(p => {
+        const title = String(p.title || "");
+        const isPass = title.includes("⛔") || /\bPASS\b/.test(title);
+        if (isPass) {
+          p.status = "pass";
+          return;
+        }
+        const fb = parseTitleFallback(title);
+        const core = extractSelectionCore(p.selection || fb.selection || title);
+        const matchPend = (core && core.length >= 3)
+          ? pendingList.find(t => String(t.selections || "").toLowerCase().includes(core))
+          : null;
+        const matchSettled = (!matchPend && core && core.length >= 3)
+          ? todayList.find(t => String(t.selections || "").toLowerCase().includes(core))
+          : null;
+
+        let wagerPct = p.wager_pct != null ? Number(p.wager_pct) : null;
+        if (!wagerPct) {
+          const pm = title.match(/(\d{1,2}(?:\.\d+)?)\s*%\s*(?:of\s+(?:Resulting\s+)?)?(?:BR|Bankroll)/i);
+          if (pm) {
+            wagerPct = parseFloat(pm[1]);
+          } else if (p.confidence_pct != null) {
+            const cp = Number(p.confidence_pct);
+            const dual = (winCounts[p.game_time] || 1) >= 2;
+            if (cp >= 88) wagerPct = dual ? 35 : 50;
+            else if (cp >= 78) wagerPct = dual ? 25 : 35;
+            else if (cp >= 68) wagerPct = dual ? 18 : 20;
+          } else if (feedBr > 0 && p.stake > 0) {
+            wagerPct = Math.round((Number(p.stake) / feedBr) * 1000) / 10;
+          }
+        }
+        if (wagerPct) p.wager_pct = wagerPct;
+
+        if (matchPend) {
+          p.status = "pending";
+          p.pending_bet_id = matchPend.bet_id;
+          p.stake = Number(matchPend.stake || p.stake || 0);
+          if (wagerPct) {
+            p.recalculated_stake = Math.round((settledBr >= 2 ? Math.max(2, settledBr * (wagerPct / 100)) : settledBr) * 100) / 100;
+          }
+          return;
+        }
+        if (matchSettled) {
+          p.status = "settled";
+          p.settled_bet_id = matchSettled.bet_id;
+          p.settled_result = matchSettled.result;
+          p.settled_pl = Number(matchSettled.net_pl || 0);
+          return;
+        }
+
+        p.status = "remaining";
+        if (!wagerPct || wagerPct <= 0) return;
+
+        const baseOldStake = p.original_stake != null ? Number(p.original_stake) : Number(p.stake || fb.stake || 0);
+        const newStake = Math.round((settledBr >= 2 ? Math.max(2, settledBr * (wagerPct / 100)) : settledBr) * 100) / 100;
+        if (baseOldStake > 0 && Math.abs(newStake - baseOldStake) >= 0.01) {
+          p.original_stake = baseOldStake;
+          p.stake_adjusted = true;
+        }
+        p.stake = newStake;
+        p.title = title.replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, "$" + newStake.toFixed(2));
+      });
     }
 
     function openLogModal(prefillPlay) {
@@ -1248,116 +1747,264 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function renderGradedModal(which) {
+      which = which || "all";
       window.__activeGradedTab = which;
       const statsMap = window.__gradedStats || {};
-      const st = statsMap[which] || { date: "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
-      const isToday = which === "today";
-      document.getElementById("graded-tab-today").classList.toggle("active", isToday);
-      document.getElementById("graded-tab-yesterday").classList.toggle("active", !isToday);
-      document.getElementById("graded-modal-title").textContent =
-        (isToday ? "🏁 Today's Graded Tickets" : "📅 Yesterday's Graded Tickets") + (st.date ? ` (${st.date})` : "");
+      const st = statsMap[which] || { label: "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      const todayDate = (currentData && currentData.today) || "";
+      const yestDate = (currentData && currentData.yesterday) || "";
+
+      ["all", "week", "yesterday", "today"].forEach(tabKey => {
+        const el = document.getElementById(`graded-tab-${tabKey}`);
+        if (el) el.classList.toggle("active", tabKey === which);
+      });
+
+      const titles = {
+        all: "📊 Overall Bet History (Separated by Day)",
+        week: `📆 This Week's Bet History (${st.date || "Last 7 Days"})`,
+        yesterday: `📅 Yesterday's Bet History${st.date ? ` (${st.date})` : ""}`,
+        today: `🏁 Today's Bet History${st.date ? ` (${st.date})` : ""}`,
+      };
+      document.getElementById("graded-modal-title").textContent = titles[which] || "📊 Bet History by Day";
 
       const tix = st.tickets || [];
       const plCls = st.net_pl >= 0 ? "pos" : "neg";
+      const extraMeta = (which === "all" && st.roi !== undefined)
+        ? `<span>ROI: <span class="${st.roi >= 0 ? "pos" : "neg"}">${st.roi >= 0 ? "+" : ""}${st.roi}%</span></span>`
+        : "";
       document.getElementById("graded-modal-summary").innerHTML =
-        `<span class="pill pill-blue">${tix.length} Settled</span>` +
+        `<span class="pill pill-blue">${st.total_count || tix.length} Settled</span>` +
         `<span>Record: <strong>${st.wins}W - ${st.losses}L${st.pushes ? ` - ${st.pushes}P` : ""} (${st.win_pct}%)</strong></span>` +
-        `<span>Daily P/L: <span class="${plCls}">${st.net_pl >= 0 ? "+" : ""}${fmtMoney(st.net_pl)}</span></span>`;
+        `<span>Net P/L: <span class="${plCls}">${st.net_pl >= 0 ? "+" : ""}${fmtMoney(st.net_pl)}</span></span>` +
+        extraMeta;
 
       const listEl = document.getElementById("graded-modal-list");
-      if (tix.length > 0) {
-        listEl.innerHTML = tix.map(t => {
-          const rl = (t.result || "").toLowerCase();
+      if (tix.length === 0) {
+        listEl.innerHTML = `<div class="empty-msg">No settled bets recorded for this period yet.</div>`;
+        return;
+      }
+
+      // Group tickets by day (newest date first)
+      const dayGroups = [];
+      const dayMap = {};
+      tix.forEach(t => {
+        const dKey = String(t.date || "Earlier Challenge History").trim();
+        if (!dayMap[dKey]) {
+          dayMap[dKey] = { date: dKey, wins: 0, losses: 0, pushes: 0, net_pl: 0, tickets: [] };
+          dayGroups.push(dayMap[dKey]);
+        }
+        const g = dayMap[dKey];
+        const rl = String(t.result || "").toLowerCase();
+        if (rl === "won") g.wins++;
+        else if (rl === "lost") g.losses++;
+        else if (rl === "push") g.pushes++;
+        g.net_pl = Math.round((g.net_pl + Number(t.net_pl || 0)) * 100) / 100;
+        g.tickets.push(t);
+      });
+
+      dayGroups.sort((a, b) => {
+        if (a.date === "Earlier Challenge History") return 1;
+        if (b.date === "Earlier Challenge History") return -1;
+        return b.date.localeCompare(a.date);
+      });
+
+      listEl.innerHTML = dayGroups.map(g => {
+        const dTot = g.wins + g.losses;
+        const dPct = dTot > 0 ? Math.round((g.wins / dTot) * 1000) / 10 : 0;
+        const dCls = g.net_pl >= 0 ? "pos" : "neg";
+        let dayTitle = `📅 ${esc(g.date)}`;
+        if (g.date === todayDate) dayTitle += " (Today)";
+        else if (g.date === yestDate) dayTitle += " (Yesterday)";
+
+        const dayRows = g.tickets.map(t => {
+          const rl = String(t.result || "").toLowerCase();
           const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
+          const oddsTxt = t.odds ? ` (${esc(t.odds)})` : "";
+          const metaParts = [];
+          if (t.sport) metaParts.push(esc(t.sport));
+          if (t.stake != null && t.stake > 0) metaParts.push(`Stake ${fmtMoney(t.stake)}`);
           return `
             <div class="bet-item">
               <div class="bet-top">
-                <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)} (${esc(t.odds)})</div>
+                <div class="bet-title">${esc(t.bet_id)}${t.selections ? ` • ${esc(t.selections)}` : ""}${oddsTxt}</div>
                 <span class="pill ${pClass}">${esc((t.result || "").toUpperCase())} (${t.net_pl >= 0 ? "+" : ""}${fmtMoney(t.net_pl)})</span>
               </div>
-              <div class="bet-meta">${esc(t.sport)} &bull; Stake ${fmtMoney(t.stake)}</div>
+              ${metaParts.length > 0 ? `<div class="bet-meta">${metaParts.join(" &bull; ")}</div>` : ""}
             </div>
           `;
         }).join("");
-      } else {
-        listEl.innerHTML = `<div class="empty-msg">No settled bets recorded ${isToday ? "yet " : ""}for ${esc(st.date || which)}.</div>`;
-      }
+
+        return `
+          <div class="day-group">
+            <div class="day-group-header">
+              <span>${dayTitle}</span>
+              <span style="display:flex;gap:10px;align-items:center;">
+                <span style="color:var(--muted);">${g.wins}W - ${g.losses}L${g.pushes ? ` - ${g.pushes}P` : ""} (${dPct}%)</span>
+                <span class="${dCls}">${g.net_pl >= 0 ? "+" : ""}${fmtMoney(g.net_pl)}</span>
+              </span>
+            </div>
+            <div class="bet-list">${dayRows}</div>
+          </div>
+        `;
+      }).join("");
     }
 
     function openGradedModal(which) {
-      renderGradedModal(which);
+      renderGradedModal(which || "all");
       openModal("graded-modal");
     }
 
     function render(data) {
+      adjustCuratedPlaysClientSide(data);
       currentData = data;
       updateSyncPill(Boolean(data.live_mode));
       document.getElementById("updated-at").textContent = "Last synced: " + data.updated_at;
 
-      // 1. Overall W/L
-      const ov = data.overall;
-      document.getElementById("overall-ratio").innerHTML =
-        `${ov.wins}W - ${ov.losses}L <span style="font-size:1.1rem;color:var(--muted)">(${ov.win_pct}%)</span>`;
-      const plCls = ov.net_pl >= 0 ? "pos" : "neg";
-      const clvHtml = (ov.avg_clv !== null && ov.avg_clv !== undefined)
-        ? `<span>Avg CLV: <span class="${ov.avg_clv >= 0 ? "pos" : "neg"}">${ov.avg_clv >= 0 ? "+" : ""}${ov.avg_clv}%</span></span>`
-        : "";
-      document.getElementById("overall-sub").innerHTML =
-        `<span>Net P/L: <span class="${plCls}">${ov.net_pl >= 0 ? "+" : ""}${fmtMoney(ov.net_pl)}</span></span>` +
-        `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>` +
-        clvHtml;
-
-      // 2a. Today W/L (clickable -> opens Today's Graded Tickets modal)
-      const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
-      const tCount = (ts.tickets || []).length;
-      document.getElementById("today-label").textContent = `Today (${ts.date}) Win / Loss`;
-      document.getElementById("today-ratio").innerHTML =
-        `${ts.wins}W - ${ts.losses}L` + (ts.pushes ? ` - ${ts.pushes}P` : "") +
-        ` <span style="font-size:1.1rem;color:var(--muted)">(${ts.win_pct}%)</span>`;
-      const tCls = ts.net_pl >= 0 ? "pos" : "neg";
-      document.getElementById("today-sub").innerHTML =
-        `<span>Daily P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>` +
-        `<span class="card-tap-hint">${tCount} bet${tCount === 1 ? "" : "s"} &rarr;</span>`;
-
-      // 2b. Yesterday W/L (clickable -> opens Yesterday's Graded Tickets modal)
-      const ys = data.yesterday_stats || { date: data.yesterday || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
-      const yCount = (ys.tickets || []).length;
-      document.getElementById("yest-label").textContent = `Yesterday (${ys.date}) Win / Loss`;
-      document.getElementById("yest-ratio").innerHTML =
-        `${ys.wins}W - ${ys.losses}L` + (ys.pushes ? ` - ${ys.pushes}P` : "") +
-        ` <span style="font-size:1.1rem;color:var(--muted)">(${ys.win_pct}%)</span>`;
-      const yCls = ys.net_pl >= 0 ? "pos" : "neg";
-      document.getElementById("yest-sub").innerHTML =
-        `<span>Daily P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>` +
-        `<span class="card-tap-hint">${yCount} bet${yCount === 1 ? "" : "s"} &rarr;</span>`;
-
-      // 3. Bankroll
+      // 1. Bankroll (Top)
       document.getElementById("bankroll-val").textContent = fmtMoney(data.bankroll);
       document.getElementById("bankroll-sub").innerHTML =
         `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
         `<span>Avail Cash: <span class="pos">${fmtMoney(data.available_cash)}</span></span>`;
 
-      // 4. Today's Curated Bets (with 1-Tap Log Bet button + duplicate-pending guard)
+      // Normalize Today & Yesterday tickets with explicit date field
+      const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      (ts.tickets || []).forEach(t => { if (!t.date) t.date = ts.date || data.today || ""; });
+
+      const ys = data.yesterday_stats || { date: data.yesterday || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
+      (ys.tickets || []).forEach(t => { if (!t.date) t.date = ys.date || data.yesterday || ""; });
+
+      // Build complete settled tickets list (uses data.settled_tickets when present, with fallback to today + yesterday + equity curve)
+      let allSettled = [];
+      const seenIds = {};
+      const pushUnique = (t, fallbackDate) => {
+        if (!t || !t.bet_id || seenIds[t.bet_id]) return;
+        seenIds[t.bet_id] = true;
+        allSettled.push({ ...t, date: t.date || fallbackDate || "" });
+      };
+      if (Array.isArray(data.settled_tickets) && data.settled_tickets.length > 0) {
+        data.settled_tickets.forEach(t => pushUnique(t, ""));
+      }
+      (ts.tickets || []).forEach(t => pushUnique(t, ts.date));
+      (ys.tickets || []).forEach(t => pushUnique(t, ys.date));
+      if (data.week_stats && Array.isArray(data.week_stats.tickets)) {
+        data.week_stats.tickets.forEach(t => pushUnique(t, ""));
+      }
+      // If static snapshot didn't have older rows in settled_tickets yet, reconstruct delta from equity_curve
+      const eq = data.equity_curve || [];
+      const derivedOlder = [];
+      for (let i = 1; i < eq.length; i++) {
+        const bid = eq[i].label;
+        const delta = Math.round((Number(eq[i].bankroll) - Number(eq[i - 1].bankroll)) * 100) / 100;
+        if (bid && bid.startsWith("BET-") && !seenIds[bid]) {
+          derivedOlder.push({
+            bet_id: bid,
+            date: "Earlier Challenge History",
+            sport: "Challenge Ledger",
+            selections: `Settled Challenge Ticket (Running BR: ${fmtMoney(eq[i].bankroll)})`,
+            odds: "",
+            stake: delta < 0 ? Math.abs(delta) : 0,
+            result: delta > 0 ? "Won" : (delta < 0 ? "Lost" : "Push"),
+            net_pl: delta,
+          });
+        }
+      }
+      derivedOlder.reverse().forEach(t => pushUnique(t, "Earlier Challenge History"));
+
+      // Compute This Week stats (use data.week_stats if provided, otherwise derive from recent dated tickets)
+      let ws = data.week_stats;
+      if (!ws) {
+        const datedWeekTix = allSettled.filter(t => t.date && /^\d{4}-\d{2}-\d{2}$/.test(t.date));
+        let wW = 0, wL = 0, wP = 0, wPl = 0;
+        datedWeekTix.forEach(t => {
+          const rl = String(t.result || "").toLowerCase();
+          if (rl === "won") wW++;
+          else if (rl === "lost") wL++;
+          else if (rl === "push") wP++;
+          wPl += Number(t.net_pl || 0);
+        });
+        const wTot = wW + wL;
+        ws = {
+          date: "Last 7 Days",
+          wins: wW,
+          losses: wL,
+          pushes: wP,
+          win_pct: wTot > 0 ? Math.round((wW / wTot) * 1000) / 10 : 0,
+          net_pl: Math.round(wPl * 100) / 100,
+          tickets: datedWeekTix,
+        };
+      } else {
+        ws.date = ws.start_date && ws.end_date ? `${ws.start_date} to ${ws.end_date}` : "Last 7 Days";
+      }
+
+      // 4. Populate Combined Win / Loss Button (Overall, This Week, Yesterday, Today)
+      const ov = data.overall;
+      const totalSettledCount = (ov.wins || 0) + (ov.losses || 0) + (ov.pushes || 0);
+      const tapHintEl = document.getElementById("wl-tap-hint");
+      if (tapHintEl) tapHintEl.innerHTML = `${totalSettledCount} settled bets &bull; View by Day &rarr;`;
+
+      document.getElementById("overall-ratio").innerHTML =
+        `${ov.wins}W - ${ov.losses}L <span style="font-size:0.9rem;color:var(--muted)">(${ov.win_pct}%)</span>`;
+      const plCls = ov.net_pl >= 0 ? "pos" : "neg";
+      const clvHtml = (ov.avg_clv !== null && ov.avg_clv !== undefined)
+        ? `<span>CLV: <span class="${ov.avg_clv >= 0 ? "pos" : "neg"}">${ov.avg_clv >= 0 ? "+" : ""}${ov.avg_clv}%</span></span>`
+        : "";
+      document.getElementById("overall-sub").innerHTML =
+        `<span>P/L: <span class="${plCls}">${ov.net_pl >= 0 ? "+" : ""}${fmtMoney(ov.net_pl)}</span></span>` +
+        `<span>ROI: <span class="${plCls}">${ov.roi >= 0 ? "+" : ""}${ov.roi}%</span></span>` +
+        clvHtml;
+
+      document.getElementById("week-label").textContent = "This Week";
+      document.getElementById("week-ratio").innerHTML =
+        `${ws.wins}W - ${ws.losses}L` + (ws.pushes ? ` - ${ws.pushes}P` : "") +
+        ` <span style="font-size:0.9rem;color:var(--muted)">(${ws.win_pct}%)</span>`;
+      const wCls = ws.net_pl >= 0 ? "pos" : "neg";
+      document.getElementById("week-sub").innerHTML =
+        `<span>P/L: <span class="${wCls}">${ws.net_pl >= 0 ? "+" : ""}${fmtMoney(ws.net_pl)}</span></span>`;
+
+      document.getElementById("yest-label").textContent = `Yesterday (${ys.date})`;
+      document.getElementById("yest-ratio").innerHTML =
+        `${ys.wins}W - ${ys.losses}L` + (ys.pushes ? ` - ${ys.pushes}P` : "") +
+        ` <span style="font-size:0.9rem;color:var(--muted)">(${ys.win_pct}%)</span>`;
+      const yCls = ys.net_pl >= 0 ? "pos" : "neg";
+      document.getElementById("yest-sub").innerHTML =
+        `<span>P/L: <span class="${yCls}">${ys.net_pl >= 0 ? "+" : ""}${fmtMoney(ys.net_pl)}</span></span>`;
+
+      document.getElementById("today-label").textContent = `Today (${ts.date})`;
+      document.getElementById("today-ratio").innerHTML =
+        `${ts.wins}W - ${ts.losses}L` + (ts.pushes ? ` - ${ts.pushes}P` : "") +
+        ` <span style="font-size:0.9rem;color:var(--muted)">(${ts.win_pct}%)</span>`;
+      const tCls = ts.net_pl >= 0 ? "pos" : "neg";
+      document.getElementById("today-sub").innerHTML =
+        `<span>P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>`;
+
+      // 3. Today's Curated Bets (with 1-Tap Log Bet button + bankroll-adjusted wager badges)
       document.getElementById("curated-date").textContent = data.curated_date;
       const cList = document.getElementById("curated-list");
       const plays = data.curated_plays || [];
       const pendingList = data.pending_tickets || [];
+      const todaySettledList = (ts && ts.tickets) || [];
       window.__curatedPlays = plays;
       document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
 
       function findMatchingPending(play) {
         const fb = parseTitleFallback(play.title);
-        const selRaw = (play.selection || fb.selection || play.title || "").toLowerCase();
-        // Extract core team/subject phrase before ML, spread (+/-), over/under, or parentheses
-        const core = selRaw.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\()/i)[0].replace(/[^a-z0-9\s]/g, "").trim();
+        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
         if (!core || core.length < 3) return null;
         return pendingList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+      }
+
+      function findMatchingSettledToday(play) {
+        const fb = parseTitleFallback(play.title);
+        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
+        if (!core || core.length < 3) return null;
+        return todaySettledList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
       }
 
       if (plays.length > 0) {
         cList.innerHTML = plays.map((p, idx) => {
           const isPass = (p.title || "").includes("⛔") || /\bPASS\b/.test(p.title || "");
           const existingPend = isPass ? null : findMatchingPending(p);
+          const existingSettled = (isPass || existingPend) ? null : findMatchingSettledToday(p);
           const cp = p.confidence_pct;
           let meterHtml = "";
           let pillCls = isPass ? "pill-red" : "pill-blue";
@@ -1381,15 +2028,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           let actionHtml = "";
           if (!isPass) {
             if (existingPend) {
+              const recalcNote = (p.recalculated_stake && Math.abs(p.recalculated_stake - existingPend.stake) >= 0.01)
+                ? `<span class="pill pill-blue">${esc(p.wager_pct || "")}% of ${fmtMoney(data.bankroll)} BR = ${fmtMoney(p.recalculated_stake)}</span>`
+                : "";
               actionHtml = `
                 <div class="bet-actions">
-                  <span class="pill pill-green">✓ Already Pending (${esc(existingPend.bet_id)})</span>
+                  <span class="pill pill-green">✓ Already Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
+                  ${recalcNote}
                   <button class="btn-mini" onclick="if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
                 </div>`;
-            } else {
+            } else if (existingSettled) {
+              const resU = String(existingSettled.result || "").toUpperCase();
+              const resCls = resU === "WON" ? "pill-green" : (resU === "PUSH" ? "pill-amber" : "pill-red");
+              const plSign = Number(existingSettled.net_pl || 0) >= 0 ? "+" : "";
               actionHtml = `
                 <div class="bet-actions">
-                  <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This</button>
+                  <span class="pill ${resCls}">🏁 Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
+                </div>`;
+            } else {
+              let adjBadge = "";
+              if (p.stake_adjusted && p.original_stake) {
+                adjBadge = `<span class="pill pill-amber">🔄 Wager Adjusted for ${fmtMoney(data.bankroll)} BR: ${fmtMoney(p.stake)} (${esc(p.wager_pct || "")}% BR • was ${fmtMoney(p.original_stake)})</span>`;
+              } else if (p.stake > 0 && p.wager_pct) {
+                adjBadge = `<span class="pill pill-blue">💰 Wager: ${fmtMoney(p.stake)} (${esc(p.wager_pct)}% of ${fmtMoney(data.bankroll)} BR)</span>`;
+              }
+              actionHtml = `
+                <div class="bet-actions">
+                  <button class="btn-green" onclick="openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This (${fmtMoney(p.stake)})</button>
+                  ${adjBadge}
                 </div>`;
             }
           }
@@ -1409,7 +2075,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         cList.innerHTML = `<div class="empty-msg">${esc(data.curated_raw || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
       }
 
-      // 5. Active Pending Tickets (with live in-game ESPN score badges + Edit/Cashout)
+      // 2. Active Pending Tickets (with live in-game ESPN score badges + Edit/Cashout)
       const pList = document.getElementById("pending-list");
       const pend = data.pending_tickets || [];
       window.__pendingTickets = pend;
@@ -1440,8 +2106,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         pList.innerHTML = `<div class="empty-msg">No active pending bets right now.</div>`;
       }
 
-      // 6. Store latest graded stats for Today / Yesterday modal
-      window.__gradedStats = { today: ts, yesterday: ys };
+      // 6. Store latest graded stats for Overall / This Week / Yesterday / Today modal
+      window.__gradedStats = {
+        all: {
+          date: "All Days",
+          wins: ov.wins,
+          losses: ov.losses,
+          pushes: ov.pushes || 0,
+          win_pct: ov.win_pct,
+          net_pl: ov.net_pl,
+          roi: ov.roi,
+          total_count: totalSettledCount,
+          tickets: allSettled,
+        },
+        week: ws,
+        yesterday: ys,
+        today: ts,
+      };
       if (document.getElementById("graded-modal").classList.contains("open") && window.__activeGradedTab) {
         renderGradedModal(window.__activeGradedTab);
       }
@@ -1655,12 +2336,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(exc)}).encode("utf-8"))
+        elif self.path == "/api/settle":
+            self._handle_settle()
         else:
             html = HTML_TEMPLATE.replace("__INITIAL_DATA_JSON__", "null").encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(html)
+
+    def do_POST(self):
+        if self.path == "/api/settle":
+            self._handle_settle()
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": False, "error": "Not found"}).encode("utf-8"))
+
+    def _handle_settle(self):
+        try:
+            import settler
+
+            res = settler.run_settlement()
+            res["dashboard"] = fetch_dashboard_data()
+            body = json.dumps(res).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode("utf-8"))
 
     def log_message(self, format, *args):
         return
@@ -1678,3 +2386,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
