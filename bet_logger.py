@@ -26,6 +26,21 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Non-challenge personal tickets to always ignore if they appear in screenshots
+IGNORED_TICKET_IDS = {
+    "2313737142865625362",  # Florida Gators 2026/2027 NCAAM National Championship (+600, $100) — separate from $100-$1k challenge
+}
+
+
+def _is_ignored_non_challenge_ticket(t_id="", sel="", stake=0.0):
+    if t_id and str(t_id).strip() in IGNORED_TICKET_IDS:
+        return True
+    s = str(sel or "").lower()
+    if "florida gators" in s and ("championship" in s or "winner" in s or "national" in s or abs(float(stake or 0) - 100.0) < 0.01):
+        return True
+    return False
+
+
 
 def get_workbook():
     scopes = [
@@ -123,6 +138,7 @@ RULES:
 4. If the user says they cashed out a pending bet for a full refund (or wants to remove/replace a pending bet), list that pending bet's exact "bet_id" and "row_index" in "removals_or_cashouts" with "is_full_refund": true.
 5. If the user says they cashed out a pending bet for a partial amount (less than stake), set "is_full_refund": false and "cashout_return": <dollar amount>.
 6. If the user asks to edit an existing row's sport, stake, odds, selection, or result, include an entry in "updates".
+7. ALWAYS IGNORE non-challenge personal futures bets — specifically Hard Rock ID 2313737142865625362 (Florida Gators NCAAM National Championship 2026/2027 +600 for $100). Never include it in "tickets".
 
 Respond ONLY with valid JSON matching this exact schema:
 {{
@@ -344,6 +360,9 @@ def apply_actions_to_sheet(tracker_ws, actions):
         sel = str(t.get("selections", "")).strip()
         stake = _clean_float(t.get("stake", 0.0))
         if not sel or stake <= 0:
+            continue
+        if _is_ignored_non_challenge_ticket(t_id, sel, stake):
+            print(f"Skipping ignored non-challenge ticket {t_id} ({sel})")
             continue
         if t_id and t_id in existing_text:
             print(f"Skipping duplicate ticket ID {t_id} ({sel})")

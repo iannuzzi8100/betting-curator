@@ -30,6 +30,22 @@ const GEMINI_MODELS = [
   "gemini-2.5-flash",
 ];
 
+// Non-challenge personal tickets to always ignore if they appear in screenshots
+const IGNORED_TICKET_IDS = [
+  "2313737142865625362", // Florida Gators 2026/2027 NCAAM National Championship (+600, $100) — separate from $100-$1k challenge
+];
+
+function isIgnoredNonChallengeTicket_(tId, sel, stake) {
+  const idStr = String(tId || "").trim();
+  if (idStr && IGNORED_TICKET_IDS.indexOf(idStr) !== -1) return true;
+  const s = String(sel || "").toLowerCase();
+  if (s.indexOf("florida gators") !== -1 && (s.indexOf("championship") !== -1 || s.indexOf("winner") !== -1 || s.indexOf("national") !== -1 || Math.abs(Number(stake || 0) - 100.0) < 0.01)) {
+    return true;
+  }
+  return false;
+}
+
+
 // ============================================================================
 // HTTP ENTRYPOINTS (CORS-safe: GET + POST with text/plain or application/json)
 // ============================================================================
@@ -706,6 +722,7 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
     const sel = String(t.selections || "").trim();
     const stake = cleanFloat_(t.stake, 0.0);
     if (!sel || stake <= 0) continue;
+    if (isIgnoredNonChallengeTicket_(tId, sel, stake)) continue;
     if (tId && existingText.indexOf(tId) !== -1) continue;
 
     if (!opts.skipSameDayDupCheck) {
@@ -977,6 +994,7 @@ function parseWithGemini_(textMsg, imageBase64, mimeType, pendingRows, recentRow
     "4. Full-refund cashout / void -> entry in \"removals_or_cashouts\" with \"is_full_refund\": true.",
     "5. Partial cashout -> \"is_full_refund\": false and \"cashout_return\": <dollar amount>.",
     "6. Edit existing row -> entry in \"updates\".",
+    "7. ALWAYS IGNORE non-challenge personal futures bets — specifically Hard Rock ID 2313737142865625362 (Florida Gators NCAAM National Championship 2026/2027 +600 for $100). Never include it in \"tickets\".",
     "",
     "Respond ONLY with valid JSON: {\"removals_or_cashouts\": [...], \"updates\": [...], \"tickets\": [{\"date\": \"" + todayStr + "\", \"sport\": \"CFB\", \"bet_type\": \"Straight\", \"selections\": \"...\", \"odds\": -110, \"stake\": 10.00, \"ticket_id\": \"\"}]}",
   ].join("\n");
