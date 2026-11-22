@@ -309,13 +309,27 @@ function getLatestCuratedPlays_(feedWs, fallbackDate) {
   const vals = feedWs.getDataRange().getDisplayValues();
   let latestText = "";
   let latestDate = fallbackDate;
+  let fbText = "";
+  let fbDate = fallbackDate;
   for (let i = vals.length - 1; i >= 0; i--) {
     const r = vals[i];
     if (r.length >= 12 && String(r[11] || "").trim()) {
-      latestDate = String(r[0] || "").trim() || fallbackDate;
-      latestText = String(r[11]).trim();
-      break;
+      const txt = String(r[11]).trim();
+      const dt = String(r[0] || "").trim() || fallbackDate;
+      if (!fbText) {
+        fbText = txt;
+        fbDate = dt;
+      }
+      if (/^\s*1\.\s+/m.test(txt)) {
+        latestDate = dt;
+        latestText = txt;
+        break;
+      }
     }
+  }
+  if (!latestText) {
+    latestText = fbText;
+    latestDate = fbDate;
   }
   const plays = parseCuratedPlaysText_(latestText);
   return { date: latestDate, plays: plays, raw: latestText };

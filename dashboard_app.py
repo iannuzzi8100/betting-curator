@@ -254,15 +254,26 @@ def fetch_dashboard_data():
     yest_total = yest_wins + yest_losses
     yest_win_pct = round((yest_wins / yest_total) * 100.0, 1) if yest_total > 0 else 0.0
 
-    # Parse latest Curated Bets from Curator Feed
+    # Parse latest Curated Bets from Curator Feed (prefer latest row with numbered plays over audit-only rows)
     feed_vals = feed_ws.get_all_values()
     latest_curated_text = ""
     latest_curated_date = today_str
+    fallback_text = ""
+    fallback_date = today_str
     for r in reversed(feed_vals):
         if len(r) >= 12 and r[11].strip():
-            latest_curated_date = r[0].strip() or today_str
-            latest_curated_text = r[11].strip()
-            break
+            txt = r[11].strip()
+            dt = r[0].strip() or today_str
+            if not fallback_text:
+                fallback_text = txt
+                fallback_date = dt
+            if re.search(r"^\s*1\.\s+", txt, flags=re.M):
+                latest_curated_date = dt
+                latest_curated_text = txt
+                break
+    if not latest_curated_text:
+        latest_curated_text = fallback_text
+        latest_curated_date = fallback_date
 
     curated_plays = []
     if latest_curated_text:
@@ -1554,7 +1565,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           if (r.ok) {
             const j = await r.json();
             if (j.ok && j.dashboard) {
-              render(j.dashboard);
+              const liveDash = j.dashboard;
+              if ((!liveDash.curated_plays || liveDash.curated_plays.length === 0)) {
+                try {
+                  const sr = await fetch(`./data.json?t=${Date.now()}`, { cache: "no-store" });
+                  if (sr.ok) {
+                    const sd = await sr.json();
+                    if (sd && sd.curated_plays && sd.curated_plays.length > 0 && sd.curated_date === liveDash.today) {
+                      liveDash.curated_plays = sd.curated_plays;
+                      liveDash.curated_date = sd.curated_date;
+                    }
+                  }
+                } catch (_) {}
+              }
+              render(liveDash);
               btn.textContent = "↻ Refresh Live";
               return;
             }
