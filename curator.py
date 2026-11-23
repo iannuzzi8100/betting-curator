@@ -63,7 +63,11 @@ def read_google_doc_text(docs_service, doc_id, today_str=None):
     full_text = "".join(chunks)
     if today_str and f"## {today_str} Slate Intel" in full_text:
         start_pos = full_text.index(f"## {today_str} Slate Intel")
-        return full_text[start_pos:]
+        rest = full_text[start_pos:]
+        next_sec = re.search(r"\n## \d{4}-\d{2}-\d{2} Slate Intel", rest[1:])
+        if next_sec:
+            return rest[: next_sec.start() + 1]
+        return rest
     return full_text
 
 
@@ -194,7 +198,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
     # Detect Weekend Football + EPL Mode automatically from scraped intel / day of week
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
     dow = est_now.weekday()  # 5 = Saturday, 6 = Sunday
-    if "SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or (dow == 5 and "[CFB QUANT]" in intel_text):
+    if dow == 5 and ("SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "[CFB QUANT]" in intel_text):
         league_rule = (
             "**SATURDAY FOOTBALL + EPL ONLY (STRICT):** Today is Saturday during College Football season. "
             "Pick **SOLELY from College Football (CFB) and Premier League Soccer (EPL)**. "
@@ -208,7 +212,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
             "     • **Window 6 — Late Night (9:30 PM+ CFB):** 9:15 PM – 11:30 PM EST"
         )
         slate_header_tag = "Saturday CFB + EPL Confidence Meter Slate"
-    elif "SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or (dow == 6 and "[NFL QUANT]" in intel_text):
+    elif dow == 6 and ("SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "[NFL QUANT]" in intel_text):
         league_rule = (
             "**SUNDAY FOOTBALL + EPL ONLY (STRICT):** Today is Sunday during NFL season. "
             "Pick **SOLELY from NFL and Premier League Soccer (EPL)**. "
