@@ -195,13 +195,26 @@ def fetch_dashboard_data():
                 if cur_play:
                     curated_plays.append(cur_play)
                 clean_title = m.group(1).replace("*", "").strip()
-                # Check if confidence % is already on the headline
-                hm = re.search(r"(\d{2,3})\s*%", clean_title)
-                init_cp = int(hm.group(1)) if hm and "BR" not in clean_title[hm.start() : hm.end() + 5] else None
+                is_pass_row = "⛔ PASS" in clean_title.upper() or "NO GOOD PLAY" in clean_title.upper()
+                # Check if confidence % is already on the headline (ignore "<68%" on PASS rows)
+                hm = re.search(r"(?<![<])(\d{2,3})\s*%", clean_title)
+                init_cp = (
+                    int(hm.group(1))
+                    if (hm and not is_pass_row and "BR" not in clean_title[hm.start() : hm.end() + 5])
+                    else None
+                )
                 # Strip trailing "— 87% 💎" from headline since badge shows it on the right
                 clean_title = re.sub(r"\s*[—-]\s*\[?\d{2,3}%\s*[^\]]*\]?$", "", clean_title).strip()
+                # Streamline verbose "[Window X: ... (8:20 PM EST)]" prefix if present
+                clean_title = re.sub(
+                    r"^\[Window\s*\d+:[^\]]*?([A-Z]{2,5})\s*\((\d{1,2}:\d{2}\s*[AP]M\s*EST)\)\]\s*",
+                    r"[\2 • \1] ",
+                    clean_title,
+                )
+                clean_title = re.sub(r"\s*[—-]\s*Capped at Exposure Limit", "", clean_title, flags=re.I)
                 cur_play = {
                     "title": clean_title,
+                    "is_pass": is_pass_row,
                     "edge": "",
                     "game_line": "",
                     "confidence_math": "",
@@ -240,6 +253,10 @@ def fetch_dashboard_data():
 
     # Enrich each curated play from today's scraped Intel Doc if game_line or confidence_math isn't populated yet
     for cp_item in curated_plays:
+        if cp_item.get("is_pass"):
+            cp_item["confidence_pct"] = None
+            cp_item["confidence_tier"] = "⛔ PASS WINDOW"
+            continue
         if cp_item["confidence_pct"] is not None and not cp_item["confidence_tier"]:
             sc = cp_item["confidence_pct"]
             if sc >= 88:
