@@ -817,6 +817,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       border: 1px solid var(--card-border);
       border-radius: 12px;
       padding: 13px 14px;
+      transition: background 0.25s ease, border-color 0.25s ease;
+    }
+    .bet-item.trend-win {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(16, 185, 129, 0.06));
+      border-color: rgba(16, 185, 129, 0.50);
+      box-shadow: inset 3px 0 0 #10b981;
+    }
+    .bet-item.trend-loss {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.18), rgba(239, 68, 68, 0.06));
+      border-color: rgba(239, 68, 68, 0.50);
+      box-shadow: inset 3px 0 0 #ef4444;
+    }
+    .bet-item.trend-push {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.05));
+      border-color: rgba(245, 158, 11, 0.42);
+      box-shadow: inset 3px 0 0 #f59e0b;
     }
     .bet-top {
       display: flex;
@@ -2686,6 +2702,200 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       });
     }
 
+    function normTeamStr(s) {
+      return String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    }
+
+    function matchCompetitorForPick(away, home, teamText) {
+      const normPick = normTeamStr(teamText);
+      if (!normPick) return null;
+      const pickTokens = normPick.split(" ").filter(w => w.length >= 3);
+
+      function scoreComp(c) {
+        const tm = c.team || {};
+        const aliases = [tm.displayName, tm.shortDisplayName, tm.location, tm.name, tm.abbreviation]
+          .map(normTeamStr)
+          .filter(Boolean);
+        let best = 0;
+        for (const a of aliases) {
+          if (a.length <= 3) {
+            if (a.length >= 2 && new RegExp(`\\b${a}\\b`).test(normPick)) {
+              best = Math.max(best, a.length + 1);
+            }
+          } else if (normPick.includes(a)) {
+            best = Math.max(best, a.length + 10);
+          } else if (normPick.length >= 4 && a.includes(normPick)) {
+            best = Math.max(best, normPick.length + 6);
+          }
+        }
+        if (best === 0 && pickTokens.length > 0) {
+          const dispTokens = new Set(normTeamStr(tm.displayName).split(" ").filter(w => w.length >= 3));
+          let hits = 0;
+          pickTokens.forEach(w => { if (dispTokens.has(w)) hits++; });
+          if (hits > 0) best = hits * 3;
+        }
+        return best;
+      }
+
+      const aScore = scoreComp(away);
+      const hScore = scoreComp(home);
+      if (aScore > hScore && aScore > 0) return { picked: away, opp: home };
+      if (hScore > aScore && hScore > 0) return { picked: home, opp: away };
+      return null;
+    }
+
+    function evaluateLiveTicketTrend(match, ticket) {
+      const state = match.status?.type?.state || "";
+      if (state !== "in" && state !== "post") return null;
+      const comp = (match.competitions || [])[0];
+      if (!comp) return null;
+      const away = (comp.competitors || []).find(c => c.homeAway === "away");
+      const home = (comp.competitors || []).find(c => c.homeAway === "home");
+      if (!away || !home) return null;
+
+      // Skip multi-leg parlays / SGPs
+      const bType = String(ticket.bet_type || "").toLowerCase();
+      if (bType.includes("parlay") || bType.includes("sgp") || bType.includes("teaser")) return null;
+
+      let rawSel = String(ticket.selections || "").trim();
+      if (!rawSel) return null;
+
+      // Strip leading matchup prefix before em-dash / en-dash (e.g. "• Away @ Home (CBB) — Pick -5.5")
+      const dashParts = rawSel.split(/\s*[—–]\s*/);
+      let pickPart = rawSel;
+      if (dashParts.length >= 2 && (/@|\bvs\.?\b/i.test(dashParts[0]))) {
+        pickPart = dashParts.slice(1).join(" — ").trim();
+      }
+      // Reject obvious multi-leg separators
+      if (/\s\+\s|[;|]/.test(pickPart)) return null;
+
+      // Strip parenthetical time / odds / league tags like "(4:00 PM EST)", "(-110)", "(NCAAM)"
+      const cleanPick = pickPart
+        .replace(/\(\s*\d{1,2}:\d{2}\s*[AP]M[^)]*\)/gi, " ")
+        .replace(/\(\s*[+-]\d{3,4}\s*\)/g, " ")
+        .replace(/\(\s*(?:CBB|NCAAB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|MLB|SOCCER|ATP|WTA)\s*\)/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      // Skip player props (team scoreboard cannot grade player stats)
+      if (/\b(points|pts|rebounds|reb|assists|ast|shots|sog|goals|yards|yds|touchdowns|tds?|passing|rushing|receiving|pra|3pm|threes|strikeouts|saves|hits|bases|blocks|steals)\b/i.test(cleanPick)) {
+        return null;
+      }
+
+      const sp = normalizeSport(ticket.sport).toUpperCase();
+      const is1H = /\b(?:1h|1st\s*half|first\s*half)\b/i.test(cleanPick);
+      const period = Number(match.status?.period || 1);
+      const clockSec = Number(match.status?.clock || 0);
+      const detailLow = String(match.status?.type?.shortDetail || match.status?.type?.detail || "").toLowerCase();
+
+      function getScore(c) {
+        if (is1H && Array.isArray(c.linescores) && c.linescores.length > 0) {
+          const halfPeriods = (sp === "NCAAM") ? 1 : ((sp === "NBA" || sp === "NFL" || sp === "CFB" || sp === "NCAAF") ? 2 : 1);
+          if (state === "post" || period > halfPeriods || detailLow.includes("half")) {
+            let sum = 0;
+            for (let i = 0; i < Math.min(halfPeriods, c.linescores.length); i++) {
+              sum += Number(c.linescores[i]?.value || 0);
+            }
+            return sum;
+          }
+        }
+        return Number(c.score || 0);
+      }
+
+      const aPts = getScore(away);
+      const hPts = getScore(home);
+      if (isNaN(aPts) || isNaN(hPts)) return null;
+
+      const fmtSigned = (n) => {
+        const rounded = Math.round(n * 10) / 10;
+        return (rounded > 0 ? "+" : "") + rounded;
+      };
+
+      // 1. Game Totals (Over / Under)
+      const totMatch = cleanPick.match(/\b(over|under)\s+(\d+(?:\.\d+)?)\b/i)
+        || cleanPick.match(/(?:^|\s)([ou])\s*(\d+(?:\.\d+)?)\b/i);
+      if (totMatch && !/\b(?:team\s*total|tt)\b/i.test(cleanPick)) {
+        const isOver = totMatch[1].toLowerCase().startsWith("o");
+        const line = parseFloat(totMatch[2]);
+        if (!isNaN(line) && line >= 1.5) {
+          const total = aPts + hPts;
+          const halfOver = is1H && (state === "post" || detailLow.includes("half") || period > (sp === "NCAAM" ? 1 : 2));
+          if (state === "post" || halfOver) {
+            if (total === line) return { status: "push", note: `Push (${total})` };
+            const won = isOver ? total > line : total < line;
+            return { status: won ? "win" : "loss", note: `${total} vs ${isOver ? "O" : "U"}${line}` };
+          }
+          if (isOver && total > line) return { status: "win", note: `Cashed (${total})` };
+          if (!isOver && total > line) return { status: "loss", note: `Over (${total})` };
+
+          // Live pace projection
+          let elapsedFrac = 0;
+          if (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE") {
+            const minM = detailLow.match(/(\d{1,3})/);
+            const elapsedMin = minM ? parseInt(minM[1], 10) : Math.floor(clockSec / 60);
+            elapsedFrac = Math.min(1, elapsedMin / (is1H ? 45 : 90));
+          } else {
+            let regP = 4, pLen = 900;
+            if (sp === "NCAAM") { regP = 2; pLen = 1200; }
+            else if (sp === "NBA") { regP = 4; pLen = 720; }
+            else if (sp === "NHL") { regP = 3; pLen = 1200; }
+            const targetP = is1H ? Math.ceil(regP / 2) : regP;
+            const totalSec = targetP * pLen;
+            const completedSec = Math.max(0, Math.min(period - 1, targetP)) * pLen;
+            const curElapsed = period <= targetP ? Math.max(0, pLen - clockSec) : 0;
+            elapsedFrac = Math.min(1, (completedSec + curElapsed) / totalSec);
+          }
+          if (elapsedFrac >= 0.05) {
+            const proj = total / elapsedFrac;
+            if (Math.abs(proj - line) < 0.05) return { status: "push", note: `Pace ${proj.toFixed(1)}` };
+            const trendingWin = isOver ? proj > line : proj < line;
+            return { status: trendingWin ? "win" : "loss", note: `Pace ${proj.toFixed(1)}` };
+          }
+          return null;
+        }
+      }
+
+      // 2. Spread (e.g. "Ole Miss Rebels -5.5", "Oregon State +6.5", "Team PK")
+      const spreadMatch = cleanPick.match(/(?:^|\s)([+-]\d+(?:\.\d+)?)(?:\s|$)/)
+        || cleanPick.match(/\b(pk|pick(?:\s*'?\s*em)?)\b/i);
+      if (spreadMatch) {
+        const rawVal = spreadMatch[1].toLowerCase();
+        const spreadVal = (rawVal === "pk" || rawVal.startsWith("pick")) ? 0 : parseFloat(rawVal);
+        if (!isNaN(spreadVal) && Math.abs(spreadVal) < 60) {
+          const teamText = cleanPick.slice(0, spreadMatch.index)
+            .replace(/\b(?:1h|1st\s*half|first\s*half|spread|puck\s*line|run\s*line|alt(?:ernate)?)\b/gi, " ")
+            .trim();
+          const matched = matchCompetitorForPick(away, home, teamText);
+          if (matched) {
+            const pickedScore = matched.picked === away ? aPts : hPts;
+            const oppScore = matched.opp === away ? aPts : hPts;
+            const coverMargin = pickedScore - oppScore + spreadVal;
+            if (coverMargin > 0) return { status: "win", note: `Covering (${fmtSigned(coverMargin)})` };
+            if (coverMargin < 0) return { status: "loss", note: `Trailing (${fmtSigned(coverMargin)})` };
+            return { status: "push", note: "On number" };
+          }
+        }
+      }
+
+      // 3. Moneyline (e.g. "Belmont Bruins ML", "Chiefs Moneyline", "Arsenal to win")
+      const mlMatch = cleanPick.match(/\b(ml|moneyline|to\s+win)\b/i);
+      const teamCandidate = (mlMatch ? cleanPick.slice(0, mlMatch.index) : cleanPick)
+        .replace(/\b(?:1h|1st\s*half|first\s*half|3-way|3\s*way)\b/gi, " ")
+        .trim();
+      const matchedMl = matchCompetitorForPick(away, home, teamCandidate);
+      if (matchedMl) {
+        const pickedScore = matchedMl.picked === away ? aPts : hPts;
+        const oppScore = matchedMl.opp === away ? aPts : hPts;
+        const margin = pickedScore - oppScore;
+        if (margin > 0) return { status: "win", note: `Ahead (+${margin})` };
+        if (margin < 0) return { status: "loss", note: `Behind (${margin})` };
+        if (state === "post") return { status: "loss", note: "Tied (Final)" };
+        return { status: "push", note: "Tied" };
+      }
+
+      return null;
+    }
+
     function renderPendingList(pend) {
       const pList = document.getElementById("pending-list");
       window.__pendingTickets = pend;
@@ -2697,9 +2907,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const clvBadge = (t.clv !== null && t.clv !== undefined)
           ? ` <span class="pill ${t.clv >= 0 ? "pill-green" : "pill-red"}">CLV ${t.clv >= 0 ? "+" : ""}${t.clv}%</span>`
           : "";
+        const trendCls = t.__trend === "win"
+          ? " trend-win"
+          : (t.__trend === "loss" ? " trend-loss" : (t.__trend === "push" ? " trend-push" : ""));
         const liveStyle = `font-weight:700;color:${t.__liveColor || "#60a5fa"};`;
         return `
-        <div class="bet-item">
+        <div class="bet-item${trendCls}">
           <div class="bet-top">
             <div class="bet-title">${esc(t.bet_id)} • ${esc(t.selections)}</div>
             <div><span class="pill pill-amber">${esc(t.odds)} | ${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>${clvBadge}</div>
@@ -2798,12 +3011,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (!away || !home) return;
         const aAbbr = away.team?.abbreviation || away.team?.shortDisplayName || "";
         const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
+        const trend = evaluateLiveTicketTrend(match, t);
+        t.__trend = trend ? trend.status : "";
+        const trendSuffix = trend && trend.note ? ` • ${trend.note}` : "";
         if (state === "in") {
-          t.__liveColor = "#10b981";
-          t.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+          t.__liveColor = trend
+            ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
+            : "#10b981";
+          t.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}`;
         } else if (state === "post") {
-          t.__liveColor = "#94a3b8";
-          t.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+          t.__liveColor = trend
+            ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
+            : "#94a3b8";
+          t.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}`;
         } else {
           t.__liveColor = "#60a5fa";
           t.__liveText = `🕒 ${detail}`;
