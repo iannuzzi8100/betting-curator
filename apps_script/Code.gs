@@ -1985,7 +1985,12 @@ function gradeStraightBetDeterministic_(bet, completedGames) {
   if (!sel || sel.indexOf(" + ") !== -1) return null;
   if (/\b(?:1h|1st\s*half|first\s*half|points|rebounds|assists|shots|sog|goals|pra|yards|touchdown)\b/i.test(sel)) return null;
 
-  const selClean = sel.replace(/\([^)]*\)/g, "").trim();
+  let selClean = sel.replace(/\([^)]*\)/g, "").trim();
+  if (selClean.indexOf("—") !== -1) {
+    selClean = selClean.split("—").pop().trim();
+  } else if (selClean.indexOf("–") !== -1 && selClean.split("–")[0].indexOf("@") !== -1) {
+    selClean = selClean.split("–").pop().trim();
+  }
   const selL = selClean.toLowerCase();
   const sp = String(bet.sport || "").toUpperCase();
 
@@ -2068,10 +2073,22 @@ function gradeStraightBetDeterministic_(bet, completedGames) {
 }
 
 function gradePendingBetsWithGemini_(pendingBets, completedGames) {
-  const apiKey = getProp_("GEMINI_API_KEY");
-  let geminiList = [];
+  const gradedById = {};
+  const remainingForGemini = [];
 
-  if (apiKey) {
+  for (let i = 0; i < pendingBets.length; i++) {
+    const b = pendingBets[i];
+    const bid = String(b.bet_id || "").trim();
+    const det = gradeStraightBetDeterministic_(b, completedGames);
+    if (det && bid) {
+      gradedById[bid] = det;
+    } else {
+      remainingForGemini.push(b);
+    }
+  }
+
+  const apiKey = getProp_("GEMINI_API_KEY");
+  if (remainingForGemini.length > 0 && apiKey) {
     const prompt = [
       "You are a deterministic sportsbook settlement auditor.",
       "Verify each pending bet against the official completed ESPN scoreboard results below.",
@@ -2085,7 +2102,7 @@ function gradePendingBetsWithGemini_(pendingBets, completedGames) {
       "7. Pick best matching WIN:/FAIL: tag from ALLOWED_EDGE_TAGS (or \"\" for Pending/Push).",
       "",
       "ALLOWED_EDGE_TAGS: " + JSON.stringify(ALLOWED_SETTLER_TAGS_),
-      "PENDING BETS: " + JSON.stringify(pendingBets),
+      "PENDING BETS: " + JSON.stringify(remainingForGemini),
       "COMPLETED ESPN GAMES: " + JSON.stringify(completedGames),
       "",
       "Respond ONLY with JSON: {\"settlements\": [{\"row_index\": 17, \"bet_id\": \"BET-052\", \"result\": \"Won|Lost|Push|Pending\", \"edge_tag\": \"...\", \"verification_note\": \"Short score proof\"}]}",
@@ -2108,29 +2125,21 @@ function gradePendingBetsWithGemini_(pendingBets, completedGames) {
         const json = JSON.parse(resp.getContentText());
         const outText = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text;
         if (outText) {
-          geminiList = JSON.parse(outText).settlements || [];
+          const geminiList = JSON.parse(outText).settlements || [];
+          for (let j = 0; j < geminiList.length; j++) {
+            const s = geminiList[j];
+            const bid = String(s.bet_id || "").trim();
+            const res = String(s.result || "").trim();
+            if (bid && !gradedById[bid] && (res === "Won" || res === "Lost" || res === "Push")) {
+              gradedById[bid] = s;
+            }
+          }
           break;
         }
       } catch (e) {}
     }
   }
 
-  const gradedById = {};
-  for (let i = 0; i < geminiList.length; i++) {
-    const s = geminiList[i];
-    const bid = String(s.bet_id || "").trim();
-    const res = String(s.result || "").trim();
-    if (bid && (res === "Won" || res === "Lost" || res === "Push")) {
-      gradedById[bid] = s;
-    }
-  }
-  for (let i = 0; i < pendingBets.length; i++) {
-    const b = pendingBets[i];
-    const bid = String(b.bet_id || "").trim();
-    if (gradedById[bid]) continue;
-    const det = gradeStraightBetDeterministic_(b, completedGames);
-    if (det) gradedById[bid] = det;
-  }
   return Object.keys(gradedById).map(k => gradedById[k]);
 }
 
