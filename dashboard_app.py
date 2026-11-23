@@ -913,6 +913,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       font-size: 0.86rem;
       cursor: pointer;
     }
+    .line-adjust-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      gap: 6px;
+      align-items: center;
+    }
+    .step-btn {
+      background: rgba(59, 130, 246, 0.14);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #93c5fd;
+      border-radius: 10px;
+      padding: 9px 11px;
+      font-weight: 800;
+      font-size: 0.85rem;
+      cursor: pointer;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+    .step-btn:active { transform: scale(0.96); }
+    .step-btn.active {
+      background: rgba(16, 185, 129, 0.22);
+      border-color: rgba(16, 185, 129, 0.55);
+      color: #34d399;
+    }
     .help-text { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
     .toast {
       position: fixed;
@@ -1024,9 +1048,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </header>
 
     <div class="stack">
-      <!-- 1. BANKROLL AT THE TOP -->
+      <!-- 1. AVAILABLE CASH & BANKROLL AT THE TOP -->
       <div class="card">
-        <div class="card-label">💰 Live Bankroll &amp; Exposure</div>
+        <div class="card-label">💵 Available Cash &amp; Exposure</div>
         <div class="big-num" id="bankroll-val">--</div>
         <div class="sub-row" id="bankroll-sub"></div>
       </div>
@@ -1116,6 +1140,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               <option value="NFL">NFL</option>
               <option value="NBA">NBA</option>
               <option value="NHL">NHL</option>
+              <option value="CBB">CBB</option>
               <option value="NCAAM">NCAAM</option>
               <option value="EPL">EPL</option>
               <option value="UCL">UCL</option>
@@ -1136,12 +1161,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="field">
           <label>Selection &amp; Matchup</label>
-          <input id="f-sel" type="text" placeholder="e.g. Middle Tennessee -6.5 (2:00 PM EST)" />
+          <input id="f-sel" type="text" placeholder="e.g. Middle Tennessee -6.5 (2:00 PM EST)" oninput="syncLineControlsFromSel()" />
+        </div>
+        <div class="field">
+          <label>Quick Spread / Moneyline</label>
+          <div class="line-adjust-row">
+            <button type="button" class="step-btn" onclick="stepSelectionLine(-0.5)">−0.5</button>
+            <select id="f-line-select" onchange="applyLineFromSelect()"></select>
+            <button type="button" class="step-btn" onclick="stepSelectionLine(0.5)">+0.5</button>
+            <button type="button" class="step-btn" id="f-ml-btn" onclick="setSelectionLine('ML')">ML</button>
+          </div>
         </div>
         <div class="form-row-2">
           <div class="field">
             <label>American Odds</label>
-            <input id="f-odds" type="text" inputmode="text" placeholder="-110" oninput="updatePayoutPreview()" />
+            <select id="f-odds" onchange="onOddsSelectChange('f')"></select>
+            <input id="f-odds-custom" type="text" inputmode="text" placeholder="Custom e.g. +650" style="display:none;margin-top:6px;" oninput="updatePayoutPreview()" />
           </div>
           <div class="field">
             <label>Stake ($)</label>
@@ -1208,7 +1243,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="form-row-2">
           <div class="field">
             <label>Odds</label>
-            <input id="e-odds" type="text" />
+            <select id="e-odds" onchange="onOddsSelectChange('e')"></select>
+            <input id="e-odds-custom" type="text" inputmode="text" placeholder="Custom e.g. +650" style="display:none;margin-top:6px;" />
           </div>
           <div class="field">
             <label>Stake ($)</label>
@@ -1585,8 +1621,234 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.getElementById("tab-shot-btn").classList.toggle("active", tab === "shot");
     }
 
+    function buildStandardOddsList() {
+      const vals = [];
+      for (let v = -500; v <= -310; v += 10) vals.push(v);
+      for (let v = -300; v <= -205; v += 5) vals.push(v);
+      for (let v = -200; v <= -101; v += 1) vals.push(v);
+      for (let v = 100; v <= 200; v += 1) vals.push(v);
+      for (let v = 205; v <= 300; v += 5) vals.push(v);
+      for (let v = 310; v <= 500; v += 10) vals.push(v);
+      return vals;
+    }
+
+    function populateOddsSelect(prefix) {
+      const sel = document.getElementById(`${prefix}-odds`);
+      if (!sel || sel.options.length > 0) return;
+      const vals = buildStandardOddsList();
+      sel.innerHTML = vals.map(v => {
+        const lbl = v > 0 ? `+${v}` : String(v);
+        return `<option value="${lbl}">${lbl}</option>`;
+      }).join("") + `<option value="custom">Custom...</option>`;
+      sel.value = "-110";
+    }
+
+    function populateOddsDropdowns() {
+      populateOddsSelect("f");
+      populateOddsSelect("e");
+    }
+
+    function setOddsValue(prefix, rawOdds) {
+      populateOddsSelect(prefix);
+      const sel = document.getElementById(`${prefix}-odds`);
+      const customEl = document.getElementById(`${prefix}-odds-custom`);
+      if (!sel) return;
+      const num = parseInt(String(rawOdds == null ? "" : rawOdds).replace(/[^0-9+-]/g, ""), 10);
+      if (isNaN(num) || num === 0) {
+        sel.value = "-110";
+        if (customEl) { customEl.style.display = "none"; customEl.value = ""; }
+        return;
+      }
+      const norm = num > 0 ? `+${num}` : String(num);
+      let opt = [...sel.options].find(o => o.value === norm);
+      if (!opt) {
+        // Insert exact odds value in sorted numeric order before Custom...
+        const customOpt = [...sel.options].find(o => o.value === "custom");
+        opt = document.createElement("option");
+        opt.value = norm;
+        opt.textContent = norm;
+        const insertBefore = [...sel.options].find(o => o.value !== "custom" && parseInt(o.value, 10) > num) || customOpt;
+        sel.insertBefore(opt, insertBefore || null);
+      }
+      sel.value = norm;
+      if (customEl) { customEl.style.display = "none"; customEl.value = ""; }
+    }
+
+    function getOddsValue(prefix) {
+      const sel = document.getElementById(`${prefix}-odds`);
+      const customEl = document.getElementById(`${prefix}-odds-custom`);
+      if (!sel) return "-110";
+      if (sel.value === "custom") {
+        return customEl ? customEl.value.trim() : "";
+      }
+      return sel.value.trim();
+    }
+
+    function onOddsSelectChange(prefix) {
+      const sel = document.getElementById(`${prefix}-odds`);
+      const customEl = document.getElementById(`${prefix}-odds-custom`);
+      if (customEl) {
+        const isCustom = sel && sel.value === "custom";
+        customEl.style.display = isCustom ? "block" : "none";
+        if (isCustom) customEl.focus();
+      }
+      if (prefix === "f") updatePayoutPreview();
+    }
+
+    function formatHalfNum(n) {
+      const rounded = Math.round(n * 2) / 2;
+      return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+    }
+
+    function formatSpreadToken(n) {
+      const rounded = Math.round(n * 2) / 2;
+      if (rounded === 0) return "PK";
+      const s = Number.isInteger(rounded) ? String(Math.abs(rounded)) : Math.abs(rounded).toFixed(1);
+      return (rounded > 0 ? "+" : "-") + s;
+    }
+
+    function populateLineDropdown() {
+      const sel = document.getElementById("f-line-select");
+      if (!sel || sel.options.length > 0) return;
+      const opts = [
+        `<option value="">— Line —</option>`,
+        `<option value="ML">ML (Moneyline)</option>`,
+        `<option value="PK">PK (Pick 'em)</option>`,
+      ];
+      for (let v = -20.5; v <= -0.5; v += 0.5) {
+        const tok = formatSpreadToken(v);
+        opts.push(`<option value="${tok}">${tok}</option>`);
+      }
+      for (let v = 0.5; v <= 20.5; v += 0.5) {
+        const tok = formatSpreadToken(v);
+        opts.push(`<option value="${tok}">${tok}</option>`);
+      }
+      sel.innerHTML = opts.join("");
+    }
+
+    function parseSelectionParts(rawSel) {
+      const s = String(rawSel || "").trim();
+      let suffix = "";
+      let core = s;
+      // Preserve trailing parenthetical such as "(Window 2: 10:00 AM)" or "(7:00 PM EST)"
+      const parenMatch = core.match(/\s*(\([^)]*\))\s*$/);
+      if (parenMatch) {
+        suffix = " " + parenMatch[1];
+        core = core.slice(0, parenMatch.index).trim();
+      }
+      // Match Over/Under total at end of core
+      const ouMatch = core.match(/\s+(Over|Under|O|U)\s*(\d+(?:\.\d+)?)\s*$/i);
+      if (ouMatch) {
+        const dir = /^u/i.test(ouMatch[1]) ? "Under" : "Over";
+        const val = parseFloat(ouMatch[2]);
+        return {
+          base: core.slice(0, ouMatch.index).trim(),
+          kind: "total",
+          dir,
+          num: val,
+          token: `${dir} ${formatHalfNum(val)}`,
+          suffix,
+        };
+      }
+      // Match Moneyline / TO WIN at end of core
+      const mlMatch = core.match(/\s+(ML|Moneyline|TO\s+WIN)\s*$/i);
+      if (mlMatch) {
+        return {
+          base: core.slice(0, mlMatch.index).trim(),
+          kind: "ml",
+          num: null,
+          token: "ML",
+          suffix,
+        };
+      }
+      // Match PK / Pick'em at end of core
+      const pkMatch = core.match(/\s+(PK|Pick(?:'em)?)\s*$/i);
+      if (pkMatch) {
+        return {
+          base: core.slice(0, pkMatch.index).trim(),
+          kind: "spread",
+          num: 0,
+          token: "PK",
+          suffix,
+        };
+      }
+      // Match signed spread at end of core (e.g. -5.5, +3, -6.5)
+      const spMatch = core.match(/\s+([+-]\d+(?:\.\d+)?)\s*$/);
+      if (spMatch) {
+        const val = parseFloat(spMatch[1]);
+        return {
+          base: core.slice(0, spMatch.index).trim(),
+          kind: "spread",
+          num: val,
+          token: formatSpreadToken(val),
+          suffix,
+        };
+      }
+      return { base: core, kind: "none", num: null, token: "", suffix };
+    }
+
+    function syncLineControlsFromSel() {
+      populateLineDropdown();
+      const selInput = document.getElementById("f-sel");
+      const lineSelect = document.getElementById("f-line-select");
+      const mlBtn = document.getElementById("f-ml-btn");
+      if (!selInput || !lineSelect) return;
+      const parts = parseSelectionParts(selInput.value);
+      if (mlBtn) mlBtn.classList.toggle("active", parts.kind === "ml");
+      if (!parts.token) {
+        lineSelect.value = "";
+        return;
+      }
+      let opt = [...lineSelect.options].find(o => o.value === parts.token);
+      if (!opt) {
+        opt = document.createElement("option");
+        opt.value = parts.token;
+        opt.textContent = parts.token;
+        lineSelect.insertBefore(opt, lineSelect.options[1] || null);
+      }
+      lineSelect.value = parts.token;
+    }
+
+    function setSelectionLine(newToken) {
+      const selInput = document.getElementById("f-sel");
+      if (!selInput) return;
+      const parts = parseSelectionParts(selInput.value);
+      const base = parts.base;
+      if (!base) {
+        selInput.value = newToken;
+      } else if (!newToken) {
+        selInput.value = `${base}${parts.suffix}`.trim();
+      } else {
+        selInput.value = `${base} ${newToken}${parts.suffix}`.trim();
+      }
+      syncLineControlsFromSel();
+    }
+
+    function applyLineFromSelect() {
+      const lineSelect = document.getElementById("f-line-select");
+      if (!lineSelect || !lineSelect.value) return;
+      setSelectionLine(lineSelect.value);
+    }
+
+    function stepSelectionLine(delta) {
+      const selInput = document.getElementById("f-sel");
+      if (!selInput) return;
+      const parts = parseSelectionParts(selInput.value);
+      if (parts.kind === "total" && parts.num != null) {
+        const nextVal = Math.max(0.5, Math.round((parts.num + delta) * 2) / 2);
+        setSelectionLine(`${parts.dir} ${formatHalfNum(nextVal)}`);
+        return;
+      }
+      let cur = 0;
+      if (parts.kind === "spread" && parts.num != null) {
+        cur = parts.num;
+      }
+      const nextSpread = Math.round((cur + delta) * 2) / 2;
+      setSelectionLine(formatSpreadToken(nextSpread));
+    }
+
     function updatePayoutPreview() {
-      const odds = parseInt(String(document.getElementById("f-odds").value || "").replace(/\+/g, ""), 10);
+      const odds = parseInt(String(getOddsValue("f") || "").replace(/\+/g, ""), 10);
       const stake = parseFloat(document.getElementById("f-stake").value || "0");
       let payout = 0;
       if (!isNaN(odds) && odds !== 0 && !isNaN(stake) && stake > 0) {
@@ -1727,6 +1989,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         return;
       }
       switchLogTab("form");
+      populateOddsDropdowns();
+      populateLineDropdown();
       if (prefillPlay) {
         const fb = parseTitleFallback(prefillPlay.title);
         const sport = prefillPlay.sport || fb.sport;
@@ -1738,14 +2002,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if ([...spEl.options].some(o => o.value === sport)) spEl.value = sport;
         document.getElementById("f-type").value = "Straight";
         document.getElementById("f-sel").value = sel;
-        document.getElementById("f-odds").value = odds >= 0 ? `+${odds}` : String(odds);
+        setOddsValue("f", odds);
         document.getElementById("f-stake").value = Number(stake).toFixed(2);
       } else {
         document.getElementById("log-modal-title").textContent = "➕ Log Placed Bet";
         document.getElementById("f-sel").value = "";
-        document.getElementById("f-odds").value = "-110";
+        setOddsValue("f", "-110");
         document.getElementById("f-stake").value = "";
       }
+      syncLineControlsFromSel();
       updatePayoutPreview();
       openModal("log-modal");
     }
@@ -1755,10 +2020,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const sport = document.getElementById("f-sport").value;
       const bet_type = document.getElementById("f-type").value;
       const selections = document.getElementById("f-sel").value.trim();
-      const odds = document.getElementById("f-odds").value.trim();
+      const odds = getOddsValue("f");
       const stake = parseFloat(document.getElementById("f-stake").value);
       if (!selections || !stake || stake <= 0) {
         showToast("Enter a selection and valid stake.");
+        return;
+      }
+      if (!odds || isNaN(parseInt(odds.replace(/\+/g, ""), 10))) {
+        showToast("Select or enter valid American odds (e.g. -110).");
         return;
       }
       btn.disabled = true;
@@ -1829,7 +2098,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.getElementById("e-sport").value = ticket.sport || "";
       document.getElementById("e-result").value = "Pending";
       document.getElementById("e-sel").value = ticket.selections || "";
-      document.getElementById("e-odds").value = ticket.odds || "";
+      setOddsValue("e", ticket.odds || "-110");
       document.getElementById("e-stake").value = ticket.stake != null ? Number(ticket.stake).toFixed(2) : "";
       document.getElementById("e-cashout-ret").value = "";
       openModal("edit-modal");
@@ -1847,7 +2116,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           sport: document.getElementById("e-sport").value.trim(),
           result: document.getElementById("e-result").value,
           selections: document.getElementById("e-sel").value.trim(),
-          odds: document.getElementById("e-odds").value.trim(),
+          odds: getOddsValue("e"),
           stake: document.getElementById("e-stake").value,
         });
         if (res.dashboard) render(res.dashboard);
@@ -2003,11 +2272,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       updateSyncPill(Boolean(data.live_mode));
       document.getElementById("updated-at").textContent = "Last synced: " + data.updated_at;
 
-      // 1. Bankroll (Top)
-      document.getElementById("bankroll-val").textContent = fmtMoney(data.bankroll);
+      // 1. Available Cash & Bankroll (Top — Available Cash primary, Live Bankroll in sub-row)
+      document.getElementById("bankroll-val").textContent = fmtMoney(data.available_cash);
       document.getElementById("bankroll-sub").innerHTML =
         `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
-        `<span>Avail Cash: <span class="pos">${fmtMoney(data.available_cash)}</span></span>`;
+        `<span>Live Bankroll: <span class="pos">${fmtMoney(data.bankroll)}</span></span>`;
 
       // Normalize Today & Yesterday tickets with explicit date field
       const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
@@ -2475,6 +2744,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       btn.textContent = "↻ Refresh Live";
     }
 
+    populateOddsDropdowns();
+    populateLineDropdown();
     if (STATIC_DATA) {
       render(STATIC_DATA);
       loadData();
