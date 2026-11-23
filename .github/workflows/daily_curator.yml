@@ -26,6 +26,11 @@ on:
           - settler
           - scraper
           - curator
+      regrade_bet_id:
+        description: 'Optional comma-separated Bet ID(s) to re-evaluate against ESPN (e.g. BET-063)'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   run-betting-pipeline:
@@ -33,6 +38,7 @@ jobs:
     permissions:
       contents: write
     env:
+      REGRADE_BET_ID: ${{ inputs.regrade_bet_id || '' }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}

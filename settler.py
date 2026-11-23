@@ -241,6 +241,10 @@ def _grade_straight_bet_deterministic(bet, final_games):
         return None
 
     sel_clean = re.sub(r"\([^)]*\)", "", sel).strip()
+    if "—" in sel_clean:
+        sel_clean = sel_clean.split("—")[-1].strip()
+    elif "–" in sel_clean and "@" in sel_clean.split("–")[0]:
+        sel_clean = sel_clean.split("–")[-1].strip()
     sel_l = sel_clean.lower()
     sp = str(bet.get("sport", "") or "").strip().upper()
 
@@ -340,10 +344,22 @@ def _grade_straight_bet_deterministic(bet, final_games):
 
     return None
 
-# --- 3. GRADE & AUTO-TAG PENDING TICKETS WITH GEMINI ---
+# --- 3. GRADE & AUTO-TAG PENDING TICKETS (DETERMINISTIC FIRST, GEMINI FOR PARLAYS/PROPS) ---
 def grade_pending_bets(pending_bets, final_games):
-    if not GEMINI_API_KEY:
-        raise ValueError("Missing GEMINI_API_KEY environment variable.")
+    graded_map = {}
+    remaining_for_gemini = []
+
+    # 1. Deterministic exact arithmetic first for Straight Spread / ML / Totals
+    for bet in pending_bets:
+        bid = str(bet.get("bet_id", "")).strip()
+        det = _grade_straight_bet_deterministic(bet, final_games)
+        if det and bid:
+            graded_map[bid] = det
+        else:
+            remaining_for_gemini.append(bet)
+
+    if not remaining_for_gemini or not GEMINI_API_KEY:
+        return list(graded_map.values())
 
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -371,7 +387,7 @@ ALLOWED_EDGE_TAGS:
 {json.dumps(ALLOWED_EDGE_TAGS, indent=2)}
 
 PENDING BETS:
-{json.dumps(pending_bets, indent=2)}
+{json.dumps(remaining_for_gemini, indent=2)}
 
 ESPN SCOREBOARD DATA:
 {json.dumps(final_games, indent=2)}
@@ -417,30 +433,16 @@ Respond ONLY with valid JSON matching this exact schema:
             print(f"Attempt {attempt} ({model_name}) failed: {e}. Trying next model...", flush=True)
             time.sleep(2)
 
-    gemini_settlements = []
     if response is not None:
         try:
-            gemini_settlements = json.loads(response.text).get("settlements", [])
+            for s in json.loads(response.text).get("settlements", []):
+                bid = str(s.get("bet_id", "")).strip()
+                res_v = str(s.get("result", "")).strip()
+                if bid and bid not in graded_map and res_v in ("Won", "Lost", "Push"):
+                    graded_map[bid] = s
         except Exception as e:
             print(f"Error parsing Gemini settlement response: {e}", flush=True)
             print("Raw model response:", response.text, flush=True)
-    else:
-        print("All model attempts experienced overload; using deterministic straight-bet fallback.", flush=True)
-
-    graded_map = {}
-    for s in gemini_settlements:
-        bid = str(s.get("bet_id", "")).strip()
-        res_v = str(s.get("result", "")).strip()
-        if bid and res_v in ("Won", "Lost", "Push"):
-            graded_map[bid] = s
-
-    for bet in pending_bets:
-        bid = str(bet.get("bet_id", "")).strip()
-        if bid in graded_map:
-            continue
-        det = _grade_straight_bet_deterministic(bet, final_games)
-        if det:
-            graded_map[bid] = det
 
     return list(graded_map.values())
 
@@ -807,6 +809,11 @@ def run_settlement(notify_telegram=True):
     col_notes = headers.index("Notes / Game Script Analysis") if "Notes / Game Script Analysis" in headers else None
     col_tag = headers.index("Outcome / Edge Tag") if "Outcome / Edge Tag" in headers else None
 
+    regrade_ids = {
+        x.strip().upper()
+        for x in os.environ.get("REGRADE_BET_ID", "").split(",")
+        if x.strip()
+    }
     pending_bets = []
     dates_needed = set()
 
@@ -818,7 +825,7 @@ def run_settlement(notify_telegram=True):
         bet_id = row[col_bet_id].strip()
         result_val = row[col_result].strip().lower()
 
-        if bet_id and result_val == "pending":
+        if bet_id and (result_val == "pending" or bet_id.upper() in regrade_ids):
             raw_date = row[col_date].strip()
             clean_date = raw_date.replace("-", "")
             if len(clean_date) == 8 and clean_date.isdigit():
@@ -849,7 +856,7 @@ def run_settlement(notify_telegram=True):
         dates_needed.add(now_utc.strftime("%Y%m%d"))
         dates_needed.add((now_utc - timedelta(days=1)).strftime("%Y%m%d"))
 
-        print(f"Found {len(pending_bets)} pending bet(s). Fetching ESPN scores for {sorted(dates_needed)}...", flush=True)
+        print(f"Found {len(pending_bets)} pending/regrade bet(s). Fetching ESPN scores for {sorted(dates_needed)}...", flush=True)
         final_games = fetch_final_scores(sorted(dates_needed), pending_bets=pending_bets)
         print(f"Retrieved {len(final_games)} scoreboard records from ESPN.", flush=True)
 
@@ -869,6 +876,8 @@ def run_settlement(notify_telegram=True):
 
                 if col_notes is not None and note:
                     existing_note = all_values[row_num - 1][col_notes] if len(all_values[row_num - 1]) > col_notes else ""
+                    existing_note = re.sub(r"\s*\|\s*\[Settled:[^\]]*\]", "", existing_note).strip()
+                    existing_note = re.sub(r"^\[Settled:[^\]]*\]\s*\|?\s*", "", existing_note).strip()
                     updated_note = f"{existing_note} | [Settled: {note}]".strip(" |")
                     sheet.update_cell(row_num, col_notes + 1, updated_note)
 
