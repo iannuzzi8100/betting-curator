@@ -231,8 +231,16 @@ def download_telegram_photo(file_id):
     return None
 
 
+def _normalize_sport(sport):
+    s = str(sport or "").strip()
+    if s.upper() in ("CBB", "NCAAB", "NCAAM", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+        return "NCAAM"
+    return s
+
+
 def build_row_payload(bet_id, cur_row, date_str, sport, bet_type, sel, odds, stake, t_id="", extra_note=""):
     prev_row = cur_row - 1
+    sport = _normalize_sport(sport)
     units_str = f"{stake / 4.0:.2f}U"
     tier_label = "Core Tier 1" if bet_type == "Straight" else "Flyer Tier 3"
     note_str = f"Hard Rock Bet Ticket: {sel} ({odds:+d}) | Stake: ${stake:.2f}"
@@ -333,8 +341,9 @@ def apply_actions_to_sheet(tracker_ws, actions):
 
         changed_fields = []
         if upd.get("sport"):
-            tracker_ws.update_acell(f"C{r_idx}", str(upd["sport"]).strip())
-            changed_fields.append(f"Sport={upd['sport']}")
+            norm_sp = _normalize_sport(upd["sport"])
+            tracker_ws.update_acell(f"C{r_idx}", norm_sp)
+            changed_fields.append(f"Sport={norm_sp}")
         if upd.get("selections"):
             tracker_ws.update_acell(f"F{r_idx}", str(upd["selections"]).strip())
             changed_fields.append(f"Selection={upd['selections']}")

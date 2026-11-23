@@ -64,7 +64,7 @@ ESPN_ENDPOINTS = {
         "news": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/news",
         "injuries": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries",
     },
-    "CBB": {
+    "NCAAM": {
         "scoreboard": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard",
         "news": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/news",
     },
@@ -675,7 +675,7 @@ def fetch_espn_quant_matchups_and_props():
         ("NFL", "football", "nfl", None),
         ("NBA", "basketball", "nba", None),
         ("NHL", "hockey", "nhl", None),
-        ("CBB", "basketball", "mens-college-basketball", "50"),
+        ("NCAAM", "basketball", "mens-college-basketball", "50"),
     ]
 
     # Auto-detect Weekend Football Mode (Saturday = CFB + EPL only; Sunday = NFL + EPL only).
@@ -711,9 +711,9 @@ def fetch_espn_quant_matchups_and_props():
 
     for label, sport, league, groups in league_configs:
         base_sb = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        # 1. Identify teams that played yesterday (Back-to-Back 0-days rest detector for NBA/NHL/CBB)
+        # 1. Identify teams that played yesterday (Back-to-Back 0-days rest detector for NBA/NHL/NCAAM)
         b2b_teams = set()
-        if label in ("NBA", "NHL", "CBB"):
+        if label in ("NBA", "NHL", "NCAAM"):
             try:
                 y_params = {"dates": yesterday_ymd}
                 if groups:

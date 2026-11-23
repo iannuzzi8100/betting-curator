@@ -202,7 +202,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         league_rule = (
             "**SATURDAY FOOTBALL + EPL ONLY (STRICT):** Today is Saturday during College Football season. "
             "Pick **SOLELY from College Football (CFB) and Premier League Soccer (EPL)**. "
-            "Do NOT recommend NBA, NHL, CBB, or any other sport today. "
+            "Do NOT recommend NBA, NHL, NCAAM, or any other sport today. "
             "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
             "     • **Window 1 — Early Morning (7:30 AM EPL):** 7:30 AM – 9:30 AM EST\n"
             "     • **Window 2 — Late Morning (10:00 AM EPL):** 9:45 AM – 11:45 AM EST\n"
@@ -216,7 +216,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         league_rule = (
             "**SUNDAY FOOTBALL + EPL ONLY (STRICT):** Today is Sunday during NFL season. "
             "Pick **SOLELY from NFL and Premier League Soccer (EPL)**. "
-            "Do NOT recommend NBA, NHL, CBB, or any other sport today. "
+            "Do NOT recommend NBA, NHL, NCAAM, or any other sport today. "
             "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
             "     • **Window 1 — Morning (9:00–11:30 AM EPL):** 9:00 AM – 11:45 AM EST\n"
             "     • **Window 2 — Early Afternoon (1:00 PM NFL):** 12:30 PM – 3:45 PM EST\n"
@@ -227,7 +227,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
     else:
         league_rule = (
             "**ALL-LEAGUE BEST-EV TIME-SLOT MODE:** Pick the highest-conviction plays across any active league "
-            "(NBA, NHL, CFB, NFL, CBB, EPL, MLB) — staggered across every remaining ~3-hour betting window "
+            "(NBA, NHL, CFB, NFL, NCAAM, EPL, MLB) — staggered across every remaining ~3-hour betting window "
             "so each window settles and compounds the resulting bankroll into the next window."
         )
         slate_header_tag = "Confidence Meter Time-Slot Slate"

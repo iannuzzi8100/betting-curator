@@ -809,6 +809,46 @@ def run_settlement(notify_telegram=True):
     col_notes = headers.index("Notes / Game Script Analysis") if "Notes / Game Script Analysis" in headers else None
     col_tag = headers.index("Outcome / Edge Tag") if "Outcome / Edge Tag" in headers else None
 
+    # Normalize any legacy CBB / NCAAB sport cells in Col C to canonical NCAAM and clean up dropdown validation
+    if col_sport is not None:
+        sport_col_letter = chr(ord("A") + col_sport)
+        normalized_sport_rows = 0
+        for r_idx in range(header_row_idx + 1, len(all_values)):
+            row = all_values[r_idx]
+            if len(row) > col_sport:
+                raw_sp = row[col_sport].strip()
+                if raw_sp.upper() in ("CBB", "NCAAB", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+                    sheet.update_acell(f"{sport_col_letter}{r_idx + 1}", "NCAAM")
+                    row[col_sport] = "NCAAM"
+                    normalized_sport_rows += 1
+        if normalized_sport_rows:
+            print(f"Normalized {normalized_sport_rows} spreadsheet row(s) from CBB/NCAAB -> NCAAM.", flush=True)
+        try:
+            canonical_sports = ["CFB", "NFL", "NBA", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "ATP", "WTA", "Multi-Sport", "Other"]
+            sheet.spreadsheet.batch_update({
+                "requests": [{
+                    "setDataValidation": {
+                        "range": {
+                            "sheetId": sheet.id,
+                            "startRowIndex": header_row_idx + 1,
+                            "endRowIndex": max(len(all_values) + 50, 200),
+                            "startColumnIndex": col_sport,
+                            "endColumnIndex": col_sport + 1,
+                        },
+                        "rule": {
+                            "condition": {
+                                "type": "ONE_OF_LIST",
+                                "values": [{"userEnteredValue": v} for v in canonical_sports],
+                            },
+                            "showCustomUi": True,
+                            "strict": False,
+                        },
+                    }
+                }]
+            })
+        except Exception as dv_exc:
+            print(f"Warning: Could not refresh Sport/League dropdown validation: {dv_exc}", flush=True)
+
     regrade_ids = {
         x.strip().upper()
         for x in os.environ.get("REGRADE_BET_ID", "").split(",")

@@ -178,7 +178,7 @@ function buildDashboardData_() {
       bet_num: parseBetNum_(betId),
       bet_id: betId,
       bDate: String(r[1] || "").trim(),
-      sport: String(r[2] || "").trim(),
+      sport: normalizeSport_(r[2]),
       bType: String(r[3] || "").trim(),
       sel: String(r[5] || "").trim(),
       odds: String(r[6] || "").trim(),
@@ -681,7 +681,7 @@ function parseCuratedTitleFields_(title) {
     pick = pick + " (" + gameTime + ")";
   }
 
-  return { sport: sport, selection: pick, odds: odds, stake: stake, game_time: gameTime };
+  return { sport: normalizeSport_(sport), selection: pick, odds: odds, stake: stake, game_time: gameTime };
 }
 
 // ============================================================================
@@ -698,7 +698,7 @@ function handleLogBetApi_(body) {
 
     const ticket = {
       date: String(body.date || todayStr).trim(),
-      sport: String(body.sport || "CFB").trim(),
+      sport: normalizeSport_(body.sport || "CFB"),
       bet_type: String(body.bet_type || "Straight").trim(),
       selections: String(body.selections || "").trim(),
       odds: cleanInt_(body.odds, -110),
@@ -936,8 +936,9 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
 
     const changed = [];
     if (upd.sport) {
-      trackerWs.getRange("C" + rIdx).setValue(String(upd.sport).trim());
-      changed.push("Sport=" + upd.sport);
+      const normSp = normalizeSport_(upd.sport);
+      trackerWs.getRange("C" + rIdx).setValue(normSp);
+      changed.push("Sport=" + normSp);
     }
     if (upd.bet_type) {
       trackerWs.getRange("D" + rIdx).setValue(String(upd.bet_type).trim());
@@ -997,7 +998,7 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
     const t = validNew.shift();
     const stake = cleanFloat_(t.stake, 0.0);
     const odds = cleanInt_(t.odds, -110);
-    const sport = String(t.sport || "CFB").trim();
+    const sport = normalizeSport_(t.sport || "CFB");
     const betType = String(t.bet_type || "Straight").trim();
     const dateStr = String(t.date || todayStr).trim();
     const sel = String(t.selections || "").trim();
@@ -1037,7 +1038,7 @@ function applyActionsToSheet_(trackerWs, actions, opts) {
       const betId = "BET-" + String(maxBetNum).padStart(3, "0");
       const stake = cleanFloat_(t.stake, 0.0);
       const odds = cleanInt_(t.odds, -110);
-      const sport = String(t.sport || "CFB").trim();
+      const sport = normalizeSport_(t.sport || "CFB");
       const betType = String(t.bet_type || "Straight").trim();
       const dateStr = String(t.date || todayStr).trim();
       const sel = String(t.selections || "").trim();
@@ -1385,6 +1386,8 @@ function reverseSheetToNewestFirst() {
       for (let c = 0; c < 16; c++) {
         rowOut.push(item.raw[c] !== undefined ? item.raw[c] : "");
       }
+      // Col C (idx 2): Standardize CBB / NCAAB -> NCAAM
+      rowOut[2] = normalizeSport_(rowOut[2]);
       // Col J (idx 9): Potential Payout formula
       rowOut[9] = '=IF(OR(ISBLANK(I' + r + '), ISBLANK(G' + r + '), I' + r + '="", G' + r + '=""), "", IF(G' + r + '>0, ROUND(I' + r + '*(1+G' + r + '/100), 2), ROUND(I' + r + '*(1+100/ABS(G' + r + ')), 2)))';
       // Col L (idx 11): Preserve hardcoded partial cashout return if non-formula number; otherwise standard formula
@@ -1402,11 +1405,11 @@ function reverseSheetToNewestFirst() {
       outRows.push(rowOut);
     }
 
-    // Relax any strict Data Validation rules on data rows (and expand Col C Sport dropdown to include NCAAM/EPL/UCL/ATP/WTA)
+    // Relax any strict Data Validation rules on data rows (and standardize Col C Sport dropdown to NCAAM)
     const maxDataRows = Math.max(outRows.length, ws.getMaxRows() - firstDataRow + 1);
     ws.getRange(firstDataRow, 1, maxDataRows, 16).clearDataValidations();
     const sportRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["CFB", "NFL", "NBA", "CBB", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "ATP", "WTA", "Multi-Sport", "Other"], true)
+      .requireValueInList(["CFB", "NFL", "NBA", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "ATP", "WTA", "Multi-Sport", "Other"], true)
       .setAllowInvalid(true)
       .build();
     ws.getRange(firstDataRow, 3, maxDataRows, 1).setDataValidation(sportRule);
@@ -1543,6 +1546,7 @@ const ESPN_LEAGUE_ENDPOINTS_ = {
   NFL: { path: "football/nfl", groups: null },
   NBA: { path: "basketball/nba", groups: null },
   NCAAM: { path: "basketball/mens-college-basketball", groups: "50" },
+  NCAAB: { path: "basketball/mens-college-basketball", groups: "50" },
   CBB: { path: "basketball/mens-college-basketball", groups: "50" },
   NHL: { path: "hockey/nhl", groups: null },
   MLB: { path: "baseball/mlb", groups: null },
@@ -2169,6 +2173,15 @@ function triggerGithubRefresh_(stage) {
 // UTILITY HELPERS
 // ============================================================================
 
+function normalizeSport_(sport) {
+  const s = String(sport || "").trim();
+  const u = s.toUpperCase();
+  if (u === "CBB" || u === "NCAAB" || u === "NCAAM" || u === "MEN'S COLLEGE BASKETBALL" || u === "COLLEGE BASKETBALL") {
+    return "NCAAM";
+  }
+  return s;
+}
+
 function getSheetState_(trackerWs) {
   const allVals = trackerWs.getDataRange().getDisplayValues();
   const headerIdx = findHeaderIdx_(allVals);
@@ -2181,7 +2194,7 @@ function getSheetState_(trackerWs) {
       row_index: idx + 1,
       bet_id: String(r[0]).trim(),
       date: String(r[1] || "").trim(),
-      sport: String(r[2] || "").trim(),
+      sport: normalizeSport_(r[2]),
       bet_type: String(r[3] || "").trim(),
       selections: String(r[5] || "").trim(),
       odds: String(r[6] || "").trim(),
