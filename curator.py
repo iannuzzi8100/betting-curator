@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import datetime
 import requests
@@ -94,7 +95,18 @@ def read_tracker_context(gc):
     pending_total = 0.0
 
     header_idx = next((i for i, r in enumerate(tracker_rows) if "Bet ID" in r and "Result" in r), 12)
-    for r in tracker_rows[header_idx + 1 :]:
+
+    def _bet_num(row):
+        try:
+            return int(str(row[0]).strip().split("-")[1])
+        except Exception:
+            return 0
+
+    bet_rows_chrono = sorted(
+        [r for r in tracker_rows[header_idx + 1 :] if r and r[0].strip().startswith("BET-")],
+        key=_bet_num,
+    )
+    for r in bet_rows_chrono:
         if len(r) > 10 and r[0].strip() and r[10].strip().lower() == "pending":
             bet_id = r[0].strip()
             bet_type = r[3].strip() if len(r) > 3 else ""
@@ -135,8 +147,7 @@ def read_tracker_context(gc):
     )
 
     summary_block = verified_bankroll_banner + "\n\n" + "\n".join([" | ".join(r[:20]) for r in tracker_rows[:12]])
-    non_empty_rows = [r for r in tracker_rows[header_idx + 1 :] if r and r[0].strip()]
-    recent_bets = "\n".join([" | ".join(r[:20]) for r in non_empty_rows[-15:]])
+    recent_bets = "\n".join([" | ".join(r[:20]) for r in bet_rows_chrono[-15:]])
     rules_text = "\n".join([" | ".join(r[:8]) for r in rules_rows])
     audit_text = "\n".join([" | ".join(r[:8]) for r in audit_rows])
 
@@ -385,6 +396,7 @@ Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total'
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
+        "gemini-2.5-flash",
     ]:
         try:
             resp = client.models.generate_content(model=model_id, contents=prompt)
@@ -424,6 +436,36 @@ def append_to_curator_feed(gc, today_str, curated_message):
     ])
 
 
+def _build_curated_inline_keyboard(message):
+    rows = []
+    play_idx = 0
+    for ln in (message or "").splitlines():
+        m = re.match(r"^\s*\d+\.\s*(.+)$", ln)
+        if not m:
+            continue
+        clean = m.group(1).replace("*", "").strip()
+        # Keep play_idx aligned with Curator Feed parser, but don't add a Log button for PASS windows
+        if "⛔" in clean or re.search(r"\bPASS\b", clean):
+            play_idx += 1
+            continue
+        # Strip leading [Time — Sport] bracket for a crisp iPhone button label
+        short_label = re.sub(r"^\[[^\]]+\]\s*", "", clean).strip()
+        if len(short_label) > 40:
+            short_label = short_label[:37].rstrip() + "..."
+        rows.append([{
+            "text": f"✅ Log #{play_idx + 1}: {short_label}",
+            "callback_data": f"log_curated:{play_idx}",
+        }])
+        play_idx += 1
+        if len(rows) >= 10:
+            break
+    rows.append([
+        {"text": "📊 Live Status", "callback_data": "status"},
+        {"text": "📱 Open Dashboard", "url": "https://iannuzzi8100.github.io/betting-curator/"},
+    ])
+    return {"inline_keyboard": rows}
+
+
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials missing. Alert text:\n", message)
@@ -434,6 +476,7 @@ def send_telegram_alert(message):
         "text": message,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
+        "reply_markup": _build_curated_inline_keyboard(message),
     }
     resp = requests.post(url, json=payload, timeout=15)
     resp.raise_for_status()
@@ -493,7 +536,7 @@ Respond ONLY with valid JSON:
   ]
 }}
 """
-        for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]:
+        for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
             try:
                 resp = client.models.generate_content(
                     model=model_id,

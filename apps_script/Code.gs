@@ -553,13 +553,32 @@ function parseCuratedPlaysText_(text) {
     const m = s.match(/^\d+\.\s*(.+)$/);
     if (m) {
       if (curPlay) plays.push(curPlay);
-      const cleanTitle = m[1].replace(/\*/g, "").trim();
+      let cleanTitle = m[1].replace(/\*/g, "").trim();
+      const isPassRow = cleanTitle.includes("⛔") || /NO GOOD PLAY/i.test(cleanTitle) || /\bPASS\b/i.test(cleanTitle);
+      const hm = cleanTitle.match(/(?:^|[^<])(\d{2,3})\s*%/);
+      let initCp = null;
+      if (hm && !isPassRow) {
+        const afterIdx = (hm.index || 0) + hm[0].length;
+        if (!cleanTitle.slice(afterIdx, afterIdx + 5).includes("BR")) {
+          initCp = parseInt(hm[1], 10);
+        }
+      }
+      cleanTitle = cleanTitle.replace(/\s*[—-]\s*\[?\d{2,3}%\s*[^\]]*\]?$/, "").trim();
+      cleanTitle = cleanTitle.replace(
+        /^\[Window\s*\d+:[^\]]*?([A-Z]{2,5})\s*\((\d{1,2}:\d{2}\s*[AP]M\s*EST)\)\]\s*/,
+        "[$2 • $1] "
+      );
+      cleanTitle = cleanTitle.replace(/\s*[—-]\s*Capped at Exposure Limit/i, "").trim();
+
       const parsed = parseCuratedTitleFields_(cleanTitle);
       curPlay = {
         title: cleanTitle,
+        is_pass: isPassRow,
         edge: "",
-        confidence_pct: null,
-        confidence_tier: "",
+        game_line: "",
+        confidence_math: "",
+        confidence_pct: isPassRow ? null : initCp,
+        confidence_tier: isPassRow ? "⛔ PASS WINDOW" : "",
         sport: parsed.sport,
         selection: parsed.selection,
         odds: parsed.odds,
@@ -568,19 +587,45 @@ function parseCuratedPlaysText_(text) {
       };
     } else if (curPlay && (s.startsWith("- ") || s.startsWith("• "))) {
       const rawBullet = s.replace(/^[-•]\s*/, "").replace(/[*`]/g, "").trim();
-      if (/^confidence:/i.test(rawBullet)) {
+      if (/^confidence math:/i.test(rawBullet)) {
+        const cmBody = rawBullet.replace(/^confidence math:\s*/i, "").trim();
+        curPlay.confidence_math = cmBody;
+        const pm = cmBody.match(/=\s*(\d{2,3})\s*%/) || cmBody.match(/(\d{2,3})\s*%/);
+        if (pm && !curPlay.is_pass && curPlay.confidence_pct === null) {
+          curPlay.confidence_pct = parseInt(pm[1], 10);
+        }
+      } else if (/^game\s*(?:&|and)\s*line:/i.test(rawBullet)) {
+        curPlay.game_line = rawBullet.replace(/^game\s*(?:&|and)\s*line:\s*/i, "").trim();
+      } else if (/^confidence:/i.test(rawBullet)) {
         const confBody = rawBullet.replace(/^confidence:\s*/i, "").replace(/^[\s\[\]]+|[\s\[\]]+$/g, "");
         const pm = confBody.match(/(\d{2,3})\s*%/);
-        if (pm) curPlay.confidence_pct = parseInt(pm[1], 10);
+        if (pm && !curPlay.is_pass) curPlay.confidence_pct = parseInt(pm[1], 10);
         const parts = confBody.split("|").map(p => p.trim()).filter(Boolean);
         curPlay.confidence_tier = parts.length >= 3 ? parts[parts.length - 1] : confBody;
       } else {
         const edgeTxt = rawBullet.replace(/^edge:\s*/i, "").trim();
         curPlay.edge = (curPlay.edge + " " + edgeTxt).trim();
+        if (!curPlay.confidence_math) curPlay.confidence_math = curPlay.edge;
       }
     }
   }
   if (curPlay) plays.push(curPlay);
+
+  plays.forEach(p => {
+    if (p.is_pass) {
+      p.confidence_pct = null;
+      p.confidence_tier = "⛔ PASS WINDOW";
+      return;
+    }
+    if (p.confidence_pct !== null && p.confidence_pct !== undefined && !p.confidence_tier) {
+      const sc = Number(p.confidence_pct);
+      if (sc >= 88) p.confidence_tier = "🔥 TIER 1: MAX HAMMER";
+      else if (sc >= 78) p.confidence_tier = "💎 TIER 2: STRONG CONVICTION";
+      else if (sc >= 68) p.confidence_tier = "✅ TIER 3: SOLID EDGE";
+      else p.confidence_tier = "⛔ TIER 4: PASS";
+    }
+  });
+
   return plays;
 }
 
@@ -593,32 +638,43 @@ function parseCuratedTitleFields_(title) {
   if (bracket) {
     const inside = bracket[1];
     rest = bracket[2].trim();
-    const parts = inside.split(/[—–-]/).map(s => s.trim()).filter(Boolean);
+    const parts = inside.split(/[—–•-]/).map(s => s.trim()).filter(Boolean);
     if (parts.length >= 2) {
       gameTime = parts[0];
       sport = parts[parts.length - 1].toUpperCase();
     } else if (parts.length === 1) {
-      sport = parts[0].toUpperCase();
+      if (/\b(?:AM|PM|EST|EDT|CST|PST)\b/i.test(parts[0]) || /\d:\d{2}/.test(parts[0])) {
+        gameTime = parts[0];
+      } else {
+        sport = parts[0].toUpperCase();
+      }
     }
   }
 
+  let betSeg = rest;
+  const smStream = rest.match(/^[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$/);
+  if (smStream) {
+    sport = smStream[1].trim().toUpperCase();
+    betSeg = smStream[2].trim();
+  }
+
   let odds = -110;
-  const oddsMatch = rest.match(/\(([+-]\d{3,4})\)/);
+  const oddsMatch = betSeg.match(/\(([+-]\d{3,4})\)/) || betSeg.match(/\s([+-]\d{3,4})(?:\s|$|—|–)/);
   if (oddsMatch) {
     odds = parseInt(oddsMatch[1], 10);
   }
 
   let stake = 0.0;
-  const stakeMatch = rest.match(/\$(\d+(?:\.\d{1,2})?)/);
+  const stakeMatch = betSeg.match(/\$(\d+(?:\.\d{1,2})?)/) || rest.match(/\$(\d+(?:\.\d{1,2})?)/);
   if (stakeMatch) {
     stake = parseFloat(stakeMatch[1]);
   }
 
-  let pick = rest;
+  let pick = betSeg;
   if (oddsMatch) {
-    pick = rest.slice(0, rest.indexOf(oddsMatch[0])).trim();
-  } else if (rest.indexOf("—") !== -1) {
-    pick = rest.slice(0, rest.indexOf("—")).trim();
+    pick = betSeg.slice(0, oddsMatch.index).trim();
+  } else if (betSeg.indexOf("—") !== -1) {
+    pick = betSeg.slice(0, betSeg.indexOf("—")).trim();
   }
   if (gameTime && pick && !pick.includes(gameTime)) {
     pick = pick + " (" + gameTime + ")";
