@@ -1255,6 +1255,8 @@
       let s = String(text || "").trim();
       s = s.replace(/^\d+\.\s*/, "").replace(/\*/g, "").trim();
       s = s.replace(/^\[[^\]]+\]\s*/, "").trim();
+      const smStream = s.match(/^(?:(?:\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\([A-Za-z0-9/ ]{2,10}\)\s*[—–]\s*(.+)$/i);
+      if (smStream) s = smStream[1].trim();
       const core = s.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)/i)[0];
       return core.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
     }
@@ -1353,8 +1355,9 @@
       populateLineDropdown();
       if (prefillPlay) {
         const fb = parseTitleFallback(prefillPlay.title);
-        const sport = prefillPlay.sport || fb.sport;
-        const sel = prefillPlay.selection || fb.selection;
+        const sport = (prefillPlay.sport && prefillPlay.sport !== "CFB") ? prefillPlay.sport : (fb.sport || prefillPlay.sport);
+        const rawSel = prefillPlay.selection || "";
+        const sel = (rawSel && !/^[•·].*[—–]/.test(rawSel)) ? rawSel : (fb.selection || rawSel);
         const odds = prefillPlay.odds != null ? prefillPlay.odds : fb.odds;
         const stake = (prefillPlay.stake && prefillPlay.stake > 0) ? prefillPlay.stake : (fb.stake || (currentData && currentData.available_cash ? Math.min(currentData.available_cash, 10) : 5));
         document.getElementById("log-modal-title").textContent = "⚡ Confirm Curated Bet";
@@ -1841,7 +1844,7 @@
                 : "";
               actionHtml = `
                 <div class="bet-actions" onclick="event.stopPropagation()">
-                  <span class="pill pill-green">✓ Already Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
+                  <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
                   ${recalcNote}
                   <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
                 </div>`;
@@ -1862,7 +1865,7 @@
               }
               actionHtml = `
                 <div class="bet-actions" onclick="event.stopPropagation()">
-                  <button class="btn-green" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${idx}])">✓ I Placed This (${fmtMoney(p.stake)})</button>
+                  <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${idx}])">+ Log Bet (${fmtMoney(p.stake)})</button>
                   ${adjBadge}
                 </div>`;
             }
