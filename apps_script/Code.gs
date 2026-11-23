@@ -533,7 +533,7 @@ function recalculateCuratorFeedInSheet_(ss, dash) {
       dash.today_stats ? dash.today_stats.tickets : []
     );
     if (curated.raw && curated.raw !== beforeRaw) {
-      feedWs.getRange("L" + curated.rowIndex).setValue(curated.raw.slice(0, 4500));
+      feedWs.getRange("L" + curated.rowIndex).setValue(curated.raw.slice(0, 25000));
       SpreadsheetApp.flush();
     }
     return adjustments;
@@ -555,11 +555,11 @@ function parseCuratedPlaysText_(text) {
       if (curPlay) plays.push(curPlay);
       let cleanTitle = m[1].replace(/\*/g, "").trim();
       const isPassRow = cleanTitle.includes("⛔") || /NO GOOD PLAY/i.test(cleanTitle) || /\bPASS\b/i.test(cleanTitle);
-      const hm = cleanTitle.match(/(?:^|[^<])(\d{2,3})\s*%/);
+      const hm = cleanTitle.match(/[—-]\s*\[?(\d{2,3})%\s*([^\]]*)\]?$/);
       let initCp = null;
       if (hm && !isPassRow) {
-        const afterIdx = (hm.index || 0) + hm[0].length;
-        if (!cleanTitle.slice(afterIdx, afterIdx + 5).includes("BR")) {
+        const trailingCtx = (hm[2] || "").toUpperCase();
+        if (!trailingCtx.includes("BR") && !trailingCtx.includes("BANKROLL") && !trailingCtx.includes("RESULTING")) {
           initCp = parseInt(hm[1], 10);
         }
       }
@@ -591,7 +591,7 @@ function parseCuratedPlaysText_(text) {
         const cmBody = rawBullet.replace(/^confidence math:\s*/i, "").trim();
         curPlay.confidence_math = cmBody;
         const pm = cmBody.match(/=\s*(\d{2,3})\s*%/) || cmBody.match(/(\d{2,3})\s*%/);
-        if (pm && !curPlay.is_pass && curPlay.confidence_pct === null) {
+        if (pm && !curPlay.is_pass) {
           curPlay.confidence_pct = parseInt(pm[1], 10);
         }
       } else if (/^game\s*(?:&|and)\s*line:/i.test(rawBullet)) {
@@ -652,10 +652,11 @@ function parseCuratedTitleFields_(title) {
   }
 
   let betSeg = rest;
-  const smStream = rest.match(/^[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$/);
+  const smStream = rest.match(/^(?:(\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$/i);
   if (smStream) {
-    sport = smStream[1].trim().toUpperCase();
-    betSeg = smStream[2].trim();
+    if (smStream[1] && !gameTime) gameTime = smStream[1].trim();
+    sport = smStream[2].trim().toUpperCase();
+    betSeg = smStream[3].trim();
   }
 
   let odds = -110;

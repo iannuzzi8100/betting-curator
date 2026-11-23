@@ -54,12 +54,18 @@ def _parse_curated_title_fields(title):
             else:
                 sport = parts[0].upper()
 
-    # Handle streamlined format: "• Away @ Home (League) — Bet & Odds — $XX.XX (XX% BR)"
+    # Handle streamlined format: "[1:30 PM EST] • Away @ Home (League) — Bet" OR "1:30 PM EST • Away @ Home (League) — Bet"
     bet_segment = rest
-    m_stream = re.match(r"^[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$", rest)
+    m_stream = re.match(
+        r"^(?:(\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$",
+        rest,
+        flags=re.I,
+    )
     if m_stream:
-        sport = m_stream.group(1).strip().upper()
-        bet_segment = m_stream.group(2).strip()
+        if m_stream.group(1) and not game_time:
+            game_time = m_stream.group(1).strip()
+        sport = m_stream.group(2).strip().upper()
+        bet_segment = m_stream.group(3).strip()
 
     odds = -110
     m_odds = re.search(r"\(([+-]\d{3,4})\)", bet_segment) or re.search(r"\s([+-]\d{3,4})(?:\s|$|—|–)", bet_segment)
@@ -344,14 +350,14 @@ def fetch_dashboard_data():
                     or "NO GOOD PLAY" in clean_title.upper()
                     or bool(re.search(r"\bPASS\b", clean_title.upper()))
                 )
-                # Check if confidence % is already on the headline (ignore "<68%" on PASS rows)
-                hm = re.search(r"(?<![<])(\d{2,3})\s*%", clean_title)
-                init_cp = (
-                    int(hm.group(1))
-                    if (hm and not is_pass_row and "BR" not in clean_title[hm.start() : hm.end() + 5])
-                    else None
-                )
-                # Strip trailing "— 87% 💎" from headline since badge shows it on the right
+                # Check if confidence % is already on the trailing badge (e.g. "— [87% 💎]"), never matching "(35% Resulting BR)"
+                hm = re.search(r"[—-]\s*\[?(\d{2,3})%\s*([^\]]*)\]?$", clean_title)
+                init_cp = None
+                if hm and not is_pass_row:
+                    trailing_ctx = (hm.group(2) or "").upper()
+                    if "BR" not in trailing_ctx and "BANKROLL" not in trailing_ctx and "RESULTING" not in trailing_ctx:
+                        init_cp = int(hm.group(1))
+                # Strip trailing "— 87% 💎" or "— [87% 💎]" from headline since badge shows it on the right
                 clean_title = re.sub(r"\s*[—-]\s*\[?\d{2,3}%\s*[^\]]*\]?$", "", clean_title).strip()
                 # Streamline verbose "[Window X: ... (8:20 PM EST)]" prefix if present
                 clean_title = re.sub(
@@ -378,7 +384,7 @@ def fetch_dashboard_data():
                     cm_body = re.sub(r"^confidence math:\s*", "", raw_bullet, flags=re.I).strip()
                     cur_play["confidence_math"] = cm_body
                     pm = re.search(r"=\s*(\d{2,3})\s*%", cm_body) or re.search(r"(\d{2,3})\s*%", cm_body)
-                    if pm and cur_play["confidence_pct"] is None:
+                    if pm and not cur_play.get("is_pass"):
                         cur_play["confidence_pct"] = int(pm.group(1))
                 elif low_b.startswith("game & line:") or low_b.startswith("game and line:"):
                     gl_body = re.sub(r"^game\s*(?:&|and)\s*line:\s*", "", raw_bullet, flags=re.I).strip()
@@ -1605,10 +1611,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
       }
       let betSeg = rest;
-      const smStream = rest.match(/^[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$/);
+      const smStream = rest.match(/^(?:(\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$/i);
       if (smStream) {
-        sport = smStream[1].trim().toUpperCase();
-        betSeg = smStream[2].trim();
+        if (smStream[1] && !gameTime) gameTime = smStream[1].trim();
+        sport = smStream[2].trim().toUpperCase();
+        betSeg = smStream[3].trim();
       }
       const om = betSeg.match(/\(([+-]\d{3,4})\)/) || betSeg.match(/\s([+-]\d{3,4})(?:\s|$|—|–)/);
       const sm = betSeg.match(/\$(\d+(?:\.\d{1,2})?)/) || rest.match(/\$(\d+(?:\.\d{1,2})?)/);
