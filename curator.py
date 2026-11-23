@@ -285,7 +285,8 @@ Recent Bets:
 
 ### STRICT FORMATTING RULES (STREAMLINED HEADLINE + EXPANDABLE DRAWER DATA):
 - Output ONLY the template below. NO extra paragraphs, NO UTC timestamps.
-- On each numbered headline (`1.`, `2.`, etc.), show ONLY: **Time • Game (League) — Bet (Odds) — Wager — Confidence %**.
+- **EXACT GAME START TIME ONLY:** On every numbered play, use the game's **EXACT start time in EST** from the `(H:MM PM EST)` tag in Section 3 (e.g. `[2:00 PM EST]`, `[2:30 PM EST]`, `[7:00 PM EST]`). **NEVER** use a generic window bucket label like `[Window 3: 12:00 PM]` or `[Window 4: 3:00 PM]` in place of the game's actual start time.
+- On each numbered headline (`1.`, `2.`, etc.), show ONLY: **Exact Time EST • Game (League) — Bet (Odds) — Wager — Confidence %**.
 - Underneath each numbered headline, include the two structured drawer lines (`- Game & Line:` and `- Confidence Math:`) so the web app can display them ONLY when the user clicks on the bet!
 
 🎯 *{today_str} {slate_header_tag}*
@@ -295,10 +296,10 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 • *None* (or list active pending BET-XXX rows if any)
 
 *Today's Curated Plays:*
-1. *[Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[$XX.XX (XX% BR)]* — *[XX% 🔥/💎/✅]*
+1. *[Exact Tipoff/Kickoff Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[$XX.XX (XX% BR)]* — *[XX% 🔥/💎/✅]*
    - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
    - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
-2. *[Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[XX% of Resulting BR (Est. $XX.XX)]* — *[XX% 🔥/💎/✅]*
+2. *[Exact Tipoff/Kickoff Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[XX% of Resulting BR (Est. $XX.XX)]* — *[XX% 🔥/💎/✅]*
    - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
    - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
 (Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
