@@ -951,6 +951,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       border-color: rgba(16, 185, 129, 0.55);
       color: #34d399;
     }
+    .curated-meta {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+    .curated-time {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #93c5fd;
+      letter-spacing: 0.01em;
+    }
+    .curated-sport {
+      display: inline-block;
+      background: rgba(148, 163, 184, 0.16);
+      color: #cbd5e1;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 6px;
+      padding: 1px 7px;
+      font-size: 0.69rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+    }
+    .curated-matchup {
+      font-size: 0.84rem;
+      color: var(--muted);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+    .curated-bet-row {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .curated-bet {
+      font-size: 1.0rem;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .curated-wager {
+      font-size: 0.86rem;
+      font-weight: 700;
+      color: var(--green);
+    }
     .help-text { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
     .toast {
       position: fixed;
@@ -1350,17 +1397,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let currentData = STATIC_DATA || null;
     const openDrawers = new Set();
 
-    function toggleCuratedDetail(idx) {
+    function toggleCuratedDetail(idx, drawerKey) {
       const el = document.getElementById(`curated-detail-${idx}`);
       const caret = document.getElementById(`curated-caret-${idx}`);
+      const key = drawerKey || String(idx);
       if (!el) return;
       if (el.style.display === "none") {
         el.style.display = "block";
-        openDrawers.add(idx);
+        openDrawers.add(key);
         if (caret) caret.textContent = "▴ Hide details";
       } else {
         el.style.display = "none";
-        openDrawers.delete(idx);
+        openDrawers.delete(key);
         if (caret) caret.textContent = "▾ Tap for details";
       }
     }
@@ -2406,140 +2454,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.getElementById("today-sub").innerHTML =
         `<span>P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>`;
 
-      // 3. Today's Curated Bets (with 1-Tap Log Bet button + bankroll-adjusted wager badges)
+      // 3. Today's Curated Bets (sorted earliest-to-latest start time, clean structured cards)
       document.getElementById("curated-date").textContent = data.curated_date;
-      const cList = document.getElementById("curated-list");
-      const plays = data.curated_plays || [];
-      const pendingList = data.pending_tickets || [];
-      const todaySettledList = (ts && ts.tickets) || [];
-      window.__curatedPlays = plays;
+      const plays = (data.curated_plays || []).map((p, origIdx) => {
+        const copy = { ...p, __origIdx: origIdx };
+        copy.__key = extractSelectionCore(copy.selection || copy.title || "") || `play-${origIdx}`;
+        return copy;
+      });
+      sortCuratedByStartTime(plays, data.curated_date || data.today);
       document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
-
-      function findMatchingPending(play) {
-        const fb = parseTitleFallback(play.title);
-        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
-        if (!core || core.length < 3) return null;
-        return pendingList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
-      }
-
-      function findMatchingSettledToday(play) {
-        const fb = parseTitleFallback(play.title);
-        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
-        if (!core || core.length < 3) return null;
-        return todaySettledList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
-      }
-
-      if (plays.length > 0) {
-        cList.innerHTML = plays.map((p, idx) => {
-          const isPass = Boolean(p.is_pass) || (p.title || "").includes("⛔") || /\bPASS\b/.test(p.title || "") || /NO GOOD PLAY/i.test(p.title || "");
-          const existingPend = isPass ? null : findMatchingPending(p);
-          const existingSettled = (isPass || existingPend) ? null : findMatchingSettledToday(p);
-          const cp = isPass ? null : p.confidence_pct;
-          let meterHtml = "";
-          let pillCls = isPass ? "pill-red" : "pill-blue";
-          let pillTxt = isPass ? "PASS" : "CURATED";
-          if (cp !== null && cp !== undefined) {
-            const barColor = cp >= 88 ? "#10b981" : (cp >= 78 ? "#3b82f6" : (cp >= 68 ? "#f59e0b" : "#ef4444"));
-            pillCls = cp >= 88 ? "pill-green" : (cp >= 78 ? "pill-blue" : (cp >= 68 ? "pill-amber" : "pill-red"));
-            pillTxt = `${cp}%`;
-            meterHtml = `
-              <div style="margin-top:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;font-weight:700;color:${barColor};margin-bottom:4px;">
-                  <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
-                  <span style="color:var(--muted);font-weight:500;" id="curated-caret-${idx}">${openDrawers.has(idx) ? "▴ Hide details" : "▾ Tap for details"}</span>
-                </div>
-                <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
-                  <div style="width:${Math.min(100, Math.max(0, cp))}%;height:100%;background:${barColor};border-radius:999px;"></div>
-                </div>
-              </div>
-            `;
-          } else if (!isPass && (p.game_line || p.confidence_math || p.edge)) {
-            meterHtml = `
-              <div style="margin-top:6px;display:flex;justify-content:flex-end;font-size:0.75rem;color:var(--muted);">
-                <span id="curated-caret-${idx}">${openDrawers.has(idx) ? "▴ Hide details" : "▾ Tap for details"}</span>
-              </div>
-            `;
-          }
-
-          const rawMath = p.confidence_math || p.edge || "";
-          const pillarItems = rawMath.split(",").map(s => s.trim()).filter(Boolean);
-          const pillarChipsHtml = pillarItems.length > 0
-            ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
-                <span class="pill pill-blue" style="font-size:0.74rem;">Base Score: 50%</span>
-                ${pillarItems.map(item => {
-                  const isNeg = item.includes("(-");
-                  const isPos = item.includes("(+");
-                  const cls = isNeg ? "pill-red" : (isPos ? "pill-green" : "pill-blue");
-                  return `<span class="pill ${cls}" style="font-size:0.74rem;">${esc(item)}</span>`;
-                }).join("")}
-               </div>`
-            : `<div class="bet-meta">Standard quantitative model evaluation.</div>`;
-
-          const gameLineHtml = p.game_line
-            ? p.game_line.split("|").map(seg => `<div style="margin-bottom:3px;">• ${esc(seg.trim())}</div>`).join("")
-            : `<div style="margin-bottom:3px;">• ${esc(p.title)}</div>`;
-
-          const drawerHtml = isPass ? "" : `
-            <div id="curated-detail-${idx}" style="display:${openDrawers.has(idx) ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
-              <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">🏟️ Game &amp; Line Info</div>
-              <div style="color:var(--muted);line-height:1.45;margin-bottom:10px;">
-                ${gameLineHtml}
-              </div>
-              <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">🧮 How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
-              ${pillarChipsHtml}
-            </div>
-          `;
-
-          let actionHtml = "";
-          if (!isPass) {
-            if (existingPend) {
-              const recalcNote = (p.recalculated_stake && Math.abs(p.recalculated_stake - existingPend.stake) >= 0.01)
-                ? `<span class="pill pill-blue">${esc(p.wager_pct || "")}% of ${fmtMoney(data.bankroll)} BR = ${fmtMoney(p.recalculated_stake)}</span>`
-                : "";
-              actionHtml = `
-                <div class="bet-actions" onclick="event.stopPropagation()">
-                  <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
-                  ${recalcNote}
-                  <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
-                </div>`;
-            } else if (existingSettled) {
-              const resU = String(existingSettled.result || "").toUpperCase();
-              const resCls = resU === "WON" ? "pill-green" : (resU === "PUSH" ? "pill-amber" : "pill-red");
-              const plSign = Number(existingSettled.net_pl || 0) >= 0 ? "+" : "";
-              actionHtml = `
-                <div class="bet-actions" onclick="event.stopPropagation()">
-                  <span class="pill ${resCls}">🏁 Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
-                </div>`;
-            } else {
-              let adjBadge = "";
-              if (p.stake_adjusted && p.original_stake) {
-                adjBadge = `<span class="pill pill-amber">🔄 Wager Adjusted for ${fmtMoney(data.bankroll)} BR: ${fmtMoney(p.stake)} (${esc(p.wager_pct || "")}% BR • was ${fmtMoney(p.original_stake)})</span>`;
-              } else if (p.stake > 0 && p.wager_pct) {
-                adjBadge = `<span class="pill pill-blue">💰 Wager: ${fmtMoney(p.stake)} (${esc(p.wager_pct)}% of ${fmtMoney(data.bankroll)} BR)</span>`;
-              }
-              actionHtml = `
-                <div class="bet-actions" onclick="event.stopPropagation()">
-                  <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${idx}])">+ Log Bet (${fmtMoney(p.stake)})</button>
-                  ${adjBadge}
-                </div>`;
-            }
-          }
-          const clickAttr = isPass ? "" : ` style="cursor:pointer;transition:background 0.15s;" onclick="toggleCuratedDetail(${idx})"`;
-          return `
-          <div class="bet-item"${clickAttr}>
-            <div class="bet-top">
-              <div class="bet-title" id="curated-title-${idx}">${idx + 1}. ${esc(p.title)}</div>
-              <span class="pill ${pillCls}">${esc(pillTxt)}</span>
-            </div>
-            ${meterHtml}
-            ${drawerHtml}
-            ${actionHtml}
-          </div>
-        `;
-        }).join("");
-      } else {
-        cList.innerHTML = `<div class="empty-msg">${esc(data.curated_raw || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
-      }
+      renderCuratedList(plays, data);
 
       // 2. Active Pending Tickets (sorted by earliest finish time + live ESPN clock refinement)
       const pend = (data.pending_tickets || []).map((t, origIdx) => {
@@ -2858,33 +2782,290 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderPendingList(pendingTickets);
       }
 
-      // Sync exact ESPN tipoff/kickoff times onto Curated Plays (replaces generic "[Window 3: 12:00 PM]" labels)
-      (curatedPlays || []).forEach((p, idx) => {
-        const sp = ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase();
-        const match = findEspnMatchForText(eventsBySport[sp], `${p.selection || ""} ${p.title || ""}`.toLowerCase());
-        if (!match || !match.date) return;
-        const exactTime = formatEspnTimeEst(match.date);
-        if (!exactTime) return;
-        let updatedTitle = String(p.title || "");
-        if (/^\[Window\s*\d+:[^\]]*\]/i.test(updatedTitle)) {
-          updatedTitle = updatedTitle.replace(/^\[Window\s*\d+:[^\]]*\]/i, `[${exactTime}]`);
-        } else if (/^\[?\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\]?/i.test(updatedTitle)) {
-          updatedTitle = updatedTitle.replace(/^\[?\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\]?/i, `[${exactTime}]`);
-        }
-        if (updatedTitle !== p.title) {
+      // Sync exact ESPN tipoff/kickoff times onto Curated Plays and re-sort earliest-to-latest
+      if (curatedPlays && curatedPlays.length > 0) {
+        curatedPlays.forEach(p => {
+          const sp = ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase();
+          const match = findEspnMatchForText(eventsBySport[sp], `${p.selection || ""} ${p.title || ""}`.toLowerCase());
+          if (!match || !match.date) return;
+          const exactTime = formatEspnTimeEst(match.date);
+          const startMs = Date.parse(match.date);
+          if (!isNaN(startMs)) p.__startMs = startMs;
+          if (!exactTime) return;
+          p.__exactTime = exactTime;
+          p.game_time = exactTime;
+          let updatedTitle = String(p.title || "");
+          if (/^\[Window\s*\d+:[^\]]*\]/i.test(updatedTitle)) {
+            updatedTitle = updatedTitle.replace(/^\[Window\s*\d+:[^\]]*\]/i, `[${exactTime}]`);
+          } else if (/^\[?\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\]?/i.test(updatedTitle)) {
+            updatedTitle = updatedTitle.replace(/^\[?\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\]?/i, `[${exactTime}]`);
+          }
           p.title = updatedTitle;
-          const titleEl = document.getElementById(`curated-title-${idx}`);
-          if (titleEl) titleEl.textContent = `${idx + 1}. ${updatedTitle}`;
+          if (p.selection) {
+            if (/\(Window\s*\d+:[^)]*\)/i.test(p.selection)) {
+              p.selection = p.selection.replace(/\(Window\s*\d+:[^)]*\)/i, `(${exactTime})`);
+            } else if (/\(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\)/i.test(p.selection)) {
+              p.selection = p.selection.replace(/\(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\)/i, `(${exactTime})`);
+            }
+          }
+        });
+        sortCuratedByStartTime(curatedPlays, currentData && (currentData.curated_date || currentData.today));
+        renderCuratedList(curatedPlays, currentData || {});
+      }
+    }
+
+    function parseCuratedDisplayParts(play) {
+      const rawTitle = String(play.title || "").trim();
+      const fb = parseTitleFallback(rawTitle);
+
+      // 1. Clean Start Time (never show "Window X:")
+      let startTime = play.__exactTime || "";
+      if (!startTime) {
+        const tmSrc = `${play.game_time || ""} ${rawTitle}`;
+        const tm = tmSrc.match(/(\d{1,2}:\d{2}\s*[AP]M)(?:\s*EST)?/i);
+        if (tm) startTime = `${tm[1].toUpperCase()} EST`;
+      }
+
+      // 2. Clean Sport
+      let sport = String(play.sport || fb.sport || "").trim().toUpperCase();
+      const spParen = rawTitle.match(/\((CBB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|MLB|UFC|SOCCER|ATP|WTA)\)/i);
+      if (spParen) sport = spParen[1].toUpperCase();
+      sport = sport.replace(/\s*\([^)]*\)/g, "").trim();
+
+      // 3. Clean Team Names (Matchup) + Clean Bet
+      let stripped = rawTitle
+        .replace(/^\[[^\]]*\]\s*/, "")
+        .replace(/^\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\s*/i, "")
+        .replace(/^[•·]\s*/, "")
+        .trim();
+
+      // Remove trailing wager / confidence segments like "— [$21.08 (35% BR)]" or "— $21.08 (...)"
+      stripped = stripped
+        .replace(/\s*[—–]\s*\[?\d{2,3}%\s*[^\]]*\]?$/g, "")
+        .replace(/\s*[—–]\s*\[?\$[\d.,]+[^\]]*\]?$/g, "")
+        .replace(/\s*[—–]\s*\[?\d{1,2}(?:\.\d+)?%\s*of\s+Resulting\s+BR[^\]]*\]?$/gi, "")
+        .trim();
+
+      let matchup = "";
+      let betText = stripped;
+
+      const mStream = stripped.match(/^([^—–]+?)\s*\(([A-Za-z0-9/ ]{2,10})\)\s*[—–]\s*(.+)$/);
+      if (mStream) {
+        matchup = mStream[1].trim();
+        betText = mStream[3].trim();
+      } else if (stripped.includes("—")) {
+        const parts = stripped.split("—").map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2 && (parts[0].includes("@") || /\bvs\.?\b/i.test(parts[0]))) {
+          matchup = parts[0].replace(/\s*\([A-Za-z0-9/ ]{2,10}\)\s*$/, "").trim();
+          betText = parts[1];
+        } else {
+          betText = parts[0];
         }
-        p.game_time = exactTime;
-        if (p.selection) {
-          if (/\(Window\s*\d+:[^)]*\)/i.test(p.selection)) {
-            p.selection = p.selection.replace(/\(Window\s*\d+:[^)]*\)/i, `(${exactTime})`);
-          } else if (/\(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\)/i.test(p.selection)) {
-            p.selection = p.selection.replace(/\(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\)/i, `(${exactTime})`);
+      }
+
+      // Fallback matchup from game_line if not in title
+      if (!matchup && play.game_line) {
+        const firstSeg = String(play.game_line).split(/[•|]/)[0].trim();
+        if (firstSeg.includes("@") || /\bvs\.?\b/i.test(firstSeg)) {
+          matchup = firstSeg;
+        }
+      }
+
+      // Final cleanup on betText (remove any stray leading/trailing brackets or Window tags)
+      betText = betText
+        .replace(/\s*[—–]\s*\[?\$[\d.,]+.*$/g, "")
+        .replace(/\s*\(Window\s*\d+:[^)]*\)/gi, "")
+        .trim();
+
+      const wagerVal = Number(play.stake || fb.stake || 0);
+      const wagerText = wagerVal > 0 ? fmtMoney(wagerVal) : "";
+
+      return { startTime, sport, matchup, betText, wagerText };
+    }
+
+    function estimateCuratedStartMs(play, dateStr) {
+      if (play.__startMs && !isNaN(play.__startMs)) return play.__startMs;
+      const parts = parseCuratedDisplayParts(play);
+      const dStr = String(dateStr || (currentData && currentData.today) || "").trim();
+      let baseDayMs = Date.now();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
+        const parsedDay = Date.parse(`${dStr}T00:00:00-05:00`);
+        if (!isNaN(parsedDay)) baseDayMs = parsedDay;
+      }
+      const tm = String(parts.startTime || play.title || "").match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+      if (tm) {
+        let hr = parseInt(tm[1], 10);
+        const min = parseInt(tm[2], 10);
+        const ampm = tm[3].toUpperCase();
+        if (ampm === "PM" && hr !== 12) hr += 12;
+        if (ampm === "AM" && hr === 12) hr = 0;
+        return baseDayMs + (hr * 60 + min) * 60000;
+      }
+      return baseDayMs + 24 * 3600000;
+    }
+
+    function sortCuratedByStartTime(plays, dateStr) {
+      (plays || []).sort((a, b) => {
+        const sA = estimateCuratedStartMs(a, dateStr);
+        const sB = estimateCuratedStartMs(b, dateStr);
+        if (sA !== sB) return sA - sB;
+        return (a.__origIdx || 0) - (b.__origIdx || 0);
+      });
+    }
+
+    function renderCuratedList(plays, data) {
+      const cList = document.getElementById("curated-list");
+      window.__curatedPlays = plays || [];
+      const pendingList = (data && data.pending_tickets) || [];
+      const todaySettledList = (data && data.today_stats && data.today_stats.tickets) || [];
+
+      function findMatchingPending(play) {
+        const fb = parseTitleFallback(play.title);
+        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
+        if (!core || core.length < 3) return null;
+        return pendingList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+      }
+
+      function findMatchingSettledToday(play) {
+        const fb = parseTitleFallback(play.title);
+        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
+        if (!core || core.length < 3) return null;
+        return todaySettledList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+      }
+
+      if (!plays || plays.length === 0) {
+        cList.innerHTML = `<div class="empty-msg">${esc((data && data.curated_raw) || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
+        return;
+      }
+
+      cList.innerHTML = plays.map((p, idx) => {
+        const isPass = Boolean(p.is_pass) || (p.title || "").includes("⛔") || /\bPASS\b/.test(p.title || "") || /NO GOOD PLAY/i.test(p.title || "");
+        const existingPend = isPass ? null : findMatchingPending(p);
+        const existingSettled = (isPass || existingPend) ? null : findMatchingSettledToday(p);
+        const cp = isPass ? null : p.confidence_pct;
+        const dParts = parseCuratedDisplayParts(p);
+        const drawerKey = p.__key || String(idx);
+        const isOpen = openDrawers.has(drawerKey);
+
+        let meterHtml = "";
+        let pillCls = isPass ? "pill-red" : "pill-blue";
+        let pillTxt = isPass ? "PASS" : "CURATED";
+        if (cp !== null && cp !== undefined) {
+          const barColor = cp >= 88 ? "#10b981" : (cp >= 78 ? "#3b82f6" : (cp >= 68 ? "#f59e0b" : "#ef4444"));
+          pillCls = cp >= 88 ? "pill-green" : (cp >= 78 ? "pill-blue" : (cp >= 68 ? "pill-amber" : "pill-red"));
+          pillTxt = `${cp}%`;
+          meterHtml = `
+            <div style="margin-top:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;font-weight:700;color:${barColor};margin-bottom:4px;">
+                <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
+                <span style="color:var(--muted);font-weight:500;" id="curated-caret-${idx}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
+              </div>
+              <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
+                <div style="width:${Math.min(100, Math.max(0, cp))}%;height:100%;background:${barColor};border-radius:999px;"></div>
+              </div>
+            </div>
+          `;
+        } else if (!isPass && (p.game_line || p.confidence_math || p.edge)) {
+          meterHtml = `
+            <div style="margin-top:6px;display:flex;justify-content:flex-end;font-size:0.75rem;color:var(--muted);">
+              <span id="curated-caret-${idx}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
+            </div>
+          `;
+        }
+
+        const rawMath = p.confidence_math || p.edge || "";
+        const pillarItems = rawMath.split(",").map(s => s.trim()).filter(Boolean);
+        const pillarChipsHtml = pillarItems.length > 0
+          ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
+              <span class="pill pill-blue" style="font-size:0.74rem;">Base Score: 50%</span>
+              ${pillarItems.map(item => {
+                const isNeg = item.includes("(-");
+                const isPos = item.includes("(+");
+                const cls = isNeg ? "pill-red" : (isPos ? "pill-green" : "pill-blue");
+                return `<span class="pill ${cls}" style="font-size:0.74rem;">${esc(item)}</span>`;
+              }).join("")}
+             </div>`
+          : `<div class="bet-meta">Standard quantitative model evaluation.</div>`;
+
+        const gameLineHtml = p.game_line
+          ? p.game_line.split("|").map(seg => `<div style="margin-bottom:3px;">• ${esc(seg.trim())}</div>`).join("")
+          : `<div style="margin-bottom:3px;">• ${esc(dParts.matchup || dParts.betText)}</div>`;
+
+        const drawerHtml = isPass ? "" : `
+          <div id="curated-detail-${idx}" style="display:${isOpen ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">🏟️ Game &amp; Line Info</div>
+            <div style="color:var(--muted);line-height:1.45;margin-bottom:10px;">
+              ${gameLineHtml}
+            </div>
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">🧮 How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
+            ${pillarChipsHtml}
+          </div>
+        `;
+
+        let actionHtml = "";
+        if (!isPass) {
+          if (existingPend) {
+            const recalcNote = (p.recalculated_stake && Math.abs(p.recalculated_stake - existingPend.stake) >= 0.01)
+              ? `<span class="pill pill-blue">${esc(p.wager_pct || "")}% of ${fmtMoney(data.bankroll)} BR = ${fmtMoney(p.recalculated_stake)}</span>`
+              : "";
+            actionHtml = `
+              <div class="bet-actions" onclick="event.stopPropagation()">
+                <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
+                ${recalcNote}
+                <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
+              </div>`;
+          } else if (existingSettled) {
+            const resU = String(existingSettled.result || "").toUpperCase();
+            const resCls = resU === "WON" ? "pill-green" : (resU === "PUSH" ? "pill-amber" : "pill-red");
+            const plSign = Number(existingSettled.net_pl || 0) >= 0 ? "+" : "";
+            actionHtml = `
+              <div class="bet-actions" onclick="event.stopPropagation()">
+                <span class="pill ${resCls}">🏁 Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
+              </div>`;
+          } else {
+            const adjBadge = (p.stake_adjusted && p.original_stake)
+              ? `<span class="pill pill-amber">🔄 Adjusted for ${fmtMoney(data.bankroll)} BR (was ${fmtMoney(p.original_stake)})</span>`
+              : "";
+            actionHtml = `
+              <div class="bet-actions" onclick="event.stopPropagation()">
+                <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${idx}])">+ Log Bet (${fmtMoney(p.stake)})</button>
+                ${adjBadge}
+              </div>`;
           }
         }
-      });
+
+        const safeKeyAttr = esc(drawerKey).replace(/'/g, "\\'");
+        const clickAttr = isPass ? "" : ` style="cursor:pointer;transition:background 0.15s;" onclick="toggleCuratedDetail(${idx}, '${safeKeyAttr}')"`;
+        const metaRow = `
+          <div class="curated-meta">
+            ${dParts.startTime ? `<span class="curated-time">🕒 ${esc(dParts.startTime)}</span>` : ""}
+            ${dParts.sport ? `<span class="curated-sport">${esc(dParts.sport)}</span>` : ""}
+          </div>
+        `;
+        const matchupRow = dParts.matchup ? `<div class="curated-matchup">${esc(dParts.matchup)}</div>` : "";
+        const betRow = `
+          <div class="curated-bet-row">
+            <span class="curated-bet">${esc(dParts.betText)}</span>
+            ${(!isPass && dParts.wagerText) ? `<span class="curated-wager">&bull; ${esc(dParts.wagerText)}</span>` : ""}
+          </div>
+        `;
+
+        return `
+        <div class="bet-item"${clickAttr}>
+          <div class="bet-top" style="align-items:flex-start;">
+            <div style="flex:1;min-width:0;">
+              ${metaRow}
+              ${matchupRow}
+              ${betRow}
+            </div>
+            <span class="pill ${pillCls}" style="flex-shrink:0;">${esc(pillTxt)}</span>
+          </div>
+          ${meterHtml}
+          ${drawerHtml}
+          ${actionHtml}
+        </div>
+      `;
+      }).join("");
     }
 
     async function loadData() {
