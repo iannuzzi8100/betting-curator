@@ -36,6 +36,13 @@ def _parse_num(val):
         return 0.0
 
 
+def _normalize_sport(sport):
+    s = str(sport or "").strip()
+    if s.upper() in ("CBB", "NCAAB", "NCAAM", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+        return "NCAAM"
+    return s
+
+
 def _parse_curated_title_fields(title):
     sport = "CFB"
     game_time = ""
@@ -92,7 +99,7 @@ def _parse_curated_title_fields(title):
         pick = f"{pick} ({game_time})"
 
     return {
-        "sport": sport,
+        "sport": _normalize_sport(sport),
         "selection": pick,
         "odds": odds,
         "stake": stake,
@@ -198,7 +205,7 @@ def fetch_dashboard_data():
             "bet_num": _bet_num(bet_id),
             "bet_id": bet_id,
             "b_date": r[1].strip() if len(r) > 1 else "",
-            "sport": r[2].strip() if len(r) > 2 else "",
+            "sport": _normalize_sport(r[2]) if len(r) > 2 else "",
             "b_type": r[3].strip() if len(r) > 3 else "",
             "sel": r[5].strip() if len(r) > 5 else "",
             "odds": r[6].strip() if len(r) > 6 else "",
@@ -430,7 +437,7 @@ def fetch_dashboard_data():
             words = [
                 w
                 for w in re.findall(r"[A-Za-z]{3,}", t_clean)
-                if w.upper() not in ("EST", "CFB", "NFL", "NBA", "NHL", "EPL", "CBB", "OVER", "UNDER", "RESULTING", "STRAIGHT", "WINDOW")
+                if w.upper() not in ("EST", "CFB", "NFL", "NBA", "NHL", "EPL", "CBB", "NCAAM", "NCAAB", "OVER", "UNDER", "RESULTING", "STRAIGHT", "WINDOW")
             ]
             for q_ln in intel_quant_lines:
                 if any(w.lower() in q_ln.lower() for w in words[:2]):
@@ -1204,7 +1211,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               <option value="NFL">NFL</option>
               <option value="NBA">NBA</option>
               <option value="NHL">NHL</option>
-              <option value="CBB">CBB</option>
               <option value="NCAAM">NCAAM</option>
               <option value="EPL">EPL</option>
               <option value="UCL">UCL</option>
@@ -1940,6 +1946,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.getElementById("f-payout-preview").textContent = fmtMoney(payout);
     }
 
+    function normalizeSport(sport) {
+      const s = String(sport || "").trim();
+      const u = s.toUpperCase();
+      if (u === "CBB" || u === "NCAAB" || u === "NCAAM" || u === "MEN'S COLLEGE BASKETBALL" || u === "COLLEGE BASKETBALL") {
+        return "NCAAM";
+      }
+      return s;
+    }
+
     function parseTitleFallback(title) {
       let sport = "CFB", gameTime = "", rest = String(title || "").trim();
       const bm = rest.match(/^\[([^\]]+)\]\s*(.*)$/);
@@ -1967,7 +1982,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       let pick = om ? betSeg.slice(0, om.index).trim() : betSeg.split("—")[0].trim();
       if (gameTime && pick && !pick.includes(gameTime)) pick += ` (${gameTime})`;
       return {
-        sport,
+        sport: normalizeSport(sport),
         selection: pick,
         odds: om ? parseInt(om[1], 10) : -110,
         stake: sm ? parseFloat(sm[1]) : 0,
@@ -2078,7 +2093,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       populateLineDropdown();
       if (prefillPlay) {
         const fb = parseTitleFallback(prefillPlay.title);
-        const sport = (prefillPlay.sport && prefillPlay.sport !== "CFB") ? prefillPlay.sport : (fb.sport || prefillPlay.sport);
+        const rawSport = (prefillPlay.sport && prefillPlay.sport !== "CFB") ? prefillPlay.sport : (fb.sport || prefillPlay.sport);
+        const sport = normalizeSport(rawSport);
         const rawSel = prefillPlay.selection || "";
         const sel = (rawSel && !/^[•·].*[—–]/.test(rawSel)) ? rawSel : (fb.selection || rawSel);
         const odds = prefillPlay.odds != null ? prefillPlay.odds : fb.odds;
@@ -2103,7 +2119,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     async function submitLogBet() {
       const btn = document.getElementById("f-submit-btn");
-      const sport = document.getElementById("f-sport").value;
+      const sport = normalizeSport(document.getElementById("f-sport").value);
       const bet_type = document.getElementById("f-type").value;
       const selections = document.getElementById("f-sel").value.trim();
       const odds = getOddsValue("f");
@@ -2181,7 +2197,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.getElementById("edit-modal-title").textContent = `✏️ Manage ${ticket.bet_id}`;
       document.getElementById("e-row").value = ticket.row_index || "";
       document.getElementById("e-betid").value = ticket.bet_id || "";
-      document.getElementById("e-sport").value = ticket.sport || "";
+      document.getElementById("e-sport").value = normalizeSport(ticket.sport || "");
       document.getElementById("e-result").value = "Pending";
       document.getElementById("e-sel").value = ticket.selections || "";
       setOddsValue("e", ticket.odds || "-110");
@@ -2199,7 +2215,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           action: "edit_bet",
           row_index: document.getElementById("e-row").value || null,
           bet_id: document.getElementById("e-betid").value,
-          sport: document.getElementById("e-sport").value.trim(),
+          sport: normalizeSport(document.getElementById("e-sport").value),
           result: document.getElementById("e-result").value,
           selections: document.getElementById("e-sel").value.trim(),
           odds: getOddsValue("e"),
@@ -2319,7 +2335,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           const pClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
           const oddsTxt = t.odds ? ` (${esc(t.odds)})` : "";
           const metaParts = [];
-          if (t.sport) metaParts.push(esc(t.sport));
+          if (t.sport) metaParts.push(esc(normalizeSport(t.sport)));
           if (t.stake != null && t.stake > 0) metaParts.push(`Stake ${fmtMoney(t.stake)}`);
           return `
             <div class="bet-item">
@@ -2554,10 +2570,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function getSportDurationMinutes(sport, selections) {
-      const sp = String(sport || "").toUpperCase();
+      const sp = normalizeSport(sport).toUpperCase();
       let mins = 165;
       if (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE") mins = 120;
-      else if (sp === "CBB" || sp === "NCAAM") mins = 130;
+      else if (sp === "NCAAM") mins = 130;
       else if (sp === "NBA") mins = 150;
       else if (sp === "NHL") mins = 160;
       else if (sp === "MLB") mins = 175;
@@ -2605,7 +2621,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }
 
       if (state === "in") {
-        const sp = String(ticket.sport || "").toUpperCase();
+        const sp = normalizeSport(ticket.sport).toUpperCase();
         const period = Number(match.status?.period || 1);
         const clockSec = Number(match.status?.clock || 0);
         const detail = String(match.status?.type?.shortDetail || match.status?.type?.detail || "").toLowerCase();
@@ -2622,9 +2638,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           return { rank: 1, estFinishMs: nowMs + remReal * 60000 };
         }
 
-        // Timed period sports (CBB/NBA/NHL/NFL/CFB)
+        // Timed period sports (NCAAM/NBA/NHL/NFL/CFB)
         let regPeriods = 4, periodLenSec = 900, realPerGameMin = 3.2;
-        if (sp === "CBB" || sp === "NCAAM") { regPeriods = 2; periodLenSec = 1200; realPerGameMin = 3.2; }
+        if (sp === "NCAAM") { regPeriods = 2; periodLenSec = 1200; realPerGameMin = 3.2; }
         else if (sp === "NBA") { regPeriods = 4; periodLenSec = 720; realPerGameMin = 3.1; }
         else if (sp === "NHL") { regPeriods = 3; periodLenSec = 1200; realPerGameMin = 2.6; }
         else if (sp === "NFL" || sp === "CFB" || sp === "NCAAF") { regPeriods = 4; periodLenSec = 900; realPerGameMin = 3.4; }
@@ -2689,7 +2705,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div><span class="pill pill-amber">${esc(t.odds)} | ${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>${clvBadge}</div>
           </div>
           <div class="bet-meta" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
-            <span>${esc(t.sport)} &bull; ${esc(t.bet_type)} &bull; Placed ${esc(t.date)}</span>
+            <span>${esc(normalizeSport(t.sport))} &bull; ${esc(t.bet_type)} &bull; Placed ${esc(t.date)}</span>
             <span id="live-score-${idx}" style="${liveStyle}">${esc(t.__liveText || "")}</span>
           </div>
           <div class="bet-actions">
@@ -2746,15 +2762,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "CFB": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=500",
         "NCAAF": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=500",
         "NCAAM": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=500",
-        "CBB": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=500",
         "EPL": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
         "SOCCER": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
         "PREMIER LEAGUE": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
         "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
       };
       const allSports = [
-        ...(pendingTickets || []).map(t => (t.sport || "").toUpperCase()),
-        ...(curatedPlays || []).map(p => ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase()),
+        ...(pendingTickets || []).map(t => normalizeSport(t.sport).toUpperCase()),
+        ...(curatedPlays || []).map(p => normalizeSport(p.sport || parseTitleFallback(p.title).sport || "").toUpperCase()),
       ];
       const neededSports = [...new Set(allSports.filter(s => sportMap[s]))];
       const ymd = ((currentData && currentData.today) || new Date().toISOString().slice(0,10)).replace(/-/g, "");
@@ -2772,7 +2787,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (mySeq !== pendingScoreSeq) return;
 
       (pendingTickets || []).forEach(t => {
-        const sp = (t.sport || "").toUpperCase();
+        const sp = normalizeSport(t.sport).toUpperCase();
         const match = findEspnMatchForText(eventsBySport[sp], (t.selections || "").toLowerCase());
         if (!match) return;
         const comp = match.competitions[0];
@@ -2806,7 +2821,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       // Sync exact ESPN tipoff/kickoff times & live game state onto Curated Plays and re-sort earliest-to-latest
       if (curatedPlays && curatedPlays.length > 0) {
         curatedPlays.forEach(p => {
-          const sp = ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase();
+          const sp = normalizeSport(p.sport || parseTitleFallback(p.title).sport || "").toUpperCase();
           const match = findEspnMatchForText(eventsBySport[sp], `${p.selection || ""} ${p.title || ""}`.toLowerCase());
           if (!match) return;
           const state = match.status?.type?.state || "";
@@ -2870,9 +2885,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       // 2. Clean Sport
       let sport = String(play.sport || fb.sport || "").trim().toUpperCase();
-      const spParen = rawTitle.match(/\((CBB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|MLB|UFC|SOCCER|ATP|WTA)\)/i);
+      const spParen = rawTitle.match(/\((CBB|NCAAB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|MLB|UFC|SOCCER|ATP|WTA)\)/i);
       if (spParen) sport = spParen[1].toUpperCase();
-      sport = sport.replace(/\s*\([^)]*\)/g, "").trim();
+      sport = normalizeSport(sport.replace(/\s*\([^)]*\)/g, "").trim());
 
       // 3. Clean Team Names (Matchup) + Clean Bet
       let stripped = rawTitle
