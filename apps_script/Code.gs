@@ -1995,25 +1995,49 @@ function gradeStraightBetDeterministic_(bet, completedGames) {
   } else if (selClean.indexOf("–") !== -1 && selClean.split("–")[0].indexOf("@") !== -1) {
     selClean = selClean.split("–").pop().trim();
   }
+  const fullSelL = sel.toLowerCase();
   const selL = selClean.toLowerCase();
-  const sp = String(bet.sport || "").toUpperCase();
+  const sp = normalizeSport_(bet.sport || "").toUpperCase();
+
+  function aliasScore_(textL, fullName, shortName) {
+    let sc = 0;
+    if (fullName && textL.indexOf(fullName) !== -1) {
+      sc = Math.max(sc, 100 + fullName.length);
+    }
+    if (shortName && shortName.length >= 3) {
+      const escShort = shortName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp("\\b" + escShort + "\\b").test(textL)) {
+        sc = Math.max(sc, 50 + shortName.length);
+      } else if (textL.indexOf(shortName) !== -1) {
+        sc = Math.max(sc, 20 + shortName.length);
+      }
+    }
+    return sc;
+  }
 
   let matched = null;
   let side = null;
+  let bestTotalScore = 0;
   for (let i = 0; i < completedGames.length; i++) {
     const g = completedGames[i];
     if (!g.completed) continue;
+    const gLeague = normalizeSport_(g.league || "").toUpperCase();
+    if (sp && sp !== "MULTI-SPORT" && gLeague && gLeague !== sp) continue;
     const hName = String(g.home_team || "").toLowerCase();
     const aName = String(g.away_team || "").toLowerCase();
     const hShort = String(g.home_short || "").toLowerCase();
     const aShort = String(g.away_short || "").toLowerCase();
-    const hHit = (hName && selL.indexOf(hName) !== -1) || (hShort.length >= 3 && selL.indexOf(hShort) !== -1);
-    const aHit = (aName && selL.indexOf(aName) !== -1) || (aShort.length >= 3 && selL.indexOf(aShort) !== -1);
-    if (hHit || aHit) {
+    const hScorePick = aliasScore_(selL, hName, hShort);
+    const aScorePick = aliasScore_(selL, aName, aShort);
+    if (hScorePick === 0 && aScorePick === 0) continue;
+    const oppBonus = hScorePick >= aScorePick ? aliasScore_(fullSelL, aName, aShort) : aliasScore_(fullSelL, hName, hShort);
+    const totalScore = Math.max(hScorePick, aScorePick) + oppBonus;
+    if (totalScore > bestTotalScore) {
+      bestTotalScore = totalScore;
       matched = g;
-      if (hHit && !aHit) side = "home";
-      else if (aHit && !hHit) side = "away";
-      break;
+      if (hScorePick > aScorePick) side = "home";
+      else if (aScorePick > hScorePick) side = "away";
+      else side = null;
     }
   }
   if (!matched) return null;

@@ -245,27 +245,54 @@ def _grade_straight_bet_deterministic(bet, final_games):
         sel_clean = sel_clean.split("—")[-1].strip()
     elif "–" in sel_clean and "@" in sel_clean.split("–")[0]:
         sel_clean = sel_clean.split("–")[-1].strip()
+    full_sel_l = sel.lower()
     sel_l = sel_clean.lower()
     sp = str(bet.get("sport", "") or "").strip().upper()
+    if sp in ("CBB", "NCAAB"):
+        sp = "NCAAM"
+
+    def _alias_score(text_l, full_name, short_name):
+        sc = 0
+        if full_name and full_name in text_l:
+            sc = max(sc, 100 + len(full_name))
+        if len(short_name) >= 3:
+            if re.search(rf"\b{re.escape(short_name)}\b", text_l):
+                sc = max(sc, 50 + len(short_name))
+            elif short_name in text_l:
+                sc = max(sc, 20 + len(short_name))
+        return sc
 
     matched_game = None
     picked_side = None
+    best_total_score = 0
     for g in final_games:
         if not g.get("completed"):
+            continue
+        g_league = str(g.get("league", "")).upper()
+        if sp and sp != "MULTI-SPORT" and g_league and g_league != sp:
             continue
         h_name = str(g.get("home_team", "")).lower()
         a_name = str(g.get("away_team", "")).lower()
         h_short = str(g.get("home_short", "")).lower()
         a_short = str(g.get("away_short", "")).lower()
-        h_hit = (h_name and h_name in sel_l) or (len(h_short) >= 3 and h_short in sel_l)
-        a_hit = (a_name and a_name in sel_l) or (len(a_short) >= 3 and a_short in sel_l)
-        if h_hit or a_hit:
+
+        h_sc_pick = _alias_score(sel_l, h_name, h_short)
+        a_sc_pick = _alias_score(sel_l, a_name, a_short)
+        if h_sc_pick == 0 and a_sc_pick == 0:
+            continue
+
+        # Bonus when the opponent team also appears in the full matchup text (e.g. "Tulsa @ Oregon State — Oregon State -6.5")
+        opp_bonus = _alias_score(full_sel_l, a_name, a_short) if h_sc_pick >= a_sc_pick else _alias_score(full_sel_l, h_name, h_short)
+        total_score = max(h_sc_pick, a_sc_pick) + opp_bonus
+        if total_score > best_total_score:
+            best_total_score = total_score
             matched_game = g
-            if h_hit and not a_hit:
+            if h_sc_pick > a_sc_pick:
                 picked_side = "home"
-            elif a_hit and not h_hit:
+            elif a_sc_pick > h_sc_pick:
                 picked_side = "away"
-            break
+            else:
+                picked_side = None
 
     if not matched_game:
         return None

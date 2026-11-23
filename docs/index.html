@@ -994,10 +994,34 @@
         const cfg = getLiveConfig();
         const isLocalServer = (window.location.protocol.startsWith("http") && !STATIC_DATA) || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
-        // 1. Live Google Apps Script settlement + wager recalculation
+        // 1. Live Google Apps Script settlement + instant client-side ESPN fallback + wager recalculation
         if (cfg.url && cfg.pin) {
-          const res = await postLiveApi({ action: "settle", stage: "settler" });
-          if (res.dashboard) render(res.dashboard);
+          const prevBr = Number((currentData && currentData.bankroll) || 0);
+          let res = { ok: true, settled_count: 0, prev_bankroll: prevBr, new_bankroll: prevBr, adjusted_plays: [], dashboard: currentData };
+          try {
+            const apiRes = await postLiveApi({ action: "settle", stage: "settler" });
+            if (apiRes) res = apiRes;
+          } catch (apiErr) {
+            console.warn("Apps Script settle call error, trying client-side ESPN fallback:", apiErr);
+          }
+
+          let latestDash = res.dashboard || currentData;
+          let totalSettled = Number(res.settled_count || 0);
+          const clientSettledNotes = [];
+
+          // Client-side ESPN final verification fallback (uses &limit=500 + deterministic grading so final games settle even if Apps Script hasn't been redeployed)
+          if (latestDash && Array.isArray(latestDash.pending_tickets) && latestDash.pending_tickets.length > 0) {
+            const clientRes = await settleFinalPendingFromBrowser(latestDash);
+            if (clientRes.settledCount > 0) {
+              totalSettled += clientRes.settledCount;
+              clientRes.notes.forEach(n => clientSettledNotes.push(n));
+              if (clientRes.dashboard) latestDash = clientRes.dashboard;
+            }
+          }
+
+          if (latestDash) render(latestDash);
+          const startBr = Number(res.prev_bankroll != null ? res.prev_bankroll : prevBr);
+          const endBr = Number((latestDash && latestDash.bankroll != null) ? latestDash.bankroll : (res.new_bankroll || startBr));
 
           // If user also saved a GitHub PAT in browser and Apps Script didn't trigger GitHub, dispatch GitHub workflow too
           let ghDispatched = Boolean(res.github_triggered);
@@ -1008,17 +1032,17 @@
             } catch (_) {}
           }
 
-          const settledCnt = Number(res.settled_count || 0);
           const adjList = (res.adjusted_plays || []).filter(a => a && a.new_stake > 0);
-          if (settledCnt > 0) {
+          if (totalSettled > 0) {
+            const detailTxt = clientSettledNotes.length > 0 ? ` (${clientSettledNotes.join(", ")})` : "";
             const adjSummary = adjList.length > 0
               ? ` • Adjusted ${adjList.length} remaining bet${adjList.length === 1 ? "" : "s"} (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`
               : "";
-            showToast(`✅ Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(res.prev_bankroll)} → ${fmtMoney(res.new_bankroll)}${adjSummary}`, 5500);
+            showToast(`✅ Settled ${totalSettled} bet${totalSettled === 1 ? "" : "s"}${detailTxt}! BR: ${fmtMoney(startBr)} → ${fmtMoney(endBr)}${adjSummary}`, 6000);
           } else if (adjList.length > 0 && adjList.some(a => a.changed)) {
-            showToast(`🔄 Recalculated remaining wagers for ${fmtMoney(res.new_bankroll)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
+            showToast(`🔄 Recalculated remaining wagers for ${fmtMoney(endBr)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
           } else {
-            showToast(`🏁 Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(res.new_bankroll)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
+            showToast(`🏁 Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(endBr)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
           }
           return;
         }
@@ -2228,11 +2252,38 @@
         const margin = pickedScore - oppScore;
         if (margin > 0) return { status: "win", note: `Ahead (+${margin})` };
         if (margin < 0) return { status: "loss", note: `Behind (${margin})` };
-        if (state === "post") return { status: "loss", note: "Tied (Final)" };
+        if (state === "post") {
+          const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE");
+          return isSoccer
+            ? { status: "loss", note: "Tied (Final)" }
+            : { status: "push", note: "Tied (Push)" };
+        }
         return { status: "push", note: "Tied" };
       }
 
       return null;
+    }
+
+    function isTicketFinalForSettlement(match, ticket) {
+      if (!match) return false;
+      const st = match.status?.type || {};
+      const state = st.state || "";
+      if (state === "post" || st.completed === true) return true;
+      // Allow 1H straight bets to settle once the 1st half is officially over and linescores exist
+      const sel = String((ticket && ticket.selections) || "");
+      if (/\b(?:1h|1st\s*half|first\s*half)\b/i.test(sel) && state === "in") {
+        const sp = normalizeSport(ticket && ticket.sport).toUpperCase();
+        const period = Number(match.status?.period || 1);
+        const detailLow = String(st.shortDetail || st.detail || "").toLowerCase();
+        const halfPeriods = (sp === "NCAAM") ? 1 : ((sp === "NBA" || sp === "NFL" || sp === "CFB" || sp === "NCAAF") ? 2 : 1);
+        const comp = (match.competitions || [])[0];
+        const comps = (comp && comp.competitors) || [];
+        const hasLines = comps.length === 2 && comps.every(c => Array.isArray(c.linescores) && c.linescores.length >= halfPeriods);
+        if (hasLines && (period > halfPeriods || detailLow.includes("half"))) {
+          return true;
+        }
+      }
+      return false;
     }
 
     function renderPendingList(pend) {
@@ -2286,56 +2337,144 @@
     }
 
     function findEspnMatchForText(evts, textLower) {
-      return (evts || []).find(ev => {
+      const hay = String(textLower || "").toLowerCase();
+      if (!hay) return null;
+      let bestEv = null;
+      let bestScore = 0;
+
+      for (const ev of (evts || [])) {
         const comp = (ev.competitions || [])[0];
-        if (!comp) return false;
-        const teams = (comp.competitors || []).map(c => ({
-          short: (c.team?.shortDisplayName || "").toLowerCase(),
-          name: (c.team?.name || "").toLowerCase(),
-          abbr: (c.team?.abbreviation || "").toLowerCase(),
-          display: (c.team?.displayName || "").toLowerCase(),
-        }));
-        return teams.some(tm =>
-          (tm.short && tm.short.length > 2 && textLower.includes(tm.short)) ||
-          (tm.name && tm.name.length > 2 && textLower.includes(tm.name)) ||
-          (tm.display && textLower.includes(tm.display)) ||
-          (tm.abbr && tm.abbr.length >= 3 && new RegExp(`\\b${tm.abbr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(textLower))
-        );
+        if (!comp) continue;
+        let evScore = 0;
+        for (const c of (comp.competitors || [])) {
+          const display = (c.team?.displayName || "").toLowerCase();
+          const shortN = (c.team?.shortDisplayName || "").toLowerCase();
+          const loc = (c.team?.location || "").toLowerCase();
+          const name = (c.team?.name || "").toLowerCase();
+          const abbr = (c.team?.abbreviation || "").toLowerCase();
+          let tmBest = 0;
+          if (display && hay.includes(display)) {
+            tmBest = Math.max(tmBest, 100 + display.length);
+          }
+          for (const cand of [shortN, loc, name]) {
+            if (cand && cand.length > 2) {
+              const escC = cand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              if (new RegExp(`\\b${escC}\\b`).test(hay)) {
+                tmBest = Math.max(tmBest, 50 + cand.length);
+              } else if (hay.includes(cand)) {
+                tmBest = Math.max(tmBest, 20 + cand.length);
+              }
+            }
+          }
+          if (abbr && abbr.length >= 3) {
+            const escA = abbr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            if (new RegExp(`\\b${escA}\\b`).test(hay)) {
+              tmBest = Math.max(tmBest, 35 + abbr.length);
+            }
+          }
+          evScore += tmBest;
+        }
+        if (evScore > bestScore) {
+          bestScore = evScore;
+          bestEv = ev;
+        }
+      }
+      return bestEv;
+    }
+
+    const ESPN_SPORT_ENDPOINTS = {
+      "NBA": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+      "NHL": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
+      "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+      "CFB": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=500",
+      "NCAAF": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=500",
+      "NCAAM": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=500",
+      "EPL": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+      "SOCCER": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+      "PREMIER LEAGUE": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
+      "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
+    };
+
+    async function fetchEspnEventsMap(pendingTickets, curatedPlays) {
+      const todayYmd = ((currentData && currentData.today) || new Date().toISOString().slice(0, 10)).replace(/-/g, "");
+      const pairs = new Map(); // key: `${sp}:${ymd}` -> { sp, ymd }
+      (pendingTickets || []).forEach(t => {
+        const sp = normalizeSport(t.sport).toUpperCase();
+        if (!ESPN_SPORT_ENDPOINTS[sp]) return;
+        const tYmd = String(t.date || "").replace(/-/g, "");
+        if (/^\d{8}$/.test(tYmd)) pairs.set(`${sp}:${tYmd}`, { sp, ymd: tYmd });
+        pairs.set(`${sp}:${todayYmd}`, { sp, ymd: todayYmd });
       });
+      (curatedPlays || []).forEach(p => {
+        const sp = normalizeSport(p.sport || parseTitleFallback(p.title).sport || "").toUpperCase();
+        if (!ESPN_SPORT_ENDPOINTS[sp]) return;
+        pairs.set(`${sp}:${todayYmd}`, { sp, ymd: todayYmd });
+      });
+
+      const eventsBySport = {};
+      const seenBySport = {};
+      await Promise.all([...pairs.values()].map(async ({ sp, ymd }) => {
+        try {
+          const base = ESPN_SPORT_ENDPOINTS[sp];
+          const sep = base.includes("?") ? "&" : "?";
+          const r = await fetch(`${base}${sep}dates=${ymd}`, { cache: "no-store" });
+          const j = await r.json();
+          if (!eventsBySport[sp]) {
+            eventsBySport[sp] = [];
+            seenBySport[sp] = new Set();
+          }
+          for (const ev of (j.events || [])) {
+            const id = String(ev.id || "");
+            if (id && seenBySport[sp].has(id)) continue;
+            if (id) seenBySport[sp].add(id);
+            eventsBySport[sp].push(ev);
+          }
+        } catch (e) {
+          if (!eventsBySport[sp]) eventsBySport[sp] = [];
+        }
+      }));
+      return eventsBySport;
+    }
+
+    async function settleFinalPendingFromBrowser(dash) {
+      const pending = (dash && dash.pending_tickets) || [];
+      if (pending.length === 0) return { settledCount: 0, notes: [], dashboard: dash };
+      const eventsBySport = await fetchEspnEventsMap(pending, []);
+      let latestDash = dash;
+      let settledCount = 0;
+      const notes = [];
+
+      for (const t of pending) {
+        const sp = normalizeSport(t.sport).toUpperCase();
+        const match = findEspnMatchForText(eventsBySport[sp], (t.selections || "").toLowerCase());
+        if (!match || !isTicketFinalForSettlement(match, t)) continue;
+        const trend = evaluateLiveTicketTrend(match, t);
+        if (!trend || !trend.status) continue;
+        const finalRes = trend.status === "win" ? "Won" : (trend.status === "loss" ? "Lost" : (trend.status === "push" ? "Push" : ""));
+        if (!finalRes) continue;
+        try {
+          const editRes = await postLiveApi({
+            action: "edit_bet",
+            row_index: t.row_index || null,
+            bet_id: t.bet_id,
+            result: finalRes,
+          });
+          if (editRes && editRes.ok) {
+            settledCount++;
+            notes.push(`${t.bet_id} ${finalRes}`);
+            if (editRes.dashboard) latestDash = editRes.dashboard;
+          }
+        } catch (e) {
+          console.warn(`Client settle failed for ${t.bet_id}:`, e);
+        }
+      }
+      return { settledCount, notes, dashboard: latestDash };
     }
 
     let pendingScoreSeq = 0;
     async function fetchLiveScoresForPending(pendingTickets, curatedPlays) {
       const mySeq = ++pendingScoreSeq;
-      const sportMap = {
-        "NBA": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
-        "NHL": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard",
-        "NFL": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-        "CFB": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=500",
-        "NCAAF": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=500",
-        "NCAAM": "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=500",
-        "EPL": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
-        "SOCCER": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
-        "PREMIER LEAGUE": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
-        "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
-      };
-      const allSports = [
-        ...(pendingTickets || []).map(t => normalizeSport(t.sport).toUpperCase()),
-        ...(curatedPlays || []).map(p => normalizeSport(p.sport || parseTitleFallback(p.title).sport || "").toUpperCase()),
-      ];
-      const neededSports = [...new Set(allSports.filter(s => sportMap[s]))];
-      const ymd = ((currentData && currentData.today) || new Date().toISOString().slice(0,10)).replace(/-/g, "");
-      const eventsBySport = {};
-      await Promise.all(neededSports.map(async sp => {
-        try {
-          const sep = sportMap[sp].includes("?") ? "&" : "?";
-          const r = await fetch(`${sportMap[sp]}${sep}dates=${ymd}`, { cache: "no-store" });
-          const j = await r.json();
-          eventsBySport[sp] = j.events || [];
-        } catch (e) {
-          eventsBySport[sp] = [];
-        }
-      }));
+      const eventsBySport = await fetchEspnEventsMap(pendingTickets, curatedPlays);
       if (mySeq !== pendingScoreSeq) return;
 
       (pendingTickets || []).forEach(t => {
