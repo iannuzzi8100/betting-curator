@@ -1129,11 +1129,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="bet-list" id="pending-list"></div>
       </div>
 
-      <!-- 3. TODAY'S CURATED PICKS -->
+      <!-- 3. TODAY'S CURATED PICKS (Upcoming Only; Click Title for Started & Full Slate) -->
       <div class="card">
-        <div class="section-title">
+        <div class="section-title" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')" title="Tap to view started &amp; all curated bets">
           <span>🔥 Today's Curated Bets (<span id="curated-date">--</span>)</span>
-          <span class="pill pill-blue" id="curated-count">0 Plays</span>
+          <div class="section-right">
+            <span class="pill pill-blue" id="curated-count">0 Upcoming</span>
+            <span class="card-tap-hint" id="curated-started-hint" style="margin-left:0;"></span>
+          </div>
         </div>
         <div class="bet-list" id="curated-list"></div>
       </div>
@@ -1385,6 +1388,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- MODAL 5: STARTED & FULL CURATED BETS PAGE -->
+  <div class="modal-backdrop" id="curated-archive-modal" onclick="if(event.target===this) closeModal('curated-archive-modal')">
+    <div class="modal" style="max-width:580px;">
+      <div class="modal-header">
+        <h3 id="curated-archive-title">🔥 Started Curated Bets</h3>
+        <button class="close-btn" onclick="closeModal('curated-archive-modal')">&times;</button>
+      </div>
+      <div class="tabs">
+        <button class="tab-btn active" id="curated-tab-started" onclick="openCuratedArchiveModal('started')">🔴 Started (<span id="curated-tab-started-cnt">0</span>)</button>
+        <button class="tab-btn" id="curated-tab-all" onclick="openCuratedArchiveModal('all')">📋 All Today (<span id="curated-tab-all-cnt">0</span>)</button>
+      </div>
+      <div class="bet-list" id="curated-archive-list"></div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeModal('curated-archive-modal')">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
@@ -1397,10 +1418,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let currentData = STATIC_DATA || null;
     const openDrawers = new Set();
 
-    function toggleCuratedDetail(idx, drawerKey) {
-      const el = document.getElementById(`curated-detail-${idx}`);
-      const caret = document.getElementById(`curated-caret-${idx}`);
-      const key = drawerKey || String(idx);
+    function toggleCuratedDetail(domId, drawerKey) {
+      const el = document.getElementById(`curated-detail-${domId}`);
+      const caret = document.getElementById(`curated-caret-${domId}`);
+      const key = drawerKey || String(domId);
       if (!el) return;
       if (el.style.display === "none") {
         el.style.display = "block";
@@ -2782,12 +2803,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderPendingList(pendingTickets);
       }
 
-      // Sync exact ESPN tipoff/kickoff times onto Curated Plays and re-sort earliest-to-latest
+      // Sync exact ESPN tipoff/kickoff times & live game state onto Curated Plays and re-sort earliest-to-latest
       if (curatedPlays && curatedPlays.length > 0) {
         curatedPlays.forEach(p => {
           const sp = ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase();
           const match = findEspnMatchForText(eventsBySport[sp], `${p.selection || ""} ${p.title || ""}`.toLowerCase());
-          if (!match || !match.date) return;
+          if (!match) return;
+          const state = match.status?.type?.state || "";
+          const detail = match.status?.type?.shortDetail || "";
+          if (state) p.__espnState = state;
+          const comp = (match.competitions || [])[0];
+          const away = comp && (comp.competitors || []).find(c => c.homeAway === "away");
+          const home = comp && (comp.competitors || []).find(c => c.homeAway === "home");
+          if (away && home) {
+            const aAbbr = away.team?.abbreviation || away.team?.shortDisplayName || "";
+            const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
+            if (state === "in") {
+              p.__liveColor = "#10b981";
+              p.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+            } else if (state === "post") {
+              p.__liveColor = "#94a3b8";
+              p.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+            } else {
+              p.__liveColor = "";
+              p.__liveText = "";
+            }
+          }
+          if (!match.date) return;
           const exactTime = formatEspnTimeEst(match.date);
           const startMs = Date.parse(match.date);
           if (!isNaN(startMs)) p.__startMs = startMs;
@@ -2904,6 +2946,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       return baseDayMs + 24 * 3600000;
     }
 
+    function isCuratedPlayStarted(play, dateStr, nowMs) {
+      if (play.__espnState === "in" || play.__espnState === "post") return true;
+      if (play.__espnState === "pre") return false;
+      const now = nowMs != null ? nowMs : Date.now();
+      return now >= estimateCuratedStartMs(play, dateStr);
+    }
+
     function sortCuratedByStartTime(plays, dateStr) {
       (plays || []).sort((a, b) => {
         const sA = estimateCuratedStartMs(a, dateStr);
@@ -2913,9 +2962,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       });
     }
 
-    function renderCuratedList(plays, data) {
-      const cList = document.getElementById("curated-list");
-      window.__curatedPlays = plays || [];
+    function buildCuratedCardsHtml(subsetPlays, data, domPrefix) {
       const pendingList = (data && data.pending_tickets) || [];
       const todaySettledList = (data && data.today_stats && data.today_stats.tickets) || [];
 
@@ -2933,18 +2980,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         return todaySettledList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
       }
 
-      if (!plays || plays.length === 0) {
-        cList.innerHTML = `<div class="empty-msg">${esc((data && data.curated_raw) || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
-        return;
-      }
-
-      cList.innerHTML = plays.map((p, idx) => {
+      return subsetPlays.map((p, i) => {
+        const globalIdx = p.__allIdx != null ? p.__allIdx : i;
+        const domId = `${domPrefix}-${i}`;
         const isPass = Boolean(p.is_pass) || (p.title || "").includes("⛔") || /\bPASS\b/.test(p.title || "") || /NO GOOD PLAY/i.test(p.title || "");
         const existingPend = isPass ? null : findMatchingPending(p);
         const existingSettled = (isPass || existingPend) ? null : findMatchingSettledToday(p);
         const cp = isPass ? null : p.confidence_pct;
         const dParts = parseCuratedDisplayParts(p);
-        const drawerKey = p.__key || String(idx);
+        const drawerKey = p.__key || String(globalIdx);
         const isOpen = openDrawers.has(drawerKey);
 
         let meterHtml = "";
@@ -2958,7 +3002,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div style="margin-top:8px;">
               <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;font-weight:700;color:${barColor};margin-bottom:4px;">
                 <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
-                <span style="color:var(--muted);font-weight:500;" id="curated-caret-${idx}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
+                <span style="color:var(--muted);font-weight:500;" id="curated-caret-${domId}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
               </div>
               <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
                 <div style="width:${Math.min(100, Math.max(0, cp))}%;height:100%;background:${barColor};border-radius:999px;"></div>
@@ -2968,7 +3012,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         } else if (!isPass && (p.game_line || p.confidence_math || p.edge)) {
           meterHtml = `
             <div style="margin-top:6px;display:flex;justify-content:flex-end;font-size:0.75rem;color:var(--muted);">
-              <span id="curated-caret-${idx}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
+              <span id="curated-caret-${domId}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
             </div>
           `;
         }
@@ -2992,7 +3036,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           : `<div style="margin-bottom:3px;">• ${esc(dParts.matchup || dParts.betText)}</div>`;
 
         const drawerHtml = isPass ? "" : `
-          <div id="curated-detail-${idx}" style="display:${isOpen ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
+          <div id="curated-detail-${domId}" style="display:${isOpen ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
             <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">🏟️ Game &amp; Line Info</div>
             <div style="color:var(--muted);line-height:1.45;margin-bottom:10px;">
               ${gameLineHtml}
@@ -3012,7 +3056,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               <div class="bet-actions" onclick="event.stopPropagation()">
                 <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
                 ${recalcNote}
-                <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${idx}])">+ Log Again</button>
+                <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Again</button>
               </div>`;
           } else if (existingSettled) {
             const resU = String(existingSettled.result || "").toUpperCase();
@@ -3028,18 +3072,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               : "";
             actionHtml = `
               <div class="bet-actions" onclick="event.stopPropagation()">
-                <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${idx}])">+ Log Bet (${fmtMoney(p.stake)})</button>
+                <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Bet (${fmtMoney(p.stake)})</button>
                 ${adjBadge}
               </div>`;
           }
         }
 
         const safeKeyAttr = esc(drawerKey).replace(/'/g, "\\'");
-        const clickAttr = isPass ? "" : ` style="cursor:pointer;transition:background 0.15s;" onclick="toggleCuratedDetail(${idx}, '${safeKeyAttr}')"`;
+        const clickAttr = isPass ? "" : ` style="cursor:pointer;transition:background 0.15s;" onclick="toggleCuratedDetail('${domId}', '${safeKeyAttr}')"`;
+        const liveScoreBadge = p.__liveText
+          ? `<span style="font-size:0.74rem;font-weight:700;color:${p.__liveColor || "#94a3b8"};">${esc(p.__liveText)}</span>`
+          : "";
         const metaRow = `
           <div class="curated-meta">
             ${dParts.startTime ? `<span class="curated-time">🕒 ${esc(dParts.startTime)}</span>` : ""}
             ${dParts.sport ? `<span class="curated-sport">${esc(dParts.sport)}</span>` : ""}
+            ${liveScoreBadge}
           </div>
         `;
         const matchupRow = dParts.matchup ? `<div class="curated-matchup">${esc(dParts.matchup)}</div>` : "";
@@ -3066,6 +3114,88 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
       `;
       }).join("");
+    }
+
+    function renderCuratedList(plays, data) {
+      const cList = document.getElementById("curated-list");
+      const allPlays = plays || [];
+      allPlays.forEach((p, idx) => { p.__allIdx = idx; });
+      window.__curatedPlays = allPlays;
+      const dateStr = (data && (data.curated_date || data.today)) || "";
+
+      const upcomingPlays = [];
+      const startedPlays = [];
+      allPlays.forEach(p => {
+        if (isCuratedPlayStarted(p, dateStr)) {
+          startedPlays.push(p);
+        } else {
+          upcomingPlays.push(p);
+        }
+      });
+      window.__startedCuratedPlays = startedPlays;
+      window.__upcomingCuratedPlays = upcomingPlays;
+
+      const cntEl = document.getElementById("curated-count");
+      if (cntEl) cntEl.textContent = `${upcomingPlays.length} Upcoming`;
+      const hintEl = document.getElementById("curated-started-hint");
+      if (hintEl) {
+        hintEl.textContent = startedPlays.length > 0
+          ? `${startedPlays.length} Started →`
+          : (allPlays.length > 0 ? "Full Slate →" : "");
+      }
+
+      if (allPlays.length === 0) {
+        cList.innerHTML = `<div class="empty-msg">${esc((data && data.curated_raw) || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
+      } else if (upcomingPlays.length === 0) {
+        cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')">All ${startedPlays.length} curated game${startedPlays.length === 1 ? "" : "s"} for today have already started. Tap here or the title above to view them &rarr;</div>`;
+      } else {
+        cList.innerHTML = buildCuratedCardsHtml(upcomingPlays, data, "main");
+      }
+
+      // If the Started / All Today modal is open, refresh it live too
+      const archModal = document.getElementById("curated-archive-modal");
+      if (archModal && archModal.classList.contains("open")) {
+        renderCuratedArchiveModal(window.__activeCuratedTab || "started");
+      }
+    }
+
+    function renderCuratedArchiveModal(tab) {
+      tab = tab || "started";
+      window.__activeCuratedTab = tab;
+      const startedPlays = window.__startedCuratedPlays || [];
+      const allPlays = window.__curatedPlays || [];
+      const sCntEl = document.getElementById("curated-tab-started-cnt");
+      const aCntEl = document.getElementById("curated-tab-all-cnt");
+      if (sCntEl) sCntEl.textContent = String(startedPlays.length);
+      if (aCntEl) aCntEl.textContent = String(allPlays.length);
+
+      const tStarted = document.getElementById("curated-tab-started");
+      const tAll = document.getElementById("curated-tab-all");
+      if (tStarted) tStarted.classList.toggle("active", tab === "started");
+      if (tAll) tAll.classList.toggle("active", tab === "all");
+
+      const titleEl = document.getElementById("curated-archive-title");
+      const dateLbl = (currentData && currentData.curated_date) ? ` (${currentData.curated_date})` : "";
+      if (titleEl) {
+        titleEl.textContent = tab === "started"
+          ? `🔴 Started Curated Bets${dateLbl}`
+          : `📋 All Today's Curated Bets${dateLbl}`;
+      }
+
+      const listEl = document.getElementById("curated-archive-list");
+      const subset = tab === "started" ? startedPlays : allPlays;
+      if (!subset || subset.length === 0) {
+        listEl.innerHTML = tab === "started"
+          ? `<div class="empty-msg">No curated games have started yet today.</div>`
+          : `<div class="empty-msg">No curated plays found yet.</div>`;
+      } else {
+        listEl.innerHTML = buildCuratedCardsHtml(subset, currentData || {}, "modal");
+      }
+    }
+
+    function openCuratedArchiveModal(tab) {
+      renderCuratedArchiveModal(tab || "started");
+      openModal("curated-archive-modal");
     }
 
     async function loadData() {
