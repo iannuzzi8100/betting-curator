@@ -424,20 +424,34 @@ def fetch_dashboard_data():
             else:
                 cp_item["confidence_tier"] = "⛔ TIER 4: PASS"
 
-        if not cp_item["game_line"] and intel_quant_lines:
+        has_generic_window = bool(re.match(r"^\[Window\s*\d+:", cp_item["title"], flags=re.I))
+        if (not cp_item["game_line"] or has_generic_window) and intel_quant_lines:
             t_clean = re.sub(r"\[[^\]]*\]", "", cp_item["title"])
             words = [
                 w
                 for w in re.findall(r"[A-Za-z]{3,}", t_clean)
-                if w.upper() not in ("EST", "CFB", "NFL", "NBA", "NHL", "EPL", "CBB", "OVER", "UNDER", "RESULTING", "STRAIGHT")
+                if w.upper() not in ("EST", "CFB", "NFL", "NBA", "NHL", "EPL", "CBB", "OVER", "UNDER", "RESULTING", "STRAIGHT", "WINDOW")
             ]
             for q_ln in intel_quant_lines:
                 if any(w.lower() in q_ln.lower() for w in words[:2]):
-                    parts_q = q_ln.split("->")
-                    if len(parts_q) >= 2:
-                        match_hdr = re.sub(r"^-\s*\[[^\]]+\]\s*\[[^\]]+\]\s*", "", parts_q[0]).strip()
-                        lines_body = parts_q[1].strip()
-                        cp_item["game_line"] = f"{match_hdr} | {lines_body}"
+                    if has_generic_window:
+                        tm_exact = re.search(r"\((\d{1,2}:\d{2}\s*[AP]M\s*EST)\)", q_ln, flags=re.I)
+                        if tm_exact:
+                            exact_t = tm_exact.group(1).strip()
+                            cp_item["title"] = re.sub(
+                                r"^\[Window\s*\d+:[^\]]*\]", f"[{exact_t}]", cp_item["title"], flags=re.I
+                            )
+                            cp_item["game_time"] = exact_t
+                            if cp_item.get("selection"):
+                                cp_item["selection"] = re.sub(
+                                    r"\(Window\s*\d+:[^)]*\)", f"({exact_t})", cp_item["selection"], flags=re.I
+                                )
+                    if not cp_item["game_line"]:
+                        parts_q = q_ln.split("->")
+                        if len(parts_q) >= 2:
+                            match_hdr = re.sub(r"^-\s*\[[^\]]+\]\s*\[[^\]]+\]\s*", "", parts_q[0]).strip()
+                            lines_body = parts_q[1].strip()
+                            cp_item["game_line"] = f"{match_hdr} | {lines_body}"
                     if not cp_item["confidence_math"]:
                         cm_m = re.search(r"Top Play:\s*([^]]+)\]", q_ln)
                         if cm_m:
@@ -2514,7 +2528,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           return `
           <div class="bet-item"${clickAttr}>
             <div class="bet-top">
-              <div class="bet-title">${idx + 1}. ${esc(p.title)}</div>
+              <div class="bet-title" id="curated-title-${idx}">${idx + 1}. ${esc(p.title)}</div>
               <span class="pill ${pillCls}">${esc(pillTxt)}</span>
             </div>
             ${meterHtml}
@@ -2537,8 +2551,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       sortPendingByFinish(pend);
       document.getElementById("pending-count").textContent = `${pend.length} Active (${fmtMoney(data.pending_total)})`;
       renderPendingList(pend);
-      if (pend.length > 0) {
-        fetchLiveScoresForPending(pend);
+      if (pend.length > 0 || plays.length > 0) {
+        fetchLiveScoresForPending(pend, plays);
       }
 
       // 6. Store latest graded stats for Overall / This Week / Yesterday / Today modal
@@ -2741,8 +2755,44 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }).join("");
     }
 
+    function formatEspnTimeEst(isoDateStr) {
+      if (!isoDateStr) return "";
+      const dt = new Date(isoDateStr);
+      if (isNaN(dt.getTime())) return "";
+      try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/New_York",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        }).format(dt);
+        return `${parts} EST`;
+      } catch (e) {
+        return "";
+      }
+    }
+
+    function findEspnMatchForText(evts, textLower) {
+      return (evts || []).find(ev => {
+        const comp = (ev.competitions || [])[0];
+        if (!comp) return false;
+        const teams = (comp.competitors || []).map(c => ({
+          short: (c.team?.shortDisplayName || "").toLowerCase(),
+          name: (c.team?.name || "").toLowerCase(),
+          abbr: (c.team?.abbreviation || "").toLowerCase(),
+          display: (c.team?.displayName || "").toLowerCase(),
+        }));
+        return teams.some(tm =>
+          (tm.short && tm.short.length > 2 && textLower.includes(tm.short)) ||
+          (tm.name && tm.name.length > 2 && textLower.includes(tm.name)) ||
+          (tm.display && textLower.includes(tm.display)) ||
+          (tm.abbr && tm.abbr.length >= 3 && new RegExp(`\\b${tm.abbr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(textLower))
+        );
+      });
+    }
+
     let pendingScoreSeq = 0;
-    async function fetchLiveScoresForPending(pendingTickets) {
+    async function fetchLiveScoresForPending(pendingTickets, curatedPlays) {
       const mySeq = ++pendingScoreSeq;
       const sportMap = {
         "NBA": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
@@ -2757,7 +2807,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "PREMIER LEAGUE": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
         "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
       };
-      const neededSports = [...new Set(pendingTickets.map(t => (t.sport || "").toUpperCase()).filter(s => sportMap[s]))];
+      const allSports = [
+        ...(pendingTickets || []).map(t => (t.sport || "").toUpperCase()),
+        ...(curatedPlays || []).map(p => ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase()),
+      ];
+      const neededSports = [...new Set(allSports.filter(s => sportMap[s]))];
       const ymd = ((currentData && currentData.today) || new Date().toISOString().slice(0,10)).replace(/-/g, "");
       const eventsBySport = {};
       await Promise.all(neededSports.map(async sp => {
@@ -2772,26 +2826,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }));
       if (mySeq !== pendingScoreSeq) return;
 
-      pendingTickets.forEach(t => {
+      (pendingTickets || []).forEach(t => {
         const sp = (t.sport || "").toUpperCase();
-        const evts = eventsBySport[sp] || [];
-        const selLower = (t.selections || "").toLowerCase();
-        const match = evts.find(ev => {
-          const comp = (ev.competitions || [])[0];
-          if (!comp) return false;
-          const teams = (comp.competitors || []).map(c => ({
-            short: (c.team?.shortDisplayName || "").toLowerCase(),
-            name: (c.team?.name || "").toLowerCase(),
-            abbr: (c.team?.abbreviation || "").toLowerCase(),
-            display: (c.team?.displayName || "").toLowerCase(),
-          }));
-          return teams.some(tm =>
-            (tm.short && tm.short.length > 2 && selLower.includes(tm.short)) ||
-            (tm.name && tm.name.length > 2 && selLower.includes(tm.name)) ||
-            (tm.display && selLower.includes(tm.display)) ||
-            (tm.abbr && tm.abbr.length >= 3 && new RegExp(`\\b${tm.abbr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(selLower))
-          );
-        });
+        const match = findEspnMatchForText(eventsBySport[sp], (t.selections || "").toLowerCase());
         if (!match) return;
         const comp = match.competitions[0];
         const away = comp.competitors.find(c => c.homeAway === "away");
@@ -2816,8 +2853,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         t.__estFinishMs = est.estFinishMs;
       });
 
-      sortPendingByFinish(pendingTickets);
-      renderPendingList(pendingTickets);
+      if (pendingTickets && pendingTickets.length > 0) {
+        sortPendingByFinish(pendingTickets);
+        renderPendingList(pendingTickets);
+      }
+
+      // Sync exact ESPN tipoff/kickoff times onto Curated Plays (replaces generic "[Window 3: 12:00 PM]" labels)
+      (curatedPlays || []).forEach((p, idx) => {
+        const sp = ((p.sport || parseTitleFallback(p.title).sport || "")).toUpperCase();
+        const match = findEspnMatchForText(eventsBySport[sp], `${p.selection || ""} ${p.title || ""}`.toLowerCase());
+        if (!match || !match.date) return;
+        const exactTime = formatEspnTimeEst(match.date);
+        if (!exactTime) return;
+        let updatedTitle = String(p.title || "");
+        if (/^\[Window\s*\d+:[^\]]*\]/i.test(updatedTitle)) {
+          updatedTitle = updatedTitle.replace(/^\[Window\s*\d+:[^\]]*\]/i, `[${exactTime}]`);
+        } else if (/^\[?\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\]?/i.test(updatedTitle)) {
+          updatedTitle = updatedTitle.replace(/^\[?\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\]?/i, `[${exactTime}]`);
+        }
+        if (updatedTitle !== p.title) {
+          p.title = updatedTitle;
+          const titleEl = document.getElementById(`curated-title-${idx}`);
+          if (titleEl) titleEl.textContent = `${idx + 1}. ${updatedTitle}`;
+        }
+        p.game_time = exactTime;
+        if (p.selection) {
+          if (/\(Window\s*\d+:[^)]*\)/i.test(p.selection)) {
+            p.selection = p.selection.replace(/\(Window\s*\d+:[^)]*\)/i, `(${exactTime})`);
+          } else if (/\(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\)/i.test(p.selection)) {
+            p.selection = p.selection.replace(/\(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\)/i, `(${exactTime})`);
+          }
+        }
+      });
     }
 
     async function loadData() {
