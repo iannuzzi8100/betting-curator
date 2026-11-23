@@ -132,7 +132,7 @@ def fetch_final_scores(target_dates, pending_bets=None):
         for d in target_dates:
             url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard?dates={d}"
             if league_info.get("groups"):
-                url += f"&groups={league_info['groups']}"
+                url += f"&groups={league_info['groups']}&limit=500"
 
             try:
                 res = requests.get(url, timeout=10)
@@ -161,32 +161,56 @@ def fetch_final_scores(target_dates, pending_bets=None):
                 if not home or not away:
                     continue
 
-                home_name = home.get("team", {}).get("displayName", "")
-                away_name = away.get("team", {}).get("displayName", "")
-                home_short = home.get("team", {}).get("shortDisplayName", "").lower()
-                away_short = away.get("team", {}).get("shortDisplayName", "").lower()
+                home_team_obj = home.get("team", {})
+                away_team_obj = away.get("team", {})
+                home_name = home_team_obj.get("displayName", "")
+                away_name = away_team_obj.get("displayName", "")
+                home_short = home_team_obj.get("shortDisplayName", "").lower()
+                away_short = away_team_obj.get("shortDisplayName", "").lower()
+                home_nick = home_team_obj.get("name", "").lower()
+                away_nick = away_team_obj.get("name", "").lower()
+                home_abbr = home_team_obj.get("abbreviation", "").lower()
+                away_abbr = away_team_obj.get("abbreviation", "").lower()
                 home_score = int(float(home.get("score", 0) or 0))
                 away_score = int(float(away.get("score", 0) or 0))
+
+                if pending_bets:
+                    match_tokens = [
+                        tok for tok in (
+                            home_name.lower(), away_name.lower(),
+                            home_short, away_short,
+                            home_nick, away_nick,
+                        )
+                        if tok and len(tok) >= 3
+                    ]
+                    is_relevant = any(tok in pending_text for tok in match_tokens) or any(
+                        abbr and len(abbr) >= 3 and re.search(rf"\b{re.escape(abbr)}\b", pending_text)
+                        for abbr in (home_abbr, away_abbr)
+                    )
+                    if not is_relevant:
+                        continue
 
                 game_record = {
                     "league": league_name,
                     "date": d,
                     "matchup": f"{away_name} @ {home_name}",
                     "away_team": away_name,
+                    "away_short": home_short and away_short or away_short,
                     "away_score": away_score,
                     "home_team": home_name,
+                    "home_short": home_short,
                     "home_score": home_score,
                     "total_points": home_score + away_score,
                     "completed": is_completed,
                     "status": status_type.get("description", state)
                 }
 
-                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM games that match a pending bet team (or prop)
+                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM/CBB games that match a pending bet team (or prop)
                 has_prop_kw = any(kw in pending_text for kw in ("rebound", "assist", "point", "shot", "sog", "goal", "pra", "over ", "under "))
                 if (
                     is_completed
                     and event_id
-                    and league_name in ("NHL", "NBA", "NCAAM")
+                    and league_name in ("NHL", "NBA", "NCAAM", "CBB")
                     and (
                         (home_short and home_short in pending_text)
                         or (away_short and away_short in pending_text)
@@ -200,6 +224,121 @@ def fetch_final_scores(target_dates, pending_bets=None):
                 final_games.append(game_record)
 
     return final_games
+
+
+def _grade_straight_bet_deterministic(bet, final_games):
+    """
+    Deterministic fallback grader for Straight Spread / Moneyline / Total bets against completed ESPN games.
+    Ensures completed straight bets settle reliably even if Gemini is unavailable or misses a game.
+    """
+    b_type = str(bet.get("bet_type", "") or "").strip().lower()
+    if "parlay" in b_type or "sgp" in b_type:
+        return None
+    sel = str(bet.get("selections", "") or "").strip()
+    if not sel or "+" in sel and " + " in sel:
+        return None
+    if re.search(r"\b(?:1h|1st\s*half|first\s*half|points|rebounds|assists|shots|sog|goals|pra|yards|touchdown)\b", sel, flags=re.I):
+        return None
+
+    sel_clean = re.sub(r"\([^)]*\)", "", sel).strip()
+    sel_l = sel_clean.lower()
+    sp = str(bet.get("sport", "") or "").strip().upper()
+
+    matched_game = None
+    picked_side = None
+    for g in final_games:
+        if not g.get("completed"):
+            continue
+        h_name = str(g.get("home_team", "")).lower()
+        a_name = str(g.get("away_team", "")).lower()
+        h_short = str(g.get("home_short", "")).lower()
+        a_short = str(g.get("away_short", "")).lower()
+        h_hit = (h_name and h_name in sel_l) or (len(h_short) >= 3 and h_short in sel_l)
+        a_hit = (a_name and a_name in sel_l) or (len(a_short) >= 3 and a_short in sel_l)
+        if h_hit or a_hit:
+            matched_game = g
+            if h_hit and not a_hit:
+                picked_side = "home"
+            elif a_hit and not h_hit:
+                picked_side = "away"
+            break
+
+    if not matched_game:
+        return None
+
+    h_team = matched_game["home_team"]
+    a_team = matched_game["away_team"]
+    h_sc = int(matched_game["home_score"])
+    a_sc = int(matched_game["away_score"])
+    tot = h_sc + a_sc
+    score_str = f"{a_team} {a_sc} - {h_team} {h_sc}"
+
+    # 1. Total (Over / Under)
+    m_ou = re.search(r"\b(over|under)\s+(\d+(?:\.\d+)?)\b", sel_clean, flags=re.I)
+    if m_ou:
+        side = m_ou.group(1).lower()
+        line = float(m_ou.group(2))
+        if abs(tot - line) < 1e-9:
+            res = "Push"
+        elif (side == "over" and tot > line) or (side == "under" and tot < line):
+            res = "Won"
+        else:
+            res = "Lost"
+        tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Totals Blowout / Late Garbage Time" if res == "Lost" else "")
+        return {
+            "row_index": bet["row_index"],
+            "bet_id": bet["bet_id"],
+            "result": res,
+            "edge_tag": tag,
+            "verification_note": f"{score_str} (Total {tot} vs {side.title()} {line}).",
+        }
+
+    if not picked_side:
+        return None
+
+    my_sc = h_sc if picked_side == "home" else a_sc
+    opp_sc = a_sc if picked_side == "home" else h_sc
+    my_team = h_team if picked_side == "home" else a_team
+
+    # 2. Moneyline / PK
+    if re.search(r"\b(?:ml|moneyline|to\s+win)\b", sel_clean, flags=re.I):
+        is_soccer = sp in ("EPL", "UCL", "SOCCER", "PREMIER LEAGUE") or matched_game.get("league") in ("EPL", "UCL")
+        if my_sc > opp_sc:
+            res = "Won"
+        elif my_sc == opp_sc and not is_soccer:
+            res = "Push"
+        else:
+            res = "Lost"
+        tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Hook / Half-Point Variance" if res == "Lost" else "")
+        return {
+            "row_index": bet["row_index"],
+            "bet_id": bet["bet_id"],
+            "result": res,
+            "edge_tag": tag,
+            "verification_note": f"{score_str} ({my_team} ML).",
+        }
+
+    # 3. Point Spread (e.g. -5.5, +3.5, -6, PK)
+    m_sp = re.search(r"(?:^|\s)([+-]\d+(?:\.\d+)?)(?:\s|$)", sel_clean)
+    if m_sp or re.search(r"\bpk\b", sel_clean, flags=re.I):
+        spread = float(m_sp.group(1)) if m_sp else 0.0
+        adj = my_sc + spread
+        if abs(adj - opp_sc) < 1e-9:
+            res = "Push"
+        elif adj > opp_sc:
+            res = "Won"
+        else:
+            res = "Lost"
+        tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Hook / Half-Point Variance" if res == "Lost" else "")
+        return {
+            "row_index": bet["row_index"],
+            "bet_id": bet["bet_id"],
+            "result": res,
+            "edge_tag": tag,
+            "verification_note": f"{score_str} ({my_team} {spread:+g}: {adj:g} vs {opp_sc}).",
+        }
+
+    return None
 
 # --- 3. GRADE & AUTO-TAG PENDING TICKETS WITH GEMINI ---
 def grade_pending_bets(pending_bets, final_games):
@@ -278,16 +417,32 @@ Respond ONLY with valid JSON matching this exact schema:
             print(f"Attempt {attempt} ({model_name}) failed: {e}. Trying next model...", flush=True)
             time.sleep(2)
 
-    if response is None:
-        print("All model attempts experienced 503 overload. Skipping settlement until next run.", flush=True)
-        return []
+    gemini_settlements = []
+    if response is not None:
+        try:
+            gemini_settlements = json.loads(response.text).get("settlements", [])
+        except Exception as e:
+            print(f"Error parsing Gemini settlement response: {e}", flush=True)
+            print("Raw model response:", response.text, flush=True)
+    else:
+        print("All model attempts experienced overload; using deterministic straight-bet fallback.", flush=True)
 
-    try:
-        return json.loads(response.text).get("settlements", [])
-    except Exception as e:
-        print(f"Error parsing Gemini settlement response: {e}", flush=True)
-        print("Raw model response:", response.text, flush=True)
-        return []
+    graded_map = {}
+    for s in gemini_settlements:
+        bid = str(s.get("bet_id", "")).strip()
+        res_v = str(s.get("result", "")).strip()
+        if bid and res_v in ("Won", "Lost", "Push"):
+            graded_map[bid] = s
+
+    for bet in pending_bets:
+        bid = str(bet.get("bet_id", "")).strip()
+        if bid in graded_map:
+            continue
+        det = _grade_straight_bet_deterministic(bet, final_games)
+        if det:
+            graded_map[bid] = det
+
+    return list(graded_map.values())
 
 # --- 4. BANKROLL & REMAINING BET WAGER RECALCULATION ---
 def _parse_num(val):
@@ -573,7 +728,7 @@ def recalculate_remaining_curated_bets(workbook, all_values=None):
     feed_updated = False
     if updated_text != raw_text:
         try:
-            feed_ws.update_acell(f"L{target_row_idx}", updated_text[:4500])
+            feed_ws.update_acell(f"L{target_row_idx}", updated_text[:25000])
             feed_updated = True
             print(
                 f"Updated Curator Feed (Row {target_row_idx}) remaining bet wagers for ${settled_br:.2f} bankroll (was ${feed_br:.2f}).",

@@ -1883,7 +1883,7 @@ function fetchCompletedEspnGames_(pendingBets) {
     const info = neededSports[league];
     for (let d = 0; d < dateKeys.length; d++) {
       let url = "https://site.api.espn.com/apis/site/v2/sports/" + info.path + "/scoreboard?dates=" + dateKeys[d];
-      if (info.groups) url += "&groups=" + info.groups;
+      if (info.groups) url += "&groups=" + info.groups + "&limit=500";
       try {
         const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
         if (resp.getResponseCode() !== 200) continue;
@@ -1920,8 +1920,10 @@ function fetchCompletedEspnGames_(pendingBets) {
             date: dateKeys[d],
             matchup: (aTeam.displayName || "") + " @ " + (hTeam.displayName || ""),
             away_team: aTeam.displayName || "",
+            away_short: String(aTeam.shortDisplayName || "").toLowerCase(),
             away_score: aScore,
             home_team: hTeam.displayName || "",
+            home_short: String(hTeam.shortDisplayName || "").toLowerCase(),
             home_score: hScore,
             total_points: hScore + aScore,
             completed: true,
@@ -1976,51 +1978,160 @@ function fetchEspnBoxscorePlayers_(path, eventId, league) {
   return out;
 }
 
+function gradeStraightBetDeterministic_(bet, completedGames) {
+  const bType = String(bet.bet_type || "").toLowerCase();
+  if (bType.indexOf("parlay") !== -1 || bType.indexOf("sgp") !== -1) return null;
+  const sel = String(bet.selections || "").trim();
+  if (!sel || sel.indexOf(" + ") !== -1) return null;
+  if (/\b(?:1h|1st\s*half|first\s*half|points|rebounds|assists|shots|sog|goals|pra|yards|touchdown)\b/i.test(sel)) return null;
+
+  const selClean = sel.replace(/\([^)]*\)/g, "").trim();
+  const selL = selClean.toLowerCase();
+  const sp = String(bet.sport || "").toUpperCase();
+
+  let matched = null;
+  let side = null;
+  for (let i = 0; i < completedGames.length; i++) {
+    const g = completedGames[i];
+    if (!g.completed) continue;
+    const hName = String(g.home_team || "").toLowerCase();
+    const aName = String(g.away_team || "").toLowerCase();
+    const hShort = String(g.home_short || "").toLowerCase();
+    const aShort = String(g.away_short || "").toLowerCase();
+    const hHit = (hName && selL.indexOf(hName) !== -1) || (hShort.length >= 3 && selL.indexOf(hShort) !== -1);
+    const aHit = (aName && selL.indexOf(aName) !== -1) || (aShort.length >= 3 && selL.indexOf(aShort) !== -1);
+    if (hHit || aHit) {
+      matched = g;
+      if (hHit && !aHit) side = "home";
+      else if (aHit && !hHit) side = "away";
+      break;
+    }
+  }
+  if (!matched) return null;
+
+  const hSc = Number(matched.home_score || 0);
+  const aSc = Number(matched.away_score || 0);
+  const tot = hSc + aSc;
+  const scoreStr = matched.away_team + " " + aSc + " - " + matched.home_team + " " + hSc;
+
+  const mOu = selClean.match(/\b(over|under)\s+(\d+(?:\.\d+)?)\b/i);
+  if (mOu) {
+    const dir = mOu[1].toLowerCase();
+    const line = parseFloat(mOu[2]);
+    let res = "Lost";
+    if (Math.abs(tot - line) < 1e-9) res = "Push";
+    else if ((dir === "over" && tot > line) || (dir === "under" && tot < line)) res = "Won";
+    return {
+      row_index: bet.row_index,
+      bet_id: bet.bet_id,
+      result: res,
+      edge_tag: res === "Won" ? "WIN: Disciplined Straight / Floor Play" : (res === "Lost" ? "FAIL: Totals Blowout / Late Garbage Time" : ""),
+      verification_note: scoreStr + " (Total " + tot + " vs " + dir + " " + line + ").",
+    };
+  }
+
+  if (!side) return null;
+  const mySc = side === "home" ? hSc : aSc;
+  const oppSc = side === "home" ? aSc : hSc;
+  const myTeam = side === "home" ? matched.home_team : matched.away_team;
+
+  if (/\b(?:ml|moneyline|to\s+win)\b/i.test(selClean)) {
+    const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || matched.league === "EPL" || matched.league === "UCL");
+    let res = "Lost";
+    if (mySc > oppSc) res = "Won";
+    else if (mySc === oppSc && !isSoccer) res = "Push";
+    return {
+      row_index: bet.row_index,
+      bet_id: bet.bet_id,
+      result: res,
+      edge_tag: res === "Won" ? "WIN: Disciplined Straight / Floor Play" : (res === "Lost" ? "FAIL: Hook / Half-Point Variance" : ""),
+      verification_note: scoreStr + " (" + myTeam + " ML).",
+    };
+  }
+
+  const mSp = selClean.match(/(?:^|\s)([+-]\d+(?:\.\d+)?)(?:\s|$)/);
+  if (mSp || /\bpk\b/i.test(selClean)) {
+    const spread = mSp ? parseFloat(mSp[1]) : 0.0;
+    const adj = mySc + spread;
+    let res = "Lost";
+    if (Math.abs(adj - oppSc) < 1e-9) res = "Push";
+    else if (adj > oppSc) res = "Won";
+    return {
+      row_index: bet.row_index,
+      bet_id: bet.bet_id,
+      result: res,
+      edge_tag: res === "Won" ? "WIN: Disciplined Straight / Floor Play" : (res === "Lost" ? "FAIL: Hook / Half-Point Variance" : ""),
+      verification_note: scoreStr + " (" + myTeam + " " + (spread >= 0 ? "+" : "") + spread + ": " + adj + " vs " + oppSc + ").",
+    };
+  }
+  return null;
+}
+
 function gradePendingBetsWithGemini_(pendingBets, completedGames) {
   const apiKey = getProp_("GEMINI_API_KEY");
-  if (!apiKey) return [];
+  let geminiList = [];
 
-  const prompt = [
-    "You are a deterministic sportsbook settlement auditor.",
-    "Verify each pending bet against the official completed ESPN scoreboard results below.",
-    "GRADING RULES:",
-    "1. Parlay/SGP is Won ONLY if every leg is completed and won; Lost if ANY leg completed and lost; else Pending.",
-    "2. Keep status Pending if a game is not present in the completed ESPN data.",
-    "3. Totals (Over/Under): compare total_points vs line; exact tie on whole number = Push.",
-    "4. Moneylines (ML / TO WIN): selected team score > opponent score. For Soccer/EPL/UCL 3-way ML, a draw is Lost.",
-    "5. Point spreads (e.g. -7.5, +4.5, -7.0): (selected_team_score + spread) vs opponent_score; > = Won, < = Lost, == = Push.",
-    "6. Player props: check player_boxscore stats strictly against the line.",
-    "7. Pick best matching WIN:/FAIL: tag from ALLOWED_EDGE_TAGS (or \"\" for Pending/Push).",
-    "",
-    "ALLOWED_EDGE_TAGS: " + JSON.stringify(ALLOWED_SETTLER_TAGS_),
-    "PENDING BETS: " + JSON.stringify(pendingBets),
-    "COMPLETED ESPN GAMES: " + JSON.stringify(completedGames),
-    "",
-    "Respond ONLY with JSON: {\"settlements\": [{\"row_index\": 17, \"bet_id\": \"BET-052\", \"result\": \"Won|Lost|Push|Pending\", \"edge_tag\": \"...\", \"verification_note\": \"Short score proof\"}]}",
-  ].join("\n");
+  if (apiKey) {
+    const prompt = [
+      "You are a deterministic sportsbook settlement auditor.",
+      "Verify each pending bet against the official completed ESPN scoreboard results below.",
+      "GRADING RULES:",
+      "1. Parlay/SGP is Won ONLY if every leg is completed and won; Lost if ANY leg completed and lost; else Pending.",
+      "2. Keep status Pending if a game is not present in the completed ESPN data.",
+      "3. Totals (Over/Under): compare total_points vs line; exact tie on whole number = Push.",
+      "4. Moneylines (ML / TO WIN): selected team score > opponent score. For Soccer/EPL/UCL 3-way ML, a draw is Lost.",
+      "5. Point spreads (e.g. -7.5, +4.5, -7.0): (selected_team_score + spread) vs opponent_score; > = Won, < = Lost, == = Push.",
+      "6. Player props: check player_boxscore stats strictly against the line.",
+      "7. Pick best matching WIN:/FAIL: tag from ALLOWED_EDGE_TAGS (or \"\" for Pending/Push).",
+      "",
+      "ALLOWED_EDGE_TAGS: " + JSON.stringify(ALLOWED_SETTLER_TAGS_),
+      "PENDING BETS: " + JSON.stringify(pendingBets),
+      "COMPLETED ESPN GAMES: " + JSON.stringify(completedGames),
+      "",
+      "Respond ONLY with JSON: {\"settlements\": [{\"row_index\": 17, \"bet_id\": \"BET-052\", \"result\": \"Won|Lost|Push|Pending\", \"edge_tag\": \"...\", \"verification_note\": \"Short score proof\"}]}",
+    ].join("\n");
 
-  for (let i = 0; i < GEMINI_MODELS.length; i++) {
-    const model = GEMINI_MODELS[i];
-    try {
-      const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(apiKey);
-      const resp = UrlFetchApp.fetch(url, {
-        method: "post",
-        contentType: "application/json",
-        muteHttpExceptions: true,
-        payload: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.0 },
-        }),
-      });
-      if (resp.getResponseCode() !== 200) continue;
-      const json = JSON.parse(resp.getContentText());
-      const outText = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text;
-      if (outText) {
-        return JSON.parse(outText).settlements || [];
-      }
-    } catch (e) {}
+    for (let i = 0; i < GEMINI_MODELS.length; i++) {
+      const model = GEMINI_MODELS[i];
+      try {
+        const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + encodeURIComponent(apiKey);
+        const resp = UrlFetchApp.fetch(url, {
+          method: "post",
+          contentType: "application/json",
+          muteHttpExceptions: true,
+          payload: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json", temperature: 0.0 },
+          }),
+        });
+        if (resp.getResponseCode() !== 200) continue;
+        const json = JSON.parse(resp.getContentText());
+        const outText = json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text;
+        if (outText) {
+          geminiList = JSON.parse(outText).settlements || [];
+          break;
+        }
+      } catch (e) {}
+    }
   }
-  return [];
+
+  const gradedById = {};
+  for (let i = 0; i < geminiList.length; i++) {
+    const s = geminiList[i];
+    const bid = String(s.bet_id || "").trim();
+    const res = String(s.result || "").trim();
+    if (bid && (res === "Won" || res === "Lost" || res === "Push")) {
+      gradedById[bid] = s;
+    }
+  }
+  for (let i = 0; i < pendingBets.length; i++) {
+    const b = pendingBets[i];
+    const bid = String(b.bet_id || "").trim();
+    if (gradedById[bid]) continue;
+    const det = gradeStraightBetDeterministic_(b, completedGames);
+    if (det) gradedById[bid] = det;
+  }
+  return Object.keys(gradedById).map(k => gradedById[k]);
 }
 
 function triggerGithubRefresh_(stage) {
