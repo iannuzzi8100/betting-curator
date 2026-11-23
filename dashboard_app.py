@@ -112,7 +112,7 @@ def get_workbook():
     return sh, creds
 
 
-def _read_intel_quant_lines(creds):
+def _read_intel_quant_lines(creds, today_str=None):
     try:
         docs_service = build("docs", "v1", credentials=creds)
         doc = docs_service.documents().get(documentId=INTEL_DOC_ID).execute()
@@ -121,6 +121,11 @@ def _read_intel_quant_lines(creds):
             for pe in el.get("paragraph", {}).get("elements", []):
                 chunks.append(pe.get("textRun", {}).get("content", ""))
         full_txt = "".join(chunks)
+        if today_str and f"## {today_str} Slate Intel" in full_txt:
+            start_pos = full_txt.index(f"## {today_str} Slate Intel")
+            rest = full_txt[start_pos:]
+            next_sec = re.search(r"\n## \d{4}-\d{2}-\d{2} Slate Intel", rest[1:])
+            full_txt = rest[: next_sec.start() + 1] if next_sec else rest
         return [ln.strip() for ln in full_txt.splitlines() if "QUANT]" in ln or "PROP STEAM]" in ln]
     except Exception:
         return []
@@ -321,7 +326,7 @@ def fetch_dashboard_data():
         latest_curated_text = fallback_text
         latest_curated_date = fallback_date
 
-    intel_quant_lines = _read_intel_quant_lines(creds)
+    intel_quant_lines = _read_intel_quant_lines(creds, today_str=latest_curated_date or today_str)
 
     curated_plays = []
     if latest_curated_text:
