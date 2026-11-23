@@ -279,9 +279,10 @@ Recent Bets:
    - ONLY cite odds, records, L5 form, FPI/BPI numbers, and Confidence Meter scores that appear **verbatim** in Section 3 above.
 9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
 
-### STRICT TELEGRAM FORMATTING RULES (CLEAN, COMPACT & SCANNABLE):
-- Output ONLY the compact template below. NO extra paragraphs, NO UTC timestamps.
-- Every play MUST show its **`[Confidence: XX% | ████████░░ | Tier Badge]`** line!
+### STRICT FORMATTING RULES (STREAMLINED HEADLINE + EXPANDABLE DRAWER DATA):
+- Output ONLY the template below. NO extra paragraphs, NO UTC timestamps.
+- On each numbered headline (`1.`, `2.`, etc.), show ONLY: **Time • Game (League) — Bet (Odds) — Wager — Confidence %**.
+- Underneath each numbered headline, include the two structured drawer lines (`- Game & Line:` and `- Confidence Math:`) so the web app can display them ONLY when the user clicks on the bet!
 
 🎯 *{today_str} {slate_header_tag}*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
@@ -289,14 +290,14 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 *Pending ($XX.XX):*
 • *None* (or list active pending BET-XXX rows if any)
 
-*Today's Confidence-Meter Time-Slot Plays:*
-1. *[Window Time EST — League] Selection (Odds)* — *$XX.XX (XX% BR)*
-   - Confidence: `[XX% | ████████░░ | 🔥 TIER 1: MAX HAMMER]`
-   - Edge: [1 short line citing the exact pillars from Section 3]
-2. *[Window Time EST — League] Selection (Odds)* — *XX% of Resulting BR (Est. $XX.XX)*
-   - Confidence: `[XX% | ████████░░ | 💎 TIER 2: STRONG CONVICTION]`
-   - Edge: [1 short line citing the exact pillars from Section 3]
-(Continue in chronological order for every remaining time-slot window today; if a window has 2 qualifying dual plays, list both; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
+*Today's Curated Plays:*
+1. *[Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[$XX.XX (XX% BR)]* — *[XX% 🔥/💎/✅]*
+   - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
+   - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
+2. *[Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[XX% of Resulting BR (Est. $XX.XX)]* — *[XX% 🔥/💎/✅]*
+   - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
+   - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
+(Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
 """
     candidate_models = [
         "gemini-3.6-flash",
@@ -574,7 +575,13 @@ def main():
         today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=ledger_meta
     )
     append_to_curator_feed(gc, today_str, curated_message)
-    send_telegram_alert(curated_message)
+    # Strip expandable drawer sub-bullets from Telegram alert so Telegram shows ONLY Time, Game, Bet, Wager, Confidence
+    tg_streamlined_lines = [
+        ln
+        for ln in curated_message.splitlines()
+        if not re.match(r"^\s*[-•]\s*(Game & Line|Confidence Math|Confidence|Edge):", ln, flags=re.I)
+    ]
+    send_telegram_alert("\n".join(tg_streamlined_lines))
 
 
 if __name__ == "__main__":

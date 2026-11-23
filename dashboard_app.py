@@ -7,10 +7,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 load_dotenv()
 
 GCP_SA_KEY = os.environ.get("GCP_SA_KEY") or os.environ.get("GCP_SERVICE_ACCOUNT_JSON") or ""
+INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID") or "1vTMvUyr_DABrrzVBU7ah1A8RYn9-sfO1Uu-0Syk2jnU"
 SHEET_ID = (
     os.environ.get("SHEET_ID")
     or os.environ.get("MASTER_SHEET_ID")
@@ -86,6 +88,7 @@ def get_workbook():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/documents.readonly",
     ]
     if GCP_SA_KEY:
         creds = Credentials.from_service_account_info(json.loads(GCP_SA_KEY), scopes=scopes)
@@ -93,9 +96,24 @@ def get_workbook():
         creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
     gc = gspread.authorize(creds)
     try:
-        return gc.open(SHEET_NAME)
+        sh = gc.open(SHEET_NAME)
     except Exception:
-        return gc.open_by_key(SHEET_ID)
+        sh = gc.open_by_key(SHEET_ID)
+    return sh, creds
+
+
+def _read_intel_quant_lines(creds):
+    try:
+        docs_service = build("docs", "v1", credentials=creds)
+        doc = docs_service.documents().get(documentId=INTEL_DOC_ID).execute()
+        chunks = []
+        for el in doc.get("body", {}).get("content", []):
+            for pe in el.get("paragraph", {}).get("elements", []):
+                chunks.append(pe.get("textRun", {}).get("content", ""))
+        full_txt = "".join(chunks)
+        return [ln.strip() for ln in full_txt.splitlines() if "QUANT]" in ln or "PROP STEAM]" in ln]
+    except Exception:
+        return []
 
 
 def fetch_dashboard_data():
@@ -105,7 +123,7 @@ def fetch_dashboard_data():
     yesterday_str = (now_est - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     week_start_str = (now_est - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
 
-    sh = get_workbook()
+    sh, creds = get_workbook()
     tracker_ws = sh.worksheets()[0]
     feed_ws = sh.worksheet("Curator Feed")
 
@@ -293,6 +311,8 @@ def fetch_dashboard_data():
         latest_curated_text = fallback_text
         latest_curated_date = fallback_date
 
+    intel_quant_lines = _read_intel_quant_lines(creds)
+
     curated_plays = []
     if latest_curated_text:
         lines = latest_curated_text.splitlines()
@@ -314,7 +334,17 @@ def fetch_dashboard_data():
                 }
             elif cur_play and (s.startswith("- ") or s.startswith("• ")):
                 raw_bullet = re.sub(r"^[-•]\s*", "", s).replace("*", "").replace("`", "").strip()
-                if raw_bullet.lower().startswith("confidence:"):
+                low_b = raw_bullet.lower()
+                if low_b.startswith("confidence math:"):
+                    cm_body = re.sub(r"^confidence math:\s*", "", raw_bullet, flags=re.I).strip()
+                    cur_play["confidence_math"] = cm_body
+                    pm = re.search(r"=\s*(\d{2,3})\s*%", cm_body) or re.search(r"(\d{2,3})\s*%", cm_body)
+                    if pm and cur_play["confidence_pct"] is None:
+                        cur_play["confidence_pct"] = int(pm.group(1))
+                elif low_b.startswith("game & line:") or low_b.startswith("game and line:"):
+                    gl_body = re.sub(r"^game\s*(?:&|and)\s*line:\s*", "", raw_bullet, flags=re.I).strip()
+                    cur_play["game_line"] = gl_body
+                elif low_b.startswith("confidence:"):
                     conf_body = re.sub(r"^confidence:\s*", "", raw_bullet, flags=re.I).strip(" []")
                     pm = re.search(r"(\d{2,3})\s*%", conf_body)
                     if pm:
@@ -327,6 +357,8 @@ def fetch_dashboard_data():
                 else:
                     edge_txt = re.sub(r"^Edge:\s*", "", raw_bullet, flags=re.I).strip()
                     cur_play["edge"] = (cur_play["edge"] + " " + edge_txt).strip()
+                    if not cur_play["confidence_math"]:
+                        cur_play["confidence_math"] = cur_play["edge"]
         if cur_play:
             curated_plays.append(cur_play)
 
@@ -2012,14 +2044,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           if (cp !== null && cp !== undefined) {
             const barColor = cp >= 88 ? "#10b981" : (cp >= 78 ? "#3b82f6" : (cp >= 68 ? "#f59e0b" : "#ef4444"));
             pillCls = cp >= 88 ? "pill-green" : (cp >= 78 ? "pill-blue" : (cp >= 68 ? "pill-amber" : "pill-red"));
-            pillTxt = `${cp}% CONFIDENCE`;
+            pillTxt = `${cp}%`;
             meterHtml = `
               <div style="margin-top:8px;">
                 <div style="display:flex;justify-content:space-between;font-size:0.77rem;font-weight:700;color:${barColor};margin-bottom:4px;">
                   <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
                   <span>${cp}%</span>
                 </div>
-                <div style="width:100%;height:7px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
+                <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
                   <div style="width:${Math.min(100, Math.max(0, cp))}%;height:100%;background:${barColor};border-radius:999px;"></div>
                 </div>
               </div>
@@ -2060,7 +2092,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
           }
           return `
-          <div class="bet-item">
+          <div class="bet-item" style="cursor:pointer;transition:background 0.15s;" onclick="toggleCuratedDetail(${idx})">
             <div class="bet-top">
               <div class="bet-title">${idx + 1}. ${esc(p.title)}</div>
               <span class="pill ${pillCls}">${esc(pillTxt)}</span>
