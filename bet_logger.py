@@ -131,8 +131,8 @@ RECENT BETS ON SPREADSHEET:
 {json.dumps(recent_rows or [], indent=2)}
 
 RULES:
-1. For "sport": use one of ["NBA", "NHL", "NCAAM", "CFB", "NFL", "EPL", "UCL", "ATP", "WTA", "MLB", "Multi-Sport"].
-   - Note: Rice @ Temple, MACtion, FBS games = "CFB". College basketball = "NCAAM".
+1. For "sport": use one of ["NBA", "NHL", "NCAAM", "CFB", "NFL", "EPL", "UCL", "LALIGA", "ATP", "WTA", "MLB", "Multi-Sport"].
+   - Note: Rice @ Temple, MACtion, FBS games = "CFB". College basketball = "NCAAM". Champions League = "UCL". Spanish La Liga = "LALIGA".
 2. For "bet_type": use one of ["Straight", "SGP", "Parlay"].
 3. For "selections": format cleanly as "<Pick> (<Matchup> • <Game Time EST>)" if the game time is visible on the ticket (e.g. "Josh Giddey Over 7.5 Rebounds (Wizards @ Bulls • 8:00 PM EST)" or "Canisius ML (Mercyhurst @ Canisius • 5:30 PM EST)"), otherwise "<Pick> (<Matchup>)".
 4. If the user says they cashed out a pending bet for a full refund (or wants to remove/replace a pending bet), list that pending bet's exact "bet_id" and "row_index" in "removals_or_cashouts" with "is_full_refund": true.
@@ -233,8 +233,13 @@ def download_telegram_photo(file_id):
 
 def _normalize_sport(sport):
     s = str(sport or "").strip()
-    if s.upper() in ("CBB", "NCAAB", "NCAAM", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+    u = s.upper()
+    if u in ("CBB", "NCAAB", "NCAAM", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
         return "NCAAM"
+    if u in ("LALIGA", "LA LIGA", "LA_LIGA", "SPANISH LA LIGA", "ESP.1"):
+        return "LALIGA"
+    if u in ("UCL", "CHAMPIONS LEAGUE", "UEFA CHAMPIONS LEAGUE"):
+        return "UCL"
     return s
 
 

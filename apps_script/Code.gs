@@ -1243,7 +1243,7 @@ function parseWithGemini_(textMsg, imageBase64, mimeType, pendingRows, recentRow
     JSON.stringify(recentRows || [], null, 2),
     "",
     "RULES:",
-    "1. For \"sport\": use one of [\"NBA\", \"NHL\", \"NCAAM\", \"CFB\", \"NFL\", \"EPL\", \"UCL\", \"ATP\", \"WTA\", \"MLB\", \"Multi-Sport\"].",
+    "1. For \"sport\": use one of [\"NBA\", \"NHL\", \"NCAAM\", \"CFB\", \"NFL\", \"EPL\", \"UCL\", \"LALIGA\", \"ATP\", \"WTA\", \"MLB\", \"Multi-Sport\"].",
     "2. For \"bet_type\": use one of [\"Straight\", \"SGP\", \"Parlay\"].",
     "3. For \"selections\": format cleanly as \"<Pick> (<Matchup> • <Game Time EST>)\" if game time is visible, otherwise \"<Pick> (<Matchup>)\".",
     "4. Full-refund cashout / void -> entry in \"removals_or_cashouts\" with \"is_full_refund\": true.",
@@ -1409,7 +1409,7 @@ function reverseSheetToNewestFirst() {
     const maxDataRows = Math.max(outRows.length, ws.getMaxRows() - firstDataRow + 1);
     ws.getRange(firstDataRow, 1, maxDataRows, 16).clearDataValidations();
     const sportRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(["CFB", "NFL", "NBA", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "ATP", "WTA", "Multi-Sport", "Other"], true)
+      .requireValueInList(["CFB", "NFL", "NBA", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "LALIGA", "ATP", "WTA", "Multi-Sport", "Other"], true)
       .setAllowInvalid(true)
       .build();
     ws.getRange(firstDataRow, 3, maxDataRows, 1).setDataValidation(sportRule);
@@ -1553,6 +1553,8 @@ const ESPN_LEAGUE_ENDPOINTS_ = {
   EPL: { path: "soccer/eng.1", groups: null },
   SOCCER: { path: "soccer/eng.1", groups: null },
   UCL: { path: "soccer/uefa.champions", groups: null },
+  LALIGA: { path: "soccer/esp.1", groups: null },
+  "LA LIGA": { path: "soccer/esp.1", groups: null },
 };
 
 const ALLOWED_SETTLER_TAGS_ = [
@@ -1653,9 +1655,9 @@ function estimateFinishDate_(bet) {
 
   let hour = parseInt(m[1], 10);
   const minute = parseInt(m[2], 10);
-  const sp = String(bet.sport || "").toUpperCase();
+  const sp = normalizeSport_(bet.sport || "").toUpperCase();
   if (!ampm) {
-    if ((sp === "EPL" || sp === "UCL" || sp === "SOCCER") && hour >= 7 && hour <= 11) {
+    if ((sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER") && hour >= 7 && hour <= 11) {
       ampm = "AM";
     } else {
       ampm = "PM";
@@ -1677,7 +1679,7 @@ function estimateFinishDate_(bet) {
   if (isNaN(startDate.getTime())) return null;
 
   let durationMin = 195; // default 3h 15m
-  if (sp === "EPL" || sp === "UCL" || sp === "SOCCER") durationMin = 135; // 2h 15m
+  if (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER") durationMin = 135; // 2h 15m
   else if (sp === "NBA" || sp === "NHL" || sp === "NCAAM" || sp === "CBB" || sp === "ATP" || sp === "WTA") durationMin = 165; // 2h 45m
   else if (sp === "CFB" || sp === "NCAAF" || sp === "NFL" || sp === "MLB") durationMin = 225; // 3h 45m
 
@@ -1869,7 +1871,7 @@ function fetchCompletedEspnGames_(pendingBets) {
     if (ESPN_LEAGUE_ENDPOINTS_[sp]) {
       neededSports[sp] = ESPN_LEAGUE_ENDPOINTS_[sp];
     } else if (sp === "MULTI-SPORT" || !sp) {
-      ["CFB", "NFL", "NBA", "NHL", "NCAAM", "EPL"].forEach(k => { neededSports[k] = ESPN_LEAGUE_ENDPOINTS_[k]; });
+      ["CFB", "NFL", "NBA", "NHL", "NCAAM", "EPL", "UCL", "LALIGA"].forEach(k => { neededSports[k] = ESPN_LEAGUE_ENDPOINTS_[k]; });
     }
     const cleanD = String(pendingBets[i].date || "").replace(/-/g, "");
     if (/^\d{8}$/.test(cleanD)) {
@@ -2069,7 +2071,7 @@ function gradeStraightBetDeterministic_(bet, completedGames) {
   const myTeam = side === "home" ? matched.home_team : matched.away_team;
 
   if (/\b(?:ml|moneyline|to\s+win)\b/i.test(selClean)) {
-    const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || matched.league === "EPL" || matched.league === "UCL");
+    const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "LA LIGA" || sp === "SOCCER" || matched.league === "EPL" || matched.league === "UCL" || matched.league === "LALIGA");
     let res = "Lost";
     if (mySc > oppSc) res = "Won";
     else if (mySc === oppSc && !isSoccer) res = "Push";
@@ -2202,6 +2204,12 @@ function normalizeSport_(sport) {
   const u = s.toUpperCase();
   if (u === "CBB" || u === "NCAAB" || u === "NCAAM" || u === "MEN'S COLLEGE BASKETBALL" || u === "COLLEGE BASKETBALL") {
     return "NCAAM";
+  }
+  if (u === "LALIGA" || u === "LA LIGA" || u === "LA_LIGA" || u === "SPANISH LA LIGA" || u === "ESP.1") {
+    return "LALIGA";
+  }
+  if (u === "UCL" || u === "CHAMPIONS LEAGUE" || u === "UEFA CHAMPIONS LEAGUE") {
+    return "UCL";
   }
   return s;
 }

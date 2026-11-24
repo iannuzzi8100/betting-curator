@@ -38,8 +38,13 @@ def _parse_num(val):
 
 def _normalize_sport(sport):
     s = str(sport or "").strip()
-    if s.upper() in ("CBB", "NCAAB", "NCAAM", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+    u = s.upper()
+    if u in ("CBB", "NCAAB", "NCAAM", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
         return "NCAAM"
+    if u in ("LALIGA", "LA LIGA", "LA_LIGA", "SPANISH LA LIGA", "ESP.1"):
+        return "LALIGA"
+    if u in ("UCL", "CHAMPIONS LEAGUE", "UEFA CHAMPIONS LEAGUE"):
+        return "UCL"
     return s
 
 
@@ -437,7 +442,7 @@ def fetch_dashboard_data():
             words = [
                 w
                 for w in re.findall(r"[A-Za-z]{3,}", t_clean)
-                if w.upper() not in ("EST", "CFB", "NFL", "NBA", "NHL", "EPL", "CBB", "NCAAM", "NCAAB", "OVER", "UNDER", "RESULTING", "STRAIGHT", "WINDOW")
+                if w.upper() not in ("EST", "CFB", "NFL", "NBA", "NHL", "EPL", "UCL", "LALIGA", "CBB", "NCAAM", "NCAAB", "OVER", "UNDER", "RESULTING", "STRAIGHT", "WINDOW")
             ]
             for q_ln in intel_quant_lines:
                 if any(w.lower() in q_ln.lower() for w in words[:2]):
@@ -1230,6 +1235,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               <option value="NCAAM">NCAAM</option>
               <option value="EPL">EPL</option>
               <option value="UCL">UCL</option>
+              <option value="LALIGA">LALIGA</option>
               <option value="MLB">MLB</option>
               <option value="ATP">ATP</option>
               <option value="WTA">WTA</option>
@@ -1992,6 +1998,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (u === "CBB" || u === "NCAAB" || u === "NCAAM" || u === "MEN'S COLLEGE BASKETBALL" || u === "COLLEGE BASKETBALL") {
         return "NCAAM";
       }
+      if (u === "LALIGA" || u === "LA LIGA" || u === "LA_LIGA" || u === "SPANISH LA LIGA" || u === "ESP.1") {
+        return "LALIGA";
+      }
+      if (u === "UCL" || u === "CHAMPIONS LEAGUE" || u === "UEFA CHAMPIONS LEAGUE") {
+        return "UCL";
+      }
       return s;
     }
 
@@ -2612,7 +2624,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function getSportDurationMinutes(sport, selections) {
       const sp = normalizeSport(sport).toUpperCase();
       let mins = 165;
-      if (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE") mins = 120;
+      if (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER" || sp === "PREMIER LEAGUE") mins = 120;
       else if (sp === "NCAAM") mins = 130;
       else if (sp === "NBA") mins = 150;
       else if (sp === "NHL") mins = 160;
@@ -2667,7 +2679,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const detail = String(match.status?.type?.shortDetail || match.status?.type?.detail || "").toLowerCase();
 
         // Soccer counts UP to 90'+
-        if (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE") {
+        if (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER" || sp === "PREMIER LEAGUE") {
           if (detail.includes("ht") || detail.includes("half")) {
             return { rank: 1, estFinishMs: nowMs + (is1H ? 0 : 60) * 60000 };
           }
@@ -2797,7 +2809,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const cleanPick = pickPart
         .replace(/\(\s*\d{1,2}:\d{2}\s*[AP]M[^)]*\)/gi, " ")
         .replace(/\(\s*[+-]\d{3,4}\s*\)/g, " ")
-        .replace(/\(\s*(?:CBB|NCAAB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|MLB|SOCCER|ATP|WTA)\s*\)/gi, " ")
+        .replace(/\(\s*(?:CBB|NCAAB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|LALIGA|LA\s*LIGA|MLB|SOCCER|ATP|WTA)\s*\)/gi, " ")
         .replace(/\s+/g, " ")
         .trim();
 
@@ -2854,7 +2866,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
           // Live pace projection
           let elapsedFrac = 0;
-          if (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE") {
+          if (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER" || sp === "PREMIER LEAGUE") {
             const minM = detailLow.match(/(\d{1,3})/);
             const elapsedMin = minM ? parseInt(minM[1], 10) : Math.floor(clockSec / 60);
             elapsedFrac = Math.min(1, elapsedMin / (is1H ? 45 : 90));
@@ -2914,7 +2926,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (margin > 0) return { status: "win", note: `Ahead (+${margin})` };
         if (margin < 0) return { status: "loss", note: `Behind (${margin})` };
         if (state === "post") {
-          const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "SOCCER" || sp === "PREMIER LEAGUE");
+          const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER" || sp === "PREMIER LEAGUE");
           return isSoccer
             ? { status: "loss", note: "Tied (Final)" }
             : { status: "push", note: "Tied (Push)" };
@@ -3054,6 +3066,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       "SOCCER": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
       "PREMIER LEAGUE": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
       "UCL": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
+      "LALIGA": "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard",
+      "LA LIGA": "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard",
     };
 
     async function fetchEspnEventsMap(pendingTickets, curatedPlays) {
@@ -3244,7 +3258,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       // 2. Clean Sport
       let sport = String(play.sport || fb.sport || "").trim().toUpperCase();
-      const spParen = rawTitle.match(/\((CBB|NCAAB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|MLB|UFC|SOCCER|ATP|WTA)\)/i);
+      const spParen = rawTitle.match(/\((CBB|NCAAB|NCAAM|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|LALIGA|LA\s*LIGA|MLB|UFC|SOCCER|ATP|WTA)\)/i);
       if (spParen) sport = spParen[1].toUpperCase();
       sport = normalizeSport(sport.replace(/\s*\([^)]*\)/g, "").trim());
 
