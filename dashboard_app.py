@@ -726,7 +726,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Betting Curator • $100 to $1,000</title>
+  <meta name="apple-mobile-web-app-title" content="Lefty's Ledger" />
+  <title>Lefty's Ledger</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root {
@@ -1197,7 +1198,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <header>
       <div class="title-group">
         <h1>
-          Betting Curator Terminal
+          Lefty's Ledger
           <span class="pill pill-amber" id="sync-mode-pill">STATIC SNAPSHOT</span>
         </h1>
         <p id="updated-at">Loading live ledger...</p>
