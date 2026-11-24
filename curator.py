@@ -306,14 +306,17 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 (Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
 """
     candidate_models = [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
     ]
     try:
         live_models = [
@@ -332,6 +335,7 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
     except Exception as list_exc:
         print(f"Model listing warning: {list_exc}")
 
+    model_errors = []
     for model_id in candidate_models:
         try:
             response = client.models.generate_content(
@@ -341,12 +345,16 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
             if response and response.text:
                 txt = response.text.strip()
                 if available_bankroll >= 2.0 and ("Holding —" in txt or "1." not in txt):
-                    print(f"Model {model_id} returned a Holding stub despite ${available_bankroll:.2f} available; retrying next model...")
+                    msg = f"{model_id}: returned stub without numbered plays ({txt[:80]})"
+                    print(msg)
+                    model_errors.append(msg)
                     continue
                 return txt
         except Exception as exc:
-            print(f"Model {model_id} skipped: {exc}")
-    raise RuntimeError("All discovered Gemini models failed.")
+            err_s = f"{model_id}: {type(exc).__name__}: {str(exc)[:140]}"
+            print(f"Model {err_s}")
+            model_errors.append(err_s)
+    raise RuntimeError("All discovered Gemini models failed -> " + " | ".join(model_errors[:6]))
 
 
 def run_active_ticket_audit(today_str, summary_block, intel_text, ledger_meta):
@@ -615,4 +623,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        err_line = f"{type(exc).__name__}: {exc}".replace("\n", " ")[:900]
+        print(f"::error::curator.py failed: {err_line}", flush=True)
+        raise
