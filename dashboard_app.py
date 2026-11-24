@@ -544,7 +544,7 @@ def _extract_selection_core(text):
         s,
         flags=re.I,
     )[0]
-    return re.sub(r"[^a-z0-9\s]", "", core.lower()).strip()
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", core.lower())).strip()
 
 
 def _adjust_curated_plays_for_bankroll(
@@ -631,14 +631,17 @@ def _adjust_curated_plays_for_bankroll(
             p["status"] = "pass"
             continue
 
+        def _norm_t(txt):
+            return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", str(txt or "").lower())).strip()
+
         core = _extract_selection_core(p.get("selection") or title)
         match_pend = (
-            next((t for t in (pending_tickets or []) if core and len(core) >= 3 and core in str(t.get("selections", "")).lower()), None)
+            next((t for t in (pending_tickets or []) if core and len(core) >= 3 and core in _norm_t(t.get("selections", ""))), None)
             if core
             else None
         )
         match_settled = (
-            next((t for t in (today_tickets or []) if core and len(core) >= 3 and core in str(t.get("selections", "")).lower()), None)
+            next((t for t in (today_tickets or []) if core and len(core) >= 3 and core in _norm_t(t.get("selections", ""))), None)
             if (core and not match_pend)
             else None
         )
@@ -890,6 +893,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.05));
       border-color: rgba(245, 158, 11, 0.42);
       box-shadow: inset 3px 0 0 #f59e0b;
+    }
+    .bet-item.curated-placed {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(15, 23, 42, 0.62));
+      border-color: rgba(16, 185, 129, 0.45);
+      box-shadow: inset 3px 0 0 #10b981;
+      opacity: 0.72;
+    }
+    .bet-item.curated-placed:hover {
+      opacity: 0.95;
+    }
+    .bet-item.curated-settled {
+      background: rgba(15, 23, 42, 0.55);
+      border-color: rgba(148, 163, 184, 0.28);
+      box-shadow: inset 3px 0 0 #64748b;
+      opacity: 0.60;
+    }
+    .bet-item.curated-settled:hover {
+      opacity: 0.88;
     }
     .bet-top {
       display: flex;
@@ -2093,6 +2114,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       };
     }
 
+    function normalizeSelForMatch(text) {
+      return String(text || "")
+        .replace(/[øØ]/g, "o")
+        .replace(/[æÆ]/g, "ae")
+        .replace(/ß/g, "ss")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
     function extractSelectionCore(text) {
       let s = String(text || "").trim();
       s = s.replace(/^\d+\.\s*/, "").replace(/\*/g, "").trim();
@@ -2100,7 +2134,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const smStream = s.match(/^(?:(?:\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\([A-Za-z0-9/ ]{2,10}\)\s*[—–]\s*(.+)$/i);
       if (smStream) s = smStream[1].trim();
       const core = s.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)/i)[0];
-      return core.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+      return normalizeSelForMatch(core);
+    }
+
+    function findMatchingTicketForPlay(ticketList, play) {
+      if (!Array.isArray(ticketList) || ticketList.length === 0 || !play) return null;
+      const fb = parseTitleFallback(play.title);
+      const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
+      if (!core || core.length < 3) return null;
+      return ticketList.find(t => {
+        const normSel = normalizeSelForMatch(t && t.selections);
+        if (!normSel) return false;
+        if (normSel.includes(core)) return true;
+        const tCore = extractSelectionCore(t && t.selections);
+        return Boolean(tCore && tCore.length >= 3 && tCore === core);
+      }) || null;
     }
 
     function peakOverlapRiskMs(intervals, s, e) {
@@ -2173,13 +2221,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           return;
         }
         const fb = parseTitleFallback(title);
-        const core = extractSelectionCore(p.selection || fb.selection || title);
-        const matchPend = (core && core.length >= 3)
-          ? pendList.find(t => String(t.selections || "").toLowerCase().includes(core))
-          : null;
-        const matchSettled = (!matchPend && core && core.length >= 3)
-          ? todayList.find(t => String(t.selections || "").toLowerCase().includes(core))
-          : null;
+        const matchPend = findMatchingTicketForPlay(pendList, p);
+        const matchSettled = !matchPend ? findMatchingTicketForPlay(todayList, p) : null;
 
         if (matchPend) {
           p.status = "pending";
@@ -3609,17 +3652,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const todaySettledList = (data && data.today_stats && data.today_stats.tickets) || [];
 
       function findMatchingPending(play) {
-        const fb = parseTitleFallback(play.title);
-        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
-        if (!core || core.length < 3) return null;
-        return pendingList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+        return findMatchingTicketForPlay(pendingList, play);
       }
 
       function findMatchingSettledToday(play) {
-        const fb = parseTitleFallback(play.title);
-        const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
-        if (!core || core.length < 3) return null;
-        return todaySettledList.find(t => (t.selections || "").toLowerCase().includes(core)) || null;
+        return findMatchingTicketForPlay(todaySettledList, play);
       }
 
       return subsetPlays.map((p, i) => {
@@ -3796,15 +3833,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </div>
         `;
 
+        const statusCardCls = existingPend
+          ? " curated-placed"
+          : (existingSettled ? " curated-settled" : "");
+        const placedTopPill = existingPend
+          ? `<span class="pill pill-green" style="flex-shrink:0;">✓ PLACED</span>`
+          : "";
+
         return `
-        <div class="bet-item"${clickAttr}>
+        <div class="bet-item${statusCardCls}"${clickAttr}>
           <div class="bet-top" style="align-items:flex-start;">
             <div style="flex:1;min-width:0;">
               ${metaRow}
               ${matchupRow}
               ${betRow}
             </div>
-            <span class="pill ${pillCls}" style="flex-shrink:0;">${esc(pillTxt)}</span>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+              ${placedTopPill}
+              <span class="pill ${pillCls}">${esc(pillTxt)}</span>
+            </div>
           </div>
           ${meterHtml}
           ${drawerHtml}
@@ -3833,8 +3880,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       window.__startedCuratedPlays = startedPlays;
       window.__upcomingCuratedPlays = upcomingPlays;
 
+      const pendList = (data && data.pending_tickets) || [];
+      const placedUpcomingCount = upcomingPlays.filter(p => Boolean(findMatchingTicketForPlay(pendList, p))).length;
+      const openUpcomingCount = Math.max(0, upcomingPlays.length - placedUpcomingCount);
       const cntEl = document.getElementById("curated-count");
-      if (cntEl) cntEl.textContent = `${upcomingPlays.length} Upcoming`;
+      if (cntEl) {
+        cntEl.textContent = placedUpcomingCount > 0
+          ? `${openUpcomingCount} Open • ${placedUpcomingCount} Placed`
+          : `${upcomingPlays.length} Upcoming`;
+      }
       const hintEl = document.getElementById("curated-started-hint");
       if (hintEl) {
         hintEl.textContent = startedPlays.length > 0
