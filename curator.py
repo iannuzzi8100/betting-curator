@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import datetime
 import requests
 import gspread
@@ -306,18 +307,14 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 (Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
 """
     candidate_models = [
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
     ]
-    skip_kw = ("embedding", "image", "audio", "tts", "pro", "thinking", "deep-research", "robotics", "computer-use", "veo", "imagen", "learnlm")
+    skip_kw = ("embedding", "image", "audio", "tts", "pro", "thinking", "deep-research", "robotics", "computer-use", "veo", "imagen", "learnlm", "2.5", "2.0", "1.5")
     try:
         live_models = [
             m.name.replace("models/", "")
@@ -327,7 +324,6 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
             and "flash" in m.name.lower()
             and not any(k in m.name.lower() for k in skip_kw)
         ]
-        # Prefer verified live flash models first so we don't waste calls on non-existent names
         ordered = []
         for m in candidate_models:
             if m in live_models and m not in ordered:
@@ -336,30 +332,234 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
             if m not in ordered:
                 ordered.append(m)
         if ordered:
-            candidate_models = ordered[:10]
+            candidate_models = ordered[:8]
     except Exception as list_exc:
         print(f"Model listing warning: {list_exc}")
 
     model_errors = []
-    for model_id in candidate_models:
-        try:
-            response = client.models.generate_content(
-                model=model_id,
-                contents=prompt,
+    for round_idx in range(2):
+        if round_idx == 1:
+            print("Retrying Gemini models after brief 4s backoff for transient 503/504 spikes...", flush=True)
+            time.sleep(4)
+        for model_id in candidate_models:
+            try:
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=prompt,
+                )
+                if response and response.text:
+                    txt = response.text.strip()
+                    if available_bankroll >= 2.0 and ("Holding —" in txt or "1." not in txt):
+                        msg = f"{model_id}: returned stub without numbered plays ({txt[:80]})"
+                        print(msg)
+                        model_errors.append(msg)
+                        continue
+                    return txt
+            except Exception as exc:
+                err_s = f"{model_id}: {type(exc).__name__}: {str(exc)[:140]}"
+                print(f"Model {err_s}")
+                model_errors.append(err_s)
+
+    print(
+        f"::warning::All Gemini models unavailable ({' | '.join(model_errors[:4])}); falling back to deterministic Confidence Meter slate.",
+        flush=True,
+    )
+    return _build_deterministic_curated_slate(
+        today_str=today_str,
+        slate_header_tag=slate_header_tag,
+        intel_text=intel_text,
+        ledger_meta=ledger_meta,
+        est_now=est_now,
+        dow=dow,
+    )
+
+
+def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, ledger_meta, est_now, dow):
+    """
+    Deterministic fallback curator when Gemini API experiences 503/504 high-demand outages.
+    Parses the Python-computed [CONFIDENCE METER: XX% ...] quant lines from today's scraped Intel Doc
+    and formats them identically to Gemini's output so the dashboard and Telegram never miss a slate.
+    """
+    settled_br = float(ledger_meta.get("settled", 0.0) or 0.0)
+    pending_tot = float(ledger_meta.get("pending_total", 0.0) or 0.0)
+    avail_br = float(ledger_meta.get("available", 0.0) or 0.0)
+    pending_lines = ledger_meta.get("pending_lines") or []
+
+    allowed_leagues = None
+    if dow == 5 and ("SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SATURDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[CFB QUANT]" in intel_text):
+        allowed_leagues = {"CFB", "EPL", "UCL", "LALIGA"}
+    elif dow == 6 and ("SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SUNDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[NFL QUANT]" in intel_text):
+        allowed_leagues = {"NFL", "EPL", "UCL", "LALIGA"}
+
+    def _time_to_min(t_str):
+        m_t = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)", t_str or "", flags=re.I)
+        if not m_t:
+            return 24 * 60
+        hr = int(m_t.group(1))
+        mn = int(m_t.group(2))
+        ap = m_t.group(3).upper()
+        if ap == "PM" and hr != 12:
+            hr += 12
+        if ap == "AM" and hr == 12:
+            hr = 0
+        return hr * 60 + mn
+
+    now_min = est_now.hour * 60 + est_now.minute
+    candidates = []
+    seen_matchups = set()
+
+    for ln in (intel_text or "").splitlines():
+        if "[CONFIDENCE METER:" not in ln or "QUANT]" not in ln:
+            continue
+        if "DO NOT CHASE LATE" in ln:
+            continue
+        m_hdr = re.match(
+            r"^\s*-\s*\[([A-Z0-9]+)\s+QUANT\]\s*\[WINDOW\s*(\d+):[^\]]*\]\s*\(([^)]+)\)\s*(.+?)\s*->\s*(.+)$",
+            ln.strip(),
+        )
+        if not m_hdr:
+            continue
+        league = m_hdr.group(1).strip().upper()
+        if league in ("CBB", "NCAAB"):
+            league = "NCAAM"
+        if allowed_leagues and league not in allowed_leagues:
+            continue
+        win_num = int(m_hdr.group(2))
+        time_est = m_hdr.group(3).strip()
+        matchup_and_rec = m_hdr.group(4).strip()
+        rest_body = m_hdr.group(5).strip()
+
+        m_cm = re.search(
+            r"\[CONFIDENCE METER:\s*(\d{2,3})%\s*\|[^|]+\|\s*([^->]+?)\s*->\s*Top Play:\s*([^\]]+)\]",
+            rest_body,
+        )
+        if not m_cm:
+            continue
+        conf_pct = int(m_cm.group(1))
+        if conf_pct < 68:
+            continue
+        tier_txt = m_cm.group(2).strip()
+        top_play_full = m_cm.group(3).strip()
+
+        # Split Top Play into pick + reasons: "ARS ML (-135) (Base 50%, ...)"
+        pick_str = top_play_full
+        reasons_str = ""
+        m_pr = re.match(r"^(.+?\([+-]\d{3,4}\))\s*\((.+)\)$", top_play_full)
+        if m_pr:
+            pick_str = m_pr.group(1).strip()
+            reasons_str = m_pr.group(2).strip()
+        else:
+            m_pr2 = re.match(r"^([^(]+?)\s*\((.+)\)$", top_play_full)
+            if m_pr2:
+                pick_str = m_pr2.group(1).strip()
+                reasons_str = m_pr2.group(2).strip()
+
+        # Enforce -155 to +130 odds sweet spot & -6.5 spread cap (-7.5 CFB)
+        m_odds = re.search(r"\(([+-]\d{3,4})\)", pick_str)
+        if m_odds:
+            o_int = int(m_odds.group(1))
+            if o_int < -155 or o_int > 130:
+                continue
+        m_sp = re.search(r"\s(-\d+(?:\.\d+)?)\b", pick_str)
+        if m_sp:
+            sp_val = float(m_sp.group(1))
+            max_lay = -7.5 if league == "CFB" else -6.5
+            if sp_val < max_lay:
+                continue
+
+        # Clean matchup & expand abbr in pick_str (e.g. "ARS ML" -> "Arsenal ML")
+        rec_m = re.search(r"\(([^()]*@[^()]*)\)\s*$", matchup_and_rec)
+        matchup = matchup_and_rec[: rec_m.start()].strip() if rec_m else matchup_and_rec
+        rec_raw = rec_m.group(1).strip() if rec_m else ""
+        if matchup in seen_matchups:
+            continue
+        seen_matchups.add(matchup)
+
+        if "@" in matchup:
+            a_full, h_full = [x.strip() for x in matchup.split("@", 1)]
+            if "@" in rec_raw:
+                a_rec_part, h_rec_part = [x.strip() for x in rec_raw.split("@", 1)]
+                a_ab = a_rec_part.split()[0] if a_rec_part else ""
+                h_ab = h_rec_part.split()[0] if h_rec_part else ""
+                if a_ab and re.match(rf"^{re.escape(a_ab)}\b", pick_str):
+                    pick_str = re.sub(rf"^{re.escape(a_ab)}\b", a_full, pick_str, count=1)
+                elif h_ab and re.match(rf"^{re.escape(h_ab)}\b", pick_str):
+                    pick_str = re.sub(rf"^{re.escape(h_ab)}\b", h_full, pick_str, count=1)
+
+        t_min = _time_to_min(time_est)
+        if t_min < now_min - 5:
+            continue
+
+        odds_part = rest_body.split("->")[0].strip()
+        game_line = f"{matchup_and_rec} | {odds_part}"
+        candidates.append({
+            "win_num": win_num,
+            "t_min": t_min,
+            "time_est": time_est,
+            "league": league,
+            "matchup": matchup,
+            "pick": pick_str,
+            "conf_pct": conf_pct,
+            "tier": tier_txt,
+            "reasons": reasons_str,
+            "game_line": game_line,
+        })
+
+    # Group by window and keep up to top 2 plays per window (highest confidence)
+    by_win = {}
+    for c in candidates:
+        by_win.setdefault(c["win_num"], []).append(c)
+
+    selected = []
+    for w_num in sorted(by_win.keys()):
+        w_plays = sorted(by_win[w_num], key=lambda x: (-x["conf_pct"], x["t_min"]))
+        if w_plays and w_plays[0]["conf_pct"] >= 88:
+            if len(w_plays) >= 2 and w_plays[1]["conf_pct"] >= 82:
+                chosen = w_plays[:2]
+                pcts = [35, 20]
+            else:
+                chosen = w_plays[:1]
+                pcts = [50]
+        elif len(w_plays) >= 2 and w_plays[0]["conf_pct"] >= 78 and w_plays[1]["conf_pct"] >= 78:
+            chosen = w_plays[:2]
+            pcts = [25, 25]
+        elif w_plays and w_plays[0]["conf_pct"] >= 78:
+            chosen = w_plays[:1]
+            pcts = [35]
+        elif len(w_plays) >= 2:
+            chosen = w_plays[:2]
+            pcts = [18, 18]
+        else:
+            chosen = w_plays[:1]
+            pcts = [20]
+        for item, pct in zip(chosen, pcts):
+            item["wager_pct"] = pct
+            selected.append(item)
+
+    selected.sort(key=lambda x: (x["t_min"], -x["conf_pct"]))
+
+    pend_block = "\n".join(ln.replace("- ", "• ", 1) for ln in pending_lines) if pending_lines else "• *None*"
+    out = [
+        f"🎯 *{today_str} {slate_header_tag}*",
+        f"Bankroll: ${settled_br:.2f} | Pending: ${pending_tot:.2f} | Available: ${avail_br:.2f}",
+        "",
+        f"*Pending (${pending_tot:.2f}):*",
+        pend_block,
+        "",
+        "*Today's Curated Plays:*",
+    ]
+    if not selected:
+        out.append("1. *[All Windows] — ⛔ PASS (<68% Confidence — Hold bankroll for next window)*")
+    else:
+        for idx, p in enumerate(selected, start=1):
+            stake = round(min(avail_br, max(2.00, settled_br * (p["wager_pct"] / 100.0))), 2)
+            icon = "🔥" if p["conf_pct"] >= 88 else ("💎" if p["conf_pct"] >= 78 else "✅")
+            out.append(
+                f"{idx}. *[{p['time_est']}] • {p['matchup']} ({p['league']})* — *{p['pick']}* — *[${stake:.2f} ({p['wager_pct']}% BR)]* — *[{p['conf_pct']}% {icon}]*"
             )
-            if response and response.text:
-                txt = response.text.strip()
-                if available_bankroll >= 2.0 and ("Holding —" in txt or "1." not in txt):
-                    msg = f"{model_id}: returned stub without numbered plays ({txt[:80]})"
-                    print(msg)
-                    model_errors.append(msg)
-                    continue
-                return txt
-        except Exception as exc:
-            err_s = f"{model_id}: {type(exc).__name__}: {str(exc)[:140]}"
-            print(f"Model {err_s}")
-            model_errors.append(err_s)
-    raise RuntimeError("All discovered Gemini models failed -> " + " | ".join(model_errors[:6]))
+            out.append(f"   - Game & Line: {p['game_line']}")
+            out.append(f"   - Confidence Math: {p['reasons'] or 'Deterministic 6-Pillar Score'} = {p['conf_pct']}% ({p['tier']})")
+    return "\n".join(out)
 
 
 def run_active_ticket_audit(today_str, summary_block, intel_text, ledger_meta):
