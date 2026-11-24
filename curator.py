@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import json
 import time
 import datetime
@@ -111,6 +112,7 @@ def read_tracker_context(gc):
         [r for r in tracker_rows[header_idx + 1 :] if r and r[0].strip().startswith("BET-")],
         key=_bet_num,
     )
+    peak_bankroll = max(100.0, settled_bankroll)
     for r in bet_rows_chrono:
         if len(r) > 10 and r[0].strip() and r[10].strip().lower() == "pending":
             bet_id = r[0].strip()
@@ -124,29 +126,30 @@ def read_tracker_context(gc):
             rb = _parse_dollar(r[13])
             if rb > 0:
                 settled_bankroll = rb
+                if rb > peak_bankroll:
+                    peak_bankroll = rb
 
     available_bankroll = max(0.0, round(settled_bankroll - pending_total, 2))
-    max_exposure_cap = round(settled_bankroll * 0.50, 2)
-    remaining_50pct_cap = max(0.0, round(max_exposure_cap - pending_total, 2))
+    is_drawdown = (settled_bankroll < 60.0) or (peak_bankroll > 0 and ((peak_bankroll - settled_bankroll) / peak_bankroll) > 0.25)
+    max_conc_ratio = 0.60 if is_drawdown else 0.80
+    max_exposure_cap = round(settled_bankroll * max_conc_ratio, 2)
+    remaining_cap_amt = max(0.0, round(max_exposure_cap - pending_total, 2))
+    unit_val_banner = round(settled_bankroll * 0.05, 2)
 
     if settled_bankroll < 50.0:
-        active_tier = "Survival Tier (< $50.00 | 1U = $2.00 | 100% Straight Bets Only, Zero Parlays)"
-    elif settled_bankroll < 250.0:
-        active_tier = "Tier 1: Foundation ($50.00–$249.99 | 1U = $4.00 | Max 2-Leg Correlated SGP/Parlay)"
-    elif settled_bankroll < 500.0:
-        active_tier = "Tier 2: Acceleration ($250.00–$499.99 | 1U = $10.00 | Max 2-Leg Correlated SGP/Parlay)"
-    elif settled_bankroll < 750.0:
-        active_tier = "Tier 3: Expansion ($500.00–$749.99 | 1U = $20.00 | Max 2-Leg Correlated SGP/Parlay)"
+        active_tier = f"Survival / Drawdown Brake (< $50.00 | 1U = ${unit_val_banner:.2f} | 25% Single / 60% Concurrent)"
+    elif is_drawdown:
+        active_tier = f"Drawdown Brake Active (>25% off ${peak_bankroll:.2f} peak | 1U = ${unit_val_banner:.2f} | 25% Single / 60% Concurrent)"
     else:
-        active_tier = "Tier 4: Final Sprint ($750.00+ | 1U = $30.00 | Max 2-Leg Correlated SGP/Parlay)"
+        active_tier = f"Growth Mode (1U = ${unit_val_banner:.2f} = 5% BR | 35% Single / 80% Concurrent)"
 
     verified_bankroll_banner = (
         f"VERIFIED LEDGER NUMBERS (USE EXACTLY THESE IN OUTPUT HEADER):\n"
-        f"- Settled Bankroll: ${settled_bankroll:.2f}\n"
-        f"- Active Tier: {active_tier}\n"
+        f"- Settled Bankroll: ${settled_bankroll:.2f} (Challenge Peak: ${peak_bankroll:.2f})\n"
+        f"- Active Mode: {active_tier}\n"
         f"- Pending Wagers Total: ${pending_total:.2f} ({len(pending_lines)} active ticket(s))\n"
         f"- Available Unstaked Bankroll: ${available_bankroll:.2f}\n"
-        f"- 50% Max Active Exposure Cap: ${max_exposure_cap:.2f} (Remaining 50% Exposure Headroom: ${remaining_50pct_cap:.2f})\n"
+        f"- {int(max_conc_ratio * 100)}% Max Concurrent Exposure Cap: ${max_exposure_cap:.2f} (Remaining Headroom: ${remaining_cap_amt:.2f})\n"
         f"- Active Pending Tickets:\n"
         + ("\n".join(pending_lines) if pending_lines else "  * None")
     )
@@ -158,23 +161,25 @@ def read_tracker_context(gc):
 
     ledger_meta = {
         "settled": settled_bankroll,
+        "peak": peak_bankroll,
+        "is_drawdown": is_drawdown,
         "pending_total": pending_total,
         "available": available_bankroll,
         "max_cap": max_exposure_cap,
-        "remaining_cap": remaining_50pct_cap,
+        "remaining_cap": remaining_cap_amt,
         "pending_lines": pending_lines,
     }
     return summary_block, recent_bets, rules_text, audit_text, ledger_meta
 
 
 def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=None):
-    ledger_meta = ledger_meta or {"settled": 20.0, "pending_total": 0.0, "available": 20.0, "max_cap": 10.0, "remaining_cap": 10.0, "pending_lines": []}
+    ledger_meta = ledger_meta or {"settled": 20.0, "peak": 100.0, "is_drawdown": True, "pending_total": 0.0, "available": 20.0, "max_cap": 12.0, "remaining_cap": 12.0, "pending_lines": []}
     remaining_cap = ledger_meta["remaining_cap"]
     available_bankroll = ledger_meta["available"]
 
-    # Deterministic 50% Exposure Cap Guardrail:
-    # If active slate is already at/near the 50% cap (e.g., 5:30 PM Primetime Refresh after morning bets are placed),
-    # switch into PRE-TIPOFF ACTIVE-TICKET RISK & INJURY AUDIT MODE instead of recommending 4 extra bets!
+    # Deterministic Concurrent Exposure Cap Guardrail:
+    # If active slate is already at/near the max concurrent cap,
+    # switch into PRE-TIPOFF ACTIVE-TICKET RISK & INJURY AUDIT MODE instead of recommending extra bets!
     if remaining_cap < 2.00:
         if not ledger_meta["pending_lines"]:
             return (
@@ -190,8 +195,9 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
     )
     # Smart Wager Engine parameters (1U = 5% BR, Calibrated Fractional Kelly, 35% single cap, 80% concurrent overlap cap)
     settled_bankroll = ledger_meta["settled"]
+    peak_bankroll = float(ledger_meta.get("peak") or max(100.0, settled_bankroll))
     unit_val = round(settled_bankroll * 0.05, 2)
-    is_drawdown = settled_bankroll < 60.0
+    is_drawdown = bool(ledger_meta.get("is_drawdown")) or (settled_bankroll < 60.0) or (peak_bankroll > 0 and ((peak_bankroll - settled_bankroll) / peak_bankroll) > 0.25)
     max_single_pct = 25 if is_drawdown else 35
     max_conc_pct = 60 if is_drawdown else 80
     max_single_amt = round(min(available_bankroll, max(2.00, settled_bankroll * (max_single_pct / 100.0))), 2)
@@ -286,9 +292,9 @@ Recent Bets:
 9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
 
 ### STRICT FORMATTING RULES (STREAMLINED HEADLINE + EXPANDABLE DRAWER DATA):
-- Output ONLY the template below. NO extra paragraphs, NO UTC timestamps.
-- **EXACT GAME START TIME ONLY:** On every numbered play, use the game's **EXACT start time in EST** from the `(H:MM PM EST)` tag in Section 3 (e.g. `[2:00 PM EST]`, `[2:30 PM EST]`, `[7:00 PM EST]`). **NEVER** use a generic window bucket label like `[Window 3: 12:00 PM]` or `[Window 4: 3:00 PM]` in place of the game's actual start time.
-- On each numbered headline (`1.`, `2.`, etc.), show ONLY: **Exact Time EST • Game (League) — Bet (Odds) — Wager — Confidence %**.
+- Output ONLY the template below. NO extra paragraphs, NO UTC timestamps, NO square brackets around time/wager/confidence.
+- **EXACT GAME START TIME ONLY:** On every numbered play, use the game's **EXACT start time in EST** from the `(H:MM PM EST)` tag in Section 3 (e.g. `2:00 PM EST`, `7:00 PM EST`). **NEVER** use a generic window bucket label like `Window 3: 12:00 PM`.
+- On each numbered headline (`1.`, `2.`, etc.), show ONLY: `Exact Time EST • Away @ Home (League) — Bet (Odds) — $XX.XX (X.XU) — XX% Icon`. Do NOT write `Included in Hammer Slot` or `of Resulting BR`.
 - Underneath each numbered headline, include the two structured drawer lines (`- Game & Line:` and `- Confidence Math:`) so the web app can display them ONLY when the user clicks on the bet!
 
 🎯 *{today_str} {slate_header_tag}*
@@ -298,13 +304,15 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 • *None* (or list active pending BET-XXX rows if any)
 
 *Today's Curated Plays:*
-1. *[Exact Tipoff/Kickoff Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[$XX.XX (XX% BR)]* — *[XX% 🔥/💎/✅]*
+
+1. 7:00 PM EST • Away Team @ Home Team (NBA) — Pick Name -3.5 (-110) — $XX.XX (X.XU) — 87% 💎
    - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
    - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
-2. *[Exact Tipoff/Kickoff Time EST] • [Away @ Home] ([League])* — *[Bet & Odds]* — *[XX% of Resulting BR (Est. $XX.XX)]* — *[XX% 🔥/💎/✅]*
-   - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
+
+2. 8:00 PM EST • Away Team @ Home Team (NHL) — Pick Name (-120) — $XX.XX (X.XU) — 83% 💎
+   - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, Goalies/BPI, and any line steam from Section 3]
    - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
-(Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, list `X. *[Window Time EST] — ⛔ PASS (<68% Confidence)*`)
+(Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, omit it or list `X. All Windows — ⛔ PASS (<68% Confidence)` only if zero plays qualify all day.)
 """
     candidate_models = [
         "gemini-3.6-flash",
@@ -550,7 +558,8 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
                 best = tot
         return best
 
-    is_dd = settled_br < 60.0
+    peak_br = float(ledger_meta.get("peak") or max(100.0, settled_br))
+    is_dd = bool(ledger_meta.get("is_drawdown")) or (settled_br < 60.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.25)
     max_single_pct = 0.25 if is_dd else 0.35
     max_conc_pct = 0.60 if is_dd else 0.80
     unit_val = max(0.01, settled_br * 0.05)
@@ -598,7 +607,7 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
     pend_block = "\n".join(ln.replace("- ", "• ", 1) for ln in pending_lines) if pending_lines else "• *None*"
     out = [
         f"🎯 *{today_str} {slate_header_tag}*",
-        f"Bankroll: ${settled_br:.2f} | Pending: ${pending_tot:.2f} | Available: ${avail_br:.2f} | 1U = ${unit_val:.2f}",
+        f"Bankroll: ${settled_br:.2f} | Pending: ${pending_tot:.2f} | Available: ${avail_br:.2f} | 1U: ${unit_val:.2f}",
         "",
         f"*Pending (${pending_tot:.2f}):*",
         pend_block,
@@ -606,12 +615,14 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
         "*Today's Curated Plays:*",
     ]
     if not selected:
-        out.append("1. *[All Windows] — ⛔ PASS (<68% Confidence — Hold bankroll for next window)*")
+        out.append("")
+        out.append("1. All Windows — ⛔ PASS (<68% Confidence — Hold bankroll for next window)")
     else:
         for idx, p in enumerate(selected, start=1):
             icon = "🔥" if p["conf_pct"] >= 88 else ("💎" if p["conf_pct"] >= 78 else "✅")
+            out.append("")
             out.append(
-                f"{idx}. *[{p['time_est']}] • {p['matchup']} ({p['league']})* — *{p['pick']}* — *[${p['stake']:.2f} ({p['units']:.1f}U)]* — *[{p['conf_pct']}% {icon}]*"
+                f"{idx}. {p['time_est']} • {p['matchup']} ({p['league']}) — {p['pick']} — ${p['stake']:.2f} ({p['units']:.1f}U) — {p['conf_pct']}% {icon}"
             )
             out.append(f"   - Game & Line: {p['game_line']}")
             out.append(f"   - Confidence Math: {p['reasons'] or 'Deterministic 6-Pillar Score'} = {p['conf_pct']}% ({p['tier']})")
@@ -717,7 +728,8 @@ def _build_curated_inline_keyboard(message):
     rows = []
     play_idx = 0
     for ln in (message or "").splitlines():
-        m = re.match(r"^\s*\d+\.\s*(.+)$", ln)
+        plain_ln = html.unescape(re.sub(r"<[^>]+>", "", ln))
+        m = re.match(r"^\s*\d+\.\s*(.+)$", plain_ln)
         if not m:
             continue
         clean = m.group(1).replace("*", "").strip()
@@ -725,8 +737,15 @@ def _build_curated_inline_keyboard(message):
         if "⛔" in clean or re.search(r"\bPASS\b", clean):
             play_idx += 1
             continue
-        # Strip leading [Time — Sport] bracket for a crisp iPhone button label
+        # Strip leading [Time — Sport] bracket or "7:00 PM EST • " prefix for a crisp iPhone button label
         short_label = re.sub(r"^\[[^\]]+\]\s*", "", clean).strip()
+        parts = [p.strip() for p in re.split(r"\s+[—–]\s+", short_label) if p.strip()]
+        if len(parts) >= 2:
+            short_label = parts[1]
+            if len(parts) >= 3 and "$" in parts[2]:
+                st_m = re.search(r"\$\d+(?:\.\d{1,2})?", parts[2])
+                if st_m:
+                    short_label = f"{short_label} ({st_m.group(0)})"
         if len(short_label) > 40:
             short_label = short_label[:37].rstrip() + "..."
         rows.append([{
@@ -743,30 +762,283 @@ def _build_curated_inline_keyboard(message):
     return {"inline_keyboard": rows}
 
 
-def send_telegram_alert(message):
+def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
+    """
+    Deterministically formats the Telegram alert in HTML mode to match the clean scannable card layout:
+      🎯 <b>YYYY-MM-DD Confidence Meter Time-Slot Slate</b>
+      Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
+
+      <b>Pending ($XX.XX):</b>
+      • <b>None</b>
+
+      <b>Today's Curated Plays:</b>
+
+      1. 7:00 PM EST • Away @ Home (NBA) — Pick (-110) — $XX.XX (X.XU) — 87% 💎
+
+      2. ...
+    Also enforces exact Smart Wager Engine stakes ($XX.XX (X.XU)) on every play so Telegram
+    matches the web dashboard and never displays broken Markdown, brackets, or stale sizing text.
+    """
+    raw = (curated_message or "").strip()
+    if not raw:
+        return ""
+
+    # Preserve Primetime Pre-Tipoff Audit alerts cleanly in HTML mode
+    if raw.startswith("🛡️") or "Primetime Pre-Tipoff Audit" in raw:
+        out_lines = []
+        for ln in raw.splitlines():
+            esc_ln = html.escape(ln)
+            esc_ln = re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", esc_ln)
+            out_lines.append(esc_ln)
+        return "\n".join(out_lines)
+
+    # Extract header title
+    title_text = ""
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if s.startswith("🎯"):
+            title_text = s.lstrip("🎯").replace("*", "").strip()
+            break
+    if not title_text:
+        title_text = f"{today_str or ''} Confidence Meter Time-Slot Slate".strip()
+
+    # Verified ledger numbers
+    meta = ledger_meta or {}
+    settled_br = float(meta.get("settled") or 0.0)
+    pending_tot = float(meta.get("pending_total") or 0.0)
+    avail_br = float(meta.get("available") or 0.0)
+    pending_lines = list(meta.get("pending_lines") or [])
+    if settled_br <= 0:
+        bm = re.search(r"Bankroll:\s*\$(\d+(?:\.\d{1,2})?)", raw)
+        pm = re.search(r"Pending:\s*\$(\d+(?:\.\d{1,2})?)", raw)
+        am = re.search(r"Available:\s*\$(\d+(?:\.\d{1,2})?)", raw)
+        if bm:
+            settled_br = float(bm.group(1))
+        if pm:
+            pending_tot = float(pm.group(1))
+        if am:
+            avail_br = float(am.group(1))
+
+    peak_br = float(meta.get("peak") or max(100.0, settled_br))
+    is_dd = bool(meta.get("is_drawdown")) or (settled_br < 60.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.25)
+    max_single_pct = 0.25 if is_dd else 0.35
+    max_conc_pct = 0.60 if is_dd else 0.80
+    unit_val = max(0.01, settled_br * 0.05)
+
+    def _time_to_min(txt):
+        m = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)", str(txt or ""), flags=re.I)
+        if not m:
+            return 24 * 60
+        hr, mn, ap = int(m.group(1)), int(m.group(2)), m.group(3).upper()
+        if ap == "PM" and hr != 12:
+            hr += 12
+        if ap == "AM" and hr == 12:
+            hr = 0
+        return hr * 60 + mn
+
+    def _dur_min(sp, sel_txt=""):
+        u = str(sp or "").upper()
+        mins = 165
+        if u in ("EPL", "UCL", "LALIGA", "SOCCER"):
+            mins = 120
+        elif u in ("NCAAM", "CBB", "NCAAB"):
+            mins = 135
+        elif u in ("NBA", "NHL"):
+            mins = 160
+        elif u in ("NFL", "CFB", "NCAAF"):
+            mins = 205
+        elif u == "MLB":
+            mins = 180
+        if re.search(r"\b(?:1h|1st\s*half|first\s*half)\b", str(sel_txt or ""), flags=re.I):
+            mins = max(60, int(mins * 0.55))
+        return mins
+
+    def _peak_overlap(intervals, s_m, e_m):
+        pts = [s_m]
+        for iv in intervals:
+            if iv["start"] < e_m and iv["end"] > s_m and s_m <= iv["start"] < e_m:
+                pts.append(iv["start"])
+        best = 0.0
+        for t in pts:
+            tot = sum(iv["stake"] for iv in intervals if iv["start"] <= t < iv["end"])
+            if tot > best:
+                best = tot
+        return best
+
+    # Parse numbered plays (ignoring expandable drawer sub-bullets)
+    parsed_plays = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if re.match(r"^[-•]\s*(Game & Line|Confidence Math|Confidence|Edge):", s, flags=re.I):
+            continue
+        m = re.match(r"^\d+\.\s*(.+)$", s)
+        if not m:
+            continue
+        body = m.group(1).replace("*", "").strip()
+        is_pass = ("⛔" in body) or bool(re.search(r"\bPASS\b", body))
+        if is_pass:
+            body_clean = re.sub(r"^\[([^\]]+)\]", r"\1", body)
+            parsed_plays.append({"is_pass": True, "raw_clean": body_clean})
+            continue
+
+        wait_lineup = bool(re.search(r"\[WAIT FOR LINEUP\]", body, flags=re.I))
+        body_no_flag = re.sub(r"\s*\[WAIT FOR LINEUP\]", "", body, flags=re.I).strip()
+
+        # Split on em-dash / en-dash separators
+        segs = [p.strip() for p in re.split(r"\s+[—–]\s+", body_no_flag) if p.strip()]
+        header_seg = segs[0] if len(segs) >= 1 else body_no_flag
+        # Unwrap leading [7:00 PM EST] bracket if present
+        header_seg = re.sub(r"^\[(\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?)\]", r"\1", header_seg, flags=re.I).strip()
+        pick_seg = segs[1] if len(segs) >= 2 else ""
+
+        # Extract confidence % & icon from trailing segment (or anywhere after pick)
+        conf_pct = None
+        conf_icon = ""
+        for sg in reversed(segs[1:]):
+            sg_unbr = sg.strip("[] ")
+            cm = re.search(r"\b(\d{2,3})%\s*(🔥|💎|✅)?", sg_unbr)
+            if cm and not re.search(r"(BR|BANKROLL|RESULTING)", sg_unbr, flags=re.I):
+                conf_pct = int(cm.group(1))
+                conf_icon = cm.group(2) or ("🔥" if conf_pct >= 88 else ("💎" if conf_pct >= 78 else "✅"))
+                break
+
+        # Extract league, odds, and start time for exact Smart Wager Engine sizing
+        sp_m = re.search(r"\((NCAAM|CBB|NCAAB|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|LALIGA|MLB|SOCCER)\)", header_seg, flags=re.I)
+        sport = sp_m.group(1).upper() if sp_m else ""
+        if sport in ("CBB", "NCAAB"):
+            sport = "NCAAM"
+            header_seg = re.sub(r"\((CBB|NCAAB)\)", "(NCAAM)", header_seg, flags=re.I)
+
+        od_m = re.search(r"\(([+-]\d{3,4})\)", pick_seg) or re.search(r"([+-]\d{3,4})", pick_seg)
+        odds_i = int(od_m.group(1)) if od_m else -110
+        t_min = _time_to_min(header_seg)
+
+        parsed_plays.append({
+            "is_pass": False,
+            "header_seg": header_seg,
+            "pick_seg": pick_seg,
+            "conf_pct": conf_pct,
+            "conf_icon": conf_icon,
+            "sport": sport,
+            "odds_i": odds_i,
+            "t_min": t_min,
+            "e_min": t_min + _dur_min(sport, pick_seg),
+            "wait_lineup": wait_lineup,
+            "orig_segs": segs,
+            "body_clean": body_no_flag,
+        })
+
+    # Recompute exact Kelly + overlap-safe dollar & unit stakes when bankroll > 0
+    if settled_br > 0:
+        allocated = []
+        for pln in pending_lines:
+            pm_st = re.search(r"\(\$(\d+(?:\.\d{1,2})?)\)", pln)
+            pm_tm = re.search(r"(\d{1,2}:\d{2}\s*[AP]M)", pln, flags=re.I)
+            st_v = float(pm_st.group(1)) if pm_st else 0.0
+            if st_v > 0:
+                ps_m = _time_to_min(pm_tm.group(1)) if pm_tm else 0
+                allocated.append({"start": ps_m, "end": ps_m + 150, "stake": st_v})
+
+        active_plays = [p for p in parsed_plays if not p["is_pass"] and p.get("pick_seg")]
+        max_single_amt = settled_br * max_single_pct
+        max_conc_amt = settled_br * max_conc_pct
+        for p in active_plays:
+            odds_i = p["odds_i"]
+            b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / max(1, abs(odds_i)))
+            cp = p["conf_pct"] if p["conf_pct"] is not None else 74
+            p_win = 0.555 + (max(0, min(99, cp) - 68) / 31.0) * 0.13
+            kelly_f = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
+            raw_st = min(max_single_amt, settled_br * kelly_f)
+            if settled_br < 1000.0 and b_mult > 0:
+                raw_st = min(raw_st, (1000.0 - settled_br) / b_mult)
+            p["kelly_f"] = kelly_f
+            p["raw_st"] = raw_st
+
+        for p in sorted(active_plays, key=lambda x: (-x["kelly_f"], x["t_min"])):
+            pk = _peak_overlap(allocated, p["t_min"], p["e_min"])
+            room = max(0.0, max_conc_amt - pk)
+            st = min(p["raw_st"], max_single_amt, room)
+            st = round(st * 2.0) / 2.0 if st >= 2.0 else 0.0
+            p["stake"] = st
+            p["units"] = round(st / unit_val, 1) if st > 0 else 0.0
+            if st > 0:
+                allocated.append({"start": p["t_min"], "end": p["e_min"], "stake": st})
+
+    # Assemble exact clean HTML message matching screenshot
+    out = [
+        f"🎯 <b>{html.escape(title_text)}</b>",
+        f"Bankroll: ${settled_br:.2f} | Pending: ${pending_tot:.2f} | Available: ${avail_br:.2f}",
+        "",
+        f"<b>Pending (${pending_tot:.2f}):</b>",
+    ]
+    if pending_lines:
+        for pln in pending_lines:
+            clean_p = pln.lstrip("-• ").replace("*", "").strip()
+            out.append(f"• {html.escape(clean_p)}")
+    else:
+        out.append("• <b>None</b>")
+
+    out.append("")
+    out.append("<b>Today's Curated Plays:</b>")
+
+    if not parsed_plays:
+        # Fallback if message had no numbered lines
+        out.append("")
+        out.append("1. All Windows — ⛔ PASS (&lt;68% Confidence)")
+    else:
+        for idx, p in enumerate(parsed_plays, start=1):
+            out.append("")
+            if p["is_pass"]:
+                out.append(f"{idx}. {html.escape(p['raw_clean'])}")
+                continue
+            if p.get("pick_seg"):
+                if p.get("stake", 0.0) >= 2.0:
+                    wager_str = f"${p['stake']:.2f} ({p['units']:.1f}U)"
+                elif settled_br > 0:
+                    wager_str = f"Cap Full ({int(max_conc_pct * 100)}%)"
+                else:
+                    # Keep original wager segment cleaned of brackets if no bankroll
+                    wager_str = p["orig_segs"][2].strip("[] ") if len(p["orig_segs"]) >= 3 else ""
+                pieces = [p["header_seg"], p["pick_seg"]]
+                if wager_str:
+                    pieces.append(wager_str)
+                if p["conf_pct"] is not None:
+                    pieces.append(f"{p['conf_pct']}% {p['conf_icon']}".strip())
+                line_txt = " — ".join(pieces)
+                if p["wait_lineup"]:
+                    line_txt += " [WAIT FOR LINEUP]"
+                out.append(f"{idx}. {html.escape(line_txt)}")
+            else:
+                out.append(f"{idx}. {html.escape(p['body_clean'])}")
+
+    return "\n".join(out)
+
+
+def send_telegram_alert(message, raw_message=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials missing. Alert text:\n", message)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    clean_text = (message or "")[:4000]
-    keyboard = _build_curated_inline_keyboard(message)
+    html_text = (message or "")[:4000]
+    plain_text = html.unescape(re.sub(r"<[^>]+>", "", html_text)).replace("*", "")
+    keyboard = _build_curated_inline_keyboard(raw_message or html_text)
     attempts = [
         {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": clean_text,
-            "parse_mode": "Markdown",
+            "text": html_text,
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
             "reply_markup": keyboard,
         },
         {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": clean_text.replace("*", ""),
+            "text": plain_text,
             "disable_web_page_preview": True,
             "reply_markup": keyboard,
         },
         {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": clean_text.replace("*", ""),
+            "text": plain_text,
             "disable_web_page_preview": True,
         },
     ]
@@ -874,13 +1146,8 @@ def main():
         today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=ledger_meta
     )
     append_to_curator_feed(gc, today_str, curated_message)
-    # Strip expandable drawer sub-bullets from Telegram alert so Telegram shows ONLY Time, Game, Bet, Wager, Confidence
-    tg_streamlined_lines = [
-        ln
-        for ln in curated_message.splitlines()
-        if not re.match(r"^\s*[-•]\s*(Game & Line|Confidence Math|Confidence|Edge):", ln, flags=re.I)
-    ]
-    send_telegram_alert("\n".join(tg_streamlined_lines))
+    tg_html = format_telegram_slate(curated_message, ledger_meta=ledger_meta, today_str=today_str)
+    send_telegram_alert(tg_html, raw_message=tg_html)
 
 
 if __name__ == "__main__":
