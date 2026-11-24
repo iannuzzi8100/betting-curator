@@ -188,13 +188,17 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta", timeout=45_000),
     )
-    # Confidence Meter Bankroll Allocation Tiers (Single-Bet Window vs. Same-Window Multi-Bet Split):
+    # Smart Wager Engine parameters (1U = 5% BR, Calibrated Fractional Kelly, 35% single cap, 80% concurrent overlap cap)
     settled_bankroll = ledger_meta["settled"]
-    stake_t1_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.50)), 2)   # 88-99% Tier 1 Solo: 50% BR
-    stake_t2_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.35)), 2)   # 78-87% Tier 2 Solo: 35% BR
-    stake_t2_dual = round(min(available_bankroll / 2.0, max(2.00, settled_bankroll * 0.25)), 2)  # Two 78-87% in same window: 25% BR each (50% total)
-    stake_t3_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.20)), 2)   # 68-77% Tier 3 Solo: 20% BR
-    stake_t3_dual = round(min(available_bankroll / 2.0, max(2.00, settled_bankroll * 0.18)), 2)  # Two 68-77% in same window: 18% BR each (36% total)
+    unit_val = round(settled_bankroll * 0.05, 2)
+    is_drawdown = settled_bankroll < 60.0
+    max_single_pct = 25 if is_drawdown else 35
+    max_conc_pct = 60 if is_drawdown else 80
+    max_single_amt = round(min(available_bankroll, max(2.00, settled_bankroll * (max_single_pct / 100.0))), 2)
+    max_conc_amt = round(settled_bankroll * (max_conc_pct / 100.0), 2)
+    stake_t1_solo = round(max_single_amt * 2) / 2.0
+    stake_t2_solo = round(min(max_single_amt, max(2.00, settled_bankroll * 0.22)) * 2) / 2.0
+    stake_t3_solo = round(min(max_single_amt, max(2.00, settled_bankroll * 0.12)) * 2) / 2.0
 
     # Detect Weekend Football + European Soccer Mode automatically from scraped intel / day of week
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
@@ -257,20 +261,15 @@ Recent Bets:
    - Every matchup in Section 3 has a deterministic Python-computed `[CONFIDENCE METER: XX% | ... | TIER ... -> Top Play: ...]` tag.
    - Use those exact Confidence Meter scores and factor breakdowns to rank and select plays for **EVERY** remaining upcoming Time-Slot Window (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}` — including Late Morning 10:00–11:45 AM, Early Afternoon 12:00–2:45 PM, Late Afternoon 3:00–6:00 PM, Primetime 6:30–9:00 PM, and Late Night 9:30 PM+).
    - {league_rule}
-2. **CONFIDENCE METER BANKROLL SIZING & SAME-WINDOW MULTI-BET RULES (CURRENT BR = ${settled_bankroll:.2f}):**
-   - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the single best play (or at most the top 2 highest-confidence plays) per time-slot window. NEVER stack 3–5 plays in one window and NEVER write `[Included in Hammer Slot]` — every play MUST have an explicit `$XX.XX (XX% BR)` wager!
-   - **🔥 TIER 1: MAX HAMMER (`88% – 99%` Confidence):**
-     * **Standout Solo Play:** Wager **50% of Bankroll = ${stake_t1_solo:.2f}** (or `50% of Resulting BR (Est. ${stake_t1_solo:.2f})` for later windows).
-     * *Multi-Bet Rule:* Put the full 50% on this standout lock unless a 2nd game in the exact same time window is `82%+`, in which case split **35% (${stake_t2_solo:.2f}) / 20% (${stake_t3_solo:.2f})**.
-   - **💎 TIER 2: STRONG CONVICTION (`78% – 87%` Confidence):**
-     * **Solo Play in Window:** Wager **35% of Bankroll = ${stake_t2_solo:.2f}** (or `35% of Resulting BR (Est. ${stake_t2_solo:.2f})` for later windows).
-     * **Dual-Bet Same Window:** If **2 separate games in the same window** both score **`78% – 87%`**, recommend **BOTH at 25% of Bankroll each = ${stake_t2_dual:.2f} each** (`50%` total window allocation).
-   - **✅ TIER 3: SOLID EDGE (`68% – 77%` Confidence):**
-     * **Solo Play in Window:** Wager **20% of Bankroll = ${stake_t3_solo:.2f}** (or `20% of Resulting BR (Est. ${stake_t3_solo:.2f})` for later windows).
-     * **Dual-Bet Same Window:** If **2 separate games in the same window** both score **`68% – 77%`**, recommend **BOTH at 18% of Bankroll each = ${stake_t3_dual:.2f} each** (`36%` total window allocation).
-   - **⛔ TIER 4: PASS / NO EDGE (`Below 68%` Confidence):**
-     * **0% Wager ($0.00):** If a time-slot window has NO game scoring `>= 68%`, explicitly output:
-       `*[Window Time EST] — ⛔ PASS (<68% Confidence — Hold bankroll for next window)*`.
+2. **CALIBRATED KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
+   - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the single best play (or at most the top 2 highest-confidence plays) per time-slot window. NEVER stack 3–5 plays in one window and NEVER write `[Included in Hammer Slot]` — every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50`!
+   - **HARD CONCURRENT OVERLAP CAP ({max_conc_pct}% BR = ${max_conc_amt:.2f}) & SINGLE-BET CAP ({max_single_pct}% BR = ${max_single_amt:.2f}):** Never let overlapping games (across adjacent windows!) exceed {max_conc_pct}% of bankroll at risk simultaneously.
+   - **ODDS-ADJUSTED KELLY GUIDELINES:**
+     * **🔥 TIER 1 (`88%–99%`):** Up to ~{max_single_pct}% BR (~${stake_t1_solo:.2f}, trimmed slightly on heavier `-130` to `-150` juice).
+     * **💎 TIER 2 (`78%–87%`):** ~15%–25% BR (~${stake_t2_solo:.2f}), scaled down on heavier juice (`-135+`) or overlapping windows.
+     * **✅ TIER 3 (`68%–77%`):** ~7%–15% BR (~${stake_t3_solo:.2f}), min `$2.00`.
+     * **🎯 $1,000 GOAL-LOCK BRAKE:** Never wager more than needed to reach `$1,000.00` total bankroll.
+     * **⛔ TIER 4 (`Below 68%`):** PASS (`$0.00`).
 3. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
    - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop). Never recommend SGPs or Parlays.
 4. **MODERATE FAVORITE PRIORITY & "-155 TO +130" SWEET-SPOT BAND:**
@@ -506,7 +505,7 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
             "game_line": game_line,
         })
 
-    # Group by window and keep up to top 2 plays per window (highest confidence)
+    # Group by window and keep up to top 2 highest-confidence plays per window
     by_win = {}
     for c in candidates:
         by_win.setdefault(c["win_num"], []).append(c)
@@ -515,34 +514,91 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
     for w_num in sorted(by_win.keys()):
         w_plays = sorted(by_win[w_num], key=lambda x: (-x["conf_pct"], x["t_min"]))
         if w_plays and w_plays[0]["conf_pct"] >= 88:
-            if len(w_plays) >= 2 and w_plays[1]["conf_pct"] >= 82:
-                chosen = w_plays[:2]
-                pcts = [35, 20]
-            else:
-                chosen = w_plays[:1]
-                pcts = [50]
-        elif len(w_plays) >= 2 and w_plays[0]["conf_pct"] >= 78 and w_plays[1]["conf_pct"] >= 78:
-            chosen = w_plays[:2]
-            pcts = [25, 25]
-        elif w_plays and w_plays[0]["conf_pct"] >= 78:
-            chosen = w_plays[:1]
-            pcts = [35]
-        elif len(w_plays) >= 2:
-            chosen = w_plays[:2]
-            pcts = [18, 18]
+            chosen = w_plays[:2] if (len(w_plays) >= 2 and w_plays[1]["conf_pct"] >= 82) else w_plays[:1]
         else:
-            chosen = w_plays[:1]
-            pcts = [20]
-        for item, pct in zip(chosen, pcts):
-            item["wager_pct"] = pct
-            selected.append(item)
+            chosen = w_plays[:2]
+        selected.extend(chosen)
 
+    # Smart Wager Engine: Calibrated Fractional Kelly + 1U=5% BR + 35% single / 80% concurrent overlap cap + Drawdown & $1,000 Goal-Lock Brakes
+    def _sport_dur_min(sp_lbl):
+        u = (sp_lbl or "").upper()
+        if u in ("EPL", "UCL", "LALIGA", "SOCCER"):
+            return 120
+        if u == "NCAAM":
+            return 130
+        if u == "NBA":
+            return 150
+        if u == "NHL":
+            return 160
+        if u == "MLB":
+            return 175
+        if u == "NFL":
+            return 200
+        if u in ("CFB", "NCAAF"):
+            return 215
+        return 165
+
+    def _peak_overlap_risk(intervals, s_m, e_m):
+        pts = [s_m]
+        for iv in intervals:
+            if iv["start"] < e_m and iv["end"] > s_m and s_m <= iv["start"] < e_m:
+                pts.append(iv["start"])
+        best = 0.0
+        for t in pts:
+            tot = sum(iv["stake"] for iv in intervals if iv["start"] <= t < iv["end"])
+            if tot > best:
+                best = tot
+        return best
+
+    is_dd = settled_br < 60.0
+    max_single_pct = 0.25 if is_dd else 0.35
+    max_conc_pct = 0.60 if is_dd else 0.80
+    unit_val = max(0.01, settled_br * 0.05)
+    max_single_amt = settled_br * max_single_pct
+    max_conc_amt = settled_br * max_conc_pct
+
+    # Pre-load any active pending tickets into overlap intervals if times are present
+    allocated_intervals = []
+    for pln in pending_lines:
+        pm_st = re.search(r"\(\$(\d+(?:\.\d{1,2})?)\)", pln)
+        pm_tm = re.search(r"(\d{1,2}:\d{2}\s*[AP]M)", pln, flags=re.I)
+        st_v = float(pm_st.group(1)) if pm_st else 0.0
+        if st_v > 0:
+            ps_m = _time_to_min(pm_tm.group(1)) if pm_tm else now_min
+            allocated_intervals.append({"start": ps_m, "end": ps_m + 150, "stake": st_v})
+
+    for item in selected:
+        m_o = re.search(r"\(([+-]\d{3,4})\)", item["pick"])
+        odds_i = int(m_o.group(1)) if m_o else -110
+        b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / abs(odds_i))
+        p_win = 0.555 + (max(0, min(99, item["conf_pct"]) - 68) / 31.0) * 0.13
+        kelly_f = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
+        raw_st = min(max_single_amt, settled_br * kelly_f)
+        if settled_br < 1000.0 and b_mult > 0:
+            raw_st = min(raw_st, (1000.0 - settled_br) / b_mult)
+        item["odds_i"] = odds_i
+        item["kelly_f"] = kelly_f
+        item["raw_st"] = raw_st
+        item["e_min"] = item["t_min"] + _sport_dur_min(item["league"])
+
+    # Allocate in priority order (highest Kelly edge first) so stronger plays reserve concurrent room first
+    for item in sorted(selected, key=lambda x: (-x["kelly_f"], x["t_min"])):
+        pk = _peak_overlap_risk(allocated_intervals, item["t_min"], item["e_min"])
+        room = max(0.0, max_conc_amt - pk)
+        st = min(item["raw_st"], max_single_amt, room)
+        st = round(st * 2.0) / 2.0 if st >= 2.0 else 0.0
+        item["stake"] = st
+        item["units"] = round(st / unit_val, 1) if st > 0 else 0.0
+        if st > 0:
+            allocated_intervals.append({"start": item["t_min"], "end": item["e_min"], "stake": st})
+
+    selected = [x for x in selected if x.get("stake", 0.0) >= 2.0]
     selected.sort(key=lambda x: (x["t_min"], -x["conf_pct"]))
 
     pend_block = "\n".join(ln.replace("- ", "• ", 1) for ln in pending_lines) if pending_lines else "• *None*"
     out = [
         f"🎯 *{today_str} {slate_header_tag}*",
-        f"Bankroll: ${settled_br:.2f} | Pending: ${pending_tot:.2f} | Available: ${avail_br:.2f}",
+        f"Bankroll: ${settled_br:.2f} | Pending: ${pending_tot:.2f} | Available: ${avail_br:.2f} | 1U = ${unit_val:.2f}",
         "",
         f"*Pending (${pending_tot:.2f}):*",
         pend_block,
@@ -553,10 +609,9 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
         out.append("1. *[All Windows] — ⛔ PASS (<68% Confidence — Hold bankroll for next window)*")
     else:
         for idx, p in enumerate(selected, start=1):
-            stake = round(min(avail_br, max(2.00, settled_br * (p["wager_pct"] / 100.0))), 2)
             icon = "🔥" if p["conf_pct"] >= 88 else ("💎" if p["conf_pct"] >= 78 else "✅")
             out.append(
-                f"{idx}. *[{p['time_est']}] • {p['matchup']} ({p['league']})* — *{p['pick']}* — *[${stake:.2f} ({p['wager_pct']}% BR)]* — *[{p['conf_pct']}% {icon}]*"
+                f"{idx}. *[{p['time_est']}] • {p['matchup']} ({p['league']})* — *{p['pick']}* — *[${p['stake']:.2f} ({p['units']:.1f}U)]* — *[{p['conf_pct']}% {icon}]*"
             )
             out.append(f"   - Game & Line: {p['game_line']}")
             out.append(f"   - Confidence Math: {p['reasons'] or 'Deterministic 6-Pillar Score'} = {p['conf_pct']}% ({p['tier']})")
