@@ -477,6 +477,7 @@ def fetch_dashboard_data():
         round(pending_total, 2),
         pending_tickets,
         today_tickets,
+        equity_curve=equity_curve,
     )
 
     return {
@@ -547,27 +548,82 @@ def _extract_selection_core(text):
 
 
 def _adjust_curated_plays_for_bankroll(
-    curated_plays, curated_raw, settled_bankroll, pending_total, pending_tickets, today_tickets
+    curated_plays, curated_raw, settled_bankroll, pending_total, pending_tickets, today_tickets, equity_curve=None
 ):
     """
-    Deterministically recalculates the wager amounts for remaining unplaced curated bets
-    for the day whenever a bet settles and the settled bankroll changes.
+    Deterministic Wager Engine (Server-Side):
+    - 1U = 5% of Total Bankroll, rounded cleanly to nearest $0.50 (min $2.00)
+    - Calibrated Fractional Kelly sizing (Confidence 68-99 -> 55.5%-68.5% win prob, odds-adjusted)
+    - 35% single-bet cap & 80% concurrent overlap exposure cap across exact start->finish intervals
+    - Drawdown Brake (< $60 or > 25% off peak -> tightens to 25% single / 60% concurrent)
+    - $1,000 Endgame Goal-Lock Brake (never risk more than needed to cross $1,000)
     """
-    if not curated_plays:
+    if not curated_plays or settled_bankroll <= 0:
         return curated_raw
 
-    m_br = re.search(r"Bankroll:\s*\$(\d+(?:\.\d{1,2})?)", str(curated_raw or ""))
-    feed_br = float(m_br.group(1)) if m_br else settled_bankroll
     avail_cash = round(max(0.0, settled_bankroll - pending_total), 2)
+    peak_br = max([100.0, settled_bankroll] + [float(pt.get("bankroll", 0) or 0) for pt in (equity_curve or [])])
+    is_dd = (settled_bankroll < 60.0) or (peak_br > 0 and ((peak_br - settled_bankroll) / peak_br) > 0.25)
+    max_single_pct = 0.25 if is_dd else 0.35
+    max_conc_pct = 0.60 if is_dd else 0.80
+    unit_val = max(0.01, settled_bankroll * 0.05)
+    max_single_amt = settled_bankroll * max_single_pct
+    max_conc_amt = settled_bankroll * max_conc_pct
 
-    win_counts = {}
-    for p in curated_plays:
-        title = str(p.get("title", ""))
-        is_pass = ("⛔" in title) or bool(re.search(r"\bPASS\b", title))
-        gt = p.get("game_time", "")
-        if not is_pass and gt:
-            win_counts[gt] = win_counts.get(gt, 0) + 1
+    def _dur_min(sp, sel_txt=""):
+        u = _normalize_sport(sp).upper()
+        mins = 165
+        if u in ("EPL", "UCL", "LALIGA", "SOCCER", "PREMIER LEAGUE"):
+            mins = 120
+        elif u == "NCAAM":
+            mins = 130
+        elif u == "NBA":
+            mins = 150
+        elif u == "NHL":
+            mins = 160
+        elif u == "MLB":
+            mins = 175
+        elif u == "NFL":
+            mins = 200
+        elif u in ("CFB", "NCAAF"):
+            mins = 215
+        if re.search(r"\b(?:1h|1st\s*half|first\s*half)\b", str(sel_txt or ""), flags=re.I):
+            mins = round(mins * 0.48)
+        return mins
 
+    def _time_min(txt):
+        m = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)", str(txt or ""), flags=re.I)
+        if not m:
+            return 24 * 60
+        hr, mn, ap = int(m.group(1)), int(m.group(2)), m.group(3).upper()
+        if ap == "PM" and hr != 12:
+            hr += 12
+        if ap == "AM" and hr == 12:
+            hr = 0
+        return hr * 60 + mn
+
+    def _peak_overlap(intervals, s_m, e_m):
+        pts = [s_m]
+        for iv in intervals:
+            if iv["start"] < e_m and iv["end"] > s_m and s_m <= iv["start"] < e_m:
+                pts.append(iv["start"])
+        best = 0.0
+        for t in pts:
+            tot = sum(iv["stake"] for iv in intervals if iv["start"] <= t < iv["end"])
+            if tot > best:
+                best = tot
+        return best
+
+    allocated_intervals = []
+    for t in (pending_tickets or []):
+        st_v = float(t.get("stake") or 0.0)
+        if st_v <= 0:
+            continue
+        ps_m = _time_min(t.get("selections", ""))
+        pe_m = ps_m + _dur_min(t.get("sport", ""), t.get("selections", ""))
+        allocated_intervals.append({"start": ps_m, "end": pe_m, "stake": st_v})
+
+    remaining_items = []
     for p in curated_plays:
         title = str(p.get("title", ""))
         is_pass = ("⛔" in title) or bool(re.search(r"\bPASS\b", title))
@@ -587,34 +643,11 @@ def _adjust_curated_plays_for_bankroll(
             else None
         )
 
-        wager_pct = None
-        m_pct = re.search(r"(\d{1,2}(?:\.\d+)?)\s*%\s*(?:of\s+(?:Resulting\s+)?)?(?:BR|Bankroll)", title, flags=re.I)
-        if m_pct:
-            wager_pct = float(m_pct.group(1))
-        elif p.get("confidence_pct") is not None:
-            cp = int(p["confidence_pct"])
-            dual = win_counts.get(p.get("game_time", ""), 1) >= 2
-            if cp >= 88:
-                wager_pct = 35.0 if dual else 50.0
-            elif cp >= 78:
-                wager_pct = 25.0 if dual else 35.0
-            elif cp >= 68:
-                wager_pct = 18.0 if dual else 20.0
-        elif feed_br > 0 and float(p.get("stake") or 0) > 0:
-            wager_pct = round((float(p["stake"]) / feed_br) * 100.0, 1)
-
-        if wager_pct is not None:
-            p["wager_pct"] = int(wager_pct) if float(wager_pct).is_integer() else wager_pct
-
         if match_pend:
             p["status"] = "pending"
             p["pending_bet_id"] = match_pend.get("bet_id")
             p["stake"] = round(float(match_pend.get("stake") or p.get("stake") or 0.0), 2)
-            if wager_pct and settled_bankroll > 0:
-                p["recalculated_stake"] = round(
-                    max(2.00, settled_bankroll * (wager_pct / 100.0)) if settled_bankroll >= 2.0 else settled_bankroll,
-                    2,
-                )
+            p["units"] = round(p["stake"] / unit_val, 1)
             continue
 
         if match_settled:
@@ -625,22 +658,41 @@ def _adjust_curated_plays_for_bankroll(
             continue
 
         p["status"] = "remaining"
-        if not wager_pct or wager_pct <= 0 or settled_bankroll <= 0:
-            continue
+        odds_i = int(p.get("odds") or -110)
+        b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / abs(odds_i))
+        cp = float(p.get("confidence_pct") if p.get("confidence_pct") is not None else 74)
+        p_win = 0.555 + (max(0.0, min(99.0, cp) - 68.0) / 31.0) * 0.13
+        kelly_f = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
+        raw_st = min(max_single_amt, settled_bankroll * kelly_f)
+        if settled_bankroll < 1000.0 and b_mult > 0:
+            raw_st = min(raw_st, (1000.0 - settled_bankroll) / b_mult)
+        s_m = _time_min(p.get("game_time") or title)
+        e_m = s_m + _dur_min(p.get("sport", ""), p.get("selection") or title)
+        remaining_items.append({"p": p, "kelly_f": kelly_f, "raw_st": raw_st, "s": s_m, "e": e_m})
 
+    # Priority-ordered concurrent overlap allocation (highest Kelly edge reserves room first)
+    for item in sorted(remaining_items, key=lambda x: (-x["kelly_f"], x["s"])):
+        p = item["p"]
         old_stake = round(float(p.get("stake") or 0.0), 2)
-        new_stake = round(max(2.00, settled_bankroll * (wager_pct / 100.0)) if settled_bankroll >= 2.0 else settled_bankroll, 2)
+        pk = _peak_overlap(allocated_intervals, item["s"], item["e"])
+        room = max(0.0, max_conc_amt - pk)
+        st = min(item["raw_st"], max_single_amt, room)
+        new_stake = round(st * 2.0) / 2.0 if st >= 2.0 else 0.0
         p["stake"] = new_stake
+        p["units"] = round(new_stake / unit_val, 1) if new_stake > 0 else 0.0
+        p["wager_pct"] = round((new_stake / settled_bankroll) * 100.0, 1) if settled_bankroll > 0 else 0.0
         if old_stake > 0 and abs(new_stake - old_stake) >= 0.01:
             p["original_stake"] = old_stake
             p["stake_adjusted"] = True
         else:
             p["stake_adjusted"] = False
-
-        m_stakes = list(re.finditer(r"\$(\d+(?:\.\d{1,2})?)", title))
-        if m_stakes:
-            last_m = m_stakes[-1]
-            p["title"] = title[: last_m.start()] + f"${new_stake:.2f}" + title[last_m.end() :]
+        if new_stake > 0:
+            allocated_intervals.append({"start": item["s"], "end": item["e"], "stake": new_stake})
+            title = str(p.get("title", ""))
+            m_stakes = list(re.finditer(r"\$(\d+(?:\.\d{1,2})?)", title))
+            if m_stakes:
+                last_m = m_stakes[-1]
+                p["title"] = title[: last_m.start()] + f"${new_stake:.2f}" + title[last_m.end() :]
 
     if curated_raw:
         updated_raw = re.sub(
@@ -2051,28 +2103,71 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       return core.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
     }
 
-    function adjustCuratedPlaysClientSide(data) {
-      if (!data || !Array.isArray(data.curated_plays) || data.curated_plays.length === 0) return;
-      const settledBr = Number(data.bankroll || 0);
-      if (settledBr <= 0) return;
-      const pendingList = data.pending_tickets || [];
-      const todayList = (data.today_stats && data.today_stats.tickets) || [];
-      const raw = String(data.curated_raw || "");
-      const brMatch = raw.match(/Bankroll:\s*\$(\d+(?:\.\d{1,2})?)/i);
-      const feedBr = brMatch ? parseFloat(brMatch[1]) : settledBr;
+    function peakOverlapRiskMs(intervals, s, e) {
+      const pts = [s];
+      for (const iv of intervals) {
+        if (iv.start < e && iv.end > s && iv.start >= s && iv.start < e) {
+          pts.push(iv.start);
+        }
+      }
+      let best = 0;
+      for (const t of pts) {
+        let sum = 0;
+        for (const iv of intervals) {
+          if (iv.start <= t && t < iv.end) sum += iv.stake;
+        }
+        if (sum > best) best = sum;
+      }
+      return best;
+    }
 
-      const winCounts = {};
-      data.curated_plays.forEach(p => {
-        const t = String(p.title || "");
-        const isPass = t.includes("⛔") || /\bPASS\b/.test(t);
-        if (!isPass && p.game_time) {
-          winCounts[p.game_time] = (winCounts[p.game_time] || 0) + 1;
+    function computeSmartCuratedWagers(curatedPlays, pendingTickets, data) {
+      if (!Array.isArray(curatedPlays) || curatedPlays.length === 0) return;
+      const settledBr = Number((data && data.bankroll) || 0);
+      if (settledBr <= 0) return;
+
+      const pendList = pendingTickets || (data && data.pending_tickets) || [];
+      const todayList = (data && data.today_stats && data.today_stats.tickets) || [];
+      const pendingTot = pendList.reduce((acc, t) => acc + Number(t.stake || 0), 0);
+      const availCash = Math.max(0, Math.round((settledBr - pendingTot) * 100) / 100);
+      const eqPts = (data && data.equity_curve) || [];
+      const peakBr = Math.max(100, settledBr, ...eqPts.map(pt => Number(pt.bankroll || 0)));
+      const isDrawdown = (settledBr < 60) || (peakBr > 0 && ((peakBr - settledBr) / peakBr) > 0.25);
+      const maxSinglePct = isDrawdown ? 0.25 : 0.35;
+      const maxConcPct = isDrawdown ? 0.60 : 0.80;
+      const baseUnit = Math.max(0.01, settledBr * 0.05);
+      const dateStr = (data && (data.curated_date || data.today)) || "";
+
+      // Build active pending intervals & anticipated blowout win pool (used for suggested wagers ONLY — never alters displayed bankroll)
+      const baseIntervals = [];
+      const anticipatedWins = [];
+      pendList.forEach(t => {
+        const st = Number(t.stake || 0);
+        if (st <= 0) return;
+        const durMs = getSportDurationMinutes(t.sport, t.selections) * 60000;
+        const pEnd = t.__estFinishMs || estimateTicketFinishMs(t);
+        const pStart = t.__startMs || (pEnd - durMs);
+        const isFinal = t.__espnState === "post";
+        if (!isFinal) {
+          baseIntervals.push({ start: pStart, end: pEnd, stake: st, label: t.bet_id || "Pending" });
+        }
+        if (t.__anticipatedWin) {
+          const payout = Number(t.payout || 0);
+          const profit = Math.max(0, payout - st);
+          anticipatedWins.push({
+            bet_id: t.bet_id,
+            endMs: isFinal ? 0 : pEnd,
+            payout: payout,
+            profit: profit,
+            reason: t.__anticipatedReason || "Lock",
+          });
         }
       });
 
-      data.curated_plays.forEach(p => {
+      const remaining = [];
+      curatedPlays.forEach(p => {
         const title = String(p.title || "");
-        const isPass = title.includes("⛔") || /\bPASS\b/.test(title);
+        const isPass = Boolean(p.is_pass) || title.includes("⛔") || /\bPASS\b/.test(title) || /NO GOOD PLAY/i.test(title);
         if (isPass) {
           p.status = "pass";
           return;
@@ -2080,36 +2175,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const fb = parseTitleFallback(title);
         const core = extractSelectionCore(p.selection || fb.selection || title);
         const matchPend = (core && core.length >= 3)
-          ? pendingList.find(t => String(t.selections || "").toLowerCase().includes(core))
+          ? pendList.find(t => String(t.selections || "").toLowerCase().includes(core))
           : null;
         const matchSettled = (!matchPend && core && core.length >= 3)
           ? todayList.find(t => String(t.selections || "").toLowerCase().includes(core))
           : null;
 
-        let wagerPct = p.wager_pct != null ? Number(p.wager_pct) : null;
-        if (!wagerPct) {
-          const pm = title.match(/(\d{1,2}(?:\.\d+)?)\s*%\s*(?:of\s+(?:Resulting\s+)?)?(?:BR|Bankroll)/i);
-          if (pm) {
-            wagerPct = parseFloat(pm[1]);
-          } else if (p.confidence_pct != null) {
-            const cp = Number(p.confidence_pct);
-            const dual = (winCounts[p.game_time] || 1) >= 2;
-            if (cp >= 88) wagerPct = dual ? 35 : 50;
-            else if (cp >= 78) wagerPct = dual ? 25 : 35;
-            else if (cp >= 68) wagerPct = dual ? 18 : 20;
-          } else if (feedBr > 0 && p.stake > 0) {
-            wagerPct = Math.round((Number(p.stake) / feedBr) * 1000) / 10;
-          }
-        }
-        if (wagerPct) p.wager_pct = wagerPct;
-
         if (matchPend) {
           p.status = "pending";
           p.pending_bet_id = matchPend.bet_id;
           p.stake = Number(matchPend.stake || p.stake || 0);
-          if (wagerPct) {
-            p.recalculated_stake = Math.round((settledBr >= 2 ? Math.max(2, settledBr * (wagerPct / 100)) : settledBr) * 100) / 100;
-          }
+          p.units = Math.round((p.stake / baseUnit) * 10) / 10;
           return;
         }
         if (matchSettled) {
@@ -2121,17 +2197,101 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         p.status = "remaining";
-        if (!wagerPct || wagerPct <= 0) return;
+        if (isCuratedPlayStarted(p, dateStr)) return;
 
-        const baseOldStake = p.original_stake != null ? Number(p.original_stake) : Number(p.stake || fb.stake || 0);
-        const newStake = Math.round((settledBr >= 2 ? Math.max(2, settledBr * (wagerPct / 100)) : settledBr) * 100) / 100;
-        if (baseOldStake > 0 && Math.abs(newStake - baseOldStake) >= 0.01) {
-          p.original_stake = baseOldStake;
-          p.stake_adjusted = true;
+        const oddsVal = Number(p.odds != null ? p.odds : (fb.odds != null ? fb.odds : -110));
+        const b = oddsVal > 0 ? oddsVal / 100 : 100 / Math.max(1, Math.abs(oddsVal));
+        const cp = Number(p.confidence_pct != null ? p.confidence_pct : 74);
+        const pWin = 0.555 + (Math.max(0, Math.min(99, cp) - 68) / 31) * 0.13;
+        const kellyF = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
+        const sMs = estimateCuratedStartMs(p, dateStr);
+        const eMs = sMs + getSportDurationMinutes(p.sport || fb.sport, p.selection || title) * 60000;
+
+        // Anticipate locked-in blowout payouts ONLY for games finishing before this game's tipoff (+15m buffer)
+        const relAnt = anticipatedWins.filter(aw => aw.endMs <= sMs + 15 * 60000);
+        const antProfit = relAnt.reduce((acc, a) => acc + a.profit, 0);
+        const antPayout = relAnt.reduce((acc, a) => acc + a.payout, 0);
+        const effBr = settledBr + antProfit;
+        const effMaxSingle = effBr * maxSinglePct;
+        const effMaxConc = effBr * maxConcPct;
+
+        let rawTarget = Math.min(effMaxSingle, effBr * kellyF);
+        let goalBrake = false;
+        if (effBr < 1000 && b > 0) {
+          const toGoal = (1000 - effBr) / b;
+          if (rawTarget > toGoal) {
+            rawTarget = toGoal;
+            goalBrake = true;
+          }
         }
-        p.stake = newStake;
-        p.title = title.replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, "$" + newStake.toFixed(2));
+
+        remaining.push({
+          p, title, fb, oddsVal, b, cp, pWin, kellyF, sMs, eMs,
+          effBr, effMaxSingle, effMaxConc, rawTarget, goalBrake,
+          antIds: relAnt.map(a => a.bet_id),
+          antProfit: Math.round(antProfit * 100) / 100,
+          antPayout: Math.round(antPayout * 100) / 100,
+        });
       });
+
+      // Priority-ordered allocation: highest Kelly edge reserves concurrent room first (Lookahead Cash Reservation)
+      const allocated = baseIntervals.slice();
+      const sortedPriority = remaining.slice().sort((a, b) => (b.kellyF - a.kellyF) || (a.sMs - b.sMs));
+      for (const it of sortedPriority) {
+        const pk = peakOverlapRiskMs(allocated, it.sMs, it.eMs);
+        const room = Math.max(0, it.effMaxConc - pk);
+        const rawAllowed = Math.min(it.rawTarget, it.effMaxSingle, room);
+        const finalStake = rawAllowed >= 2.0 ? Math.round(rawAllowed * 2) / 2 : 0;
+        it.finalStake = finalStake;
+        if (finalStake > 0) {
+          allocated.push({ start: it.sMs, end: it.eMs, stake: finalStake, label: it.p.__key || "play" });
+        }
+      }
+
+      // Post-pass to compute exact final peak concurrent exposure & breakdown for every card
+      for (const it of remaining) {
+        const p = it.p;
+        const finalStake = it.finalStake || 0;
+        const peakAfter = peakOverlapRiskMs(allocated, it.sMs, it.eMs);
+        const overlapCount = allocated.filter(iv => iv.start < it.eMs && iv.end > it.sMs && iv.label !== (p.__key || "play")).length;
+        const units = finalStake > 0 ? Math.round((finalStake / baseUnit) * 10) / 10 : 0;
+        const expCash = availCash + it.antPayout;
+        let cashNowNote = "";
+        if (finalStake > availCash + 0.01) {
+          if (it.antPayout > 0 && finalStake <= expCash + 0.01) {
+            cashNowNote = `Ready after ${it.antIds.join(", ")} settles (${fmtMoney(availCash)} free now)`;
+          } else {
+            cashNowNote = `${fmtMoney(availCash)} cash free now (rest frees as earlier games settle)`;
+          }
+        }
+        p.stake = finalStake;
+        p.units = units;
+        p.wager_pct = Math.round((finalStake / it.effBr) * 1000) / 10;
+        p.stake_adjusted = false;
+        p.__wagerBreakdown = {
+          unitSize: Math.round(baseUnit * 100) / 100,
+          units,
+          effBr: Math.round(it.effBr * 100) / 100,
+          probPct: Math.round(it.pWin * 1000) / 10,
+          kellyPct: Math.round(it.kellyF * 1000) / 10,
+          oddsVal: it.oddsVal,
+          peakConcPct: Math.round((peakAfter / it.effBr) * 1000) / 10,
+          maxConcPct: Math.round(maxConcPct * 100),
+          maxSinglePct: Math.round(maxSinglePct * 100),
+          overlapCount,
+          isDrawdown,
+          goalBrake: it.goalBrake,
+          antIds: it.antIds,
+          antProfit: it.antProfit,
+          cashNowNote,
+          cappedByOverlap: finalStake === 0 && it.rawTarget >= 2.0,
+        };
+      }
+    }
+
+    function adjustCuratedPlaysClientSide(data) {
+      if (!data || !Array.isArray(data.curated_plays)) return;
+      computeSmartCuratedWagers(data.curated_plays, data.pending_tickets, data);
     }
 
     function openLogModal(prefillPlay) {
@@ -2426,11 +2586,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       updateSyncPill(Boolean(data.live_mode));
       document.getElementById("updated-at").textContent = "Last synced: " + data.updated_at;
 
-      // 1. Available Cash & Bankroll (Top — Available Cash primary, Live Bankroll in sub-row)
+      // 1. Available Cash & Bankroll (Top — Available Cash primary, Live Bankroll + 1U in sub-row)
+      const unitSz = Math.round((Number(data.bankroll || 0) * 0.05) * 100) / 100;
       document.getElementById("bankroll-val").textContent = fmtMoney(data.available_cash);
       document.getElementById("bankroll-sub").innerHTML =
         `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
-        `<span>Live Bankroll: <span class="pos">${fmtMoney(data.bankroll)}</span></span>`;
+        `<span>Live Bankroll: <span class="pos">${fmtMoney(data.bankroll)}</span></span>` +
+        `<span>1U (5%): <span style="color:#93c5fd;">${fmtMoney(unitSz)}</span></span>`;
 
       // Normalize Today & Yesterday tickets with explicit date field
       const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
@@ -2543,18 +2705,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       document.getElementById("today-sub").innerHTML =
         `<span>P/L: <span class="${tCls}">${ts.net_pl >= 0 ? "+" : ""}${fmtMoney(ts.net_pl)}</span></span>`;
 
-      // 3. Today's Curated Bets (sorted earliest-to-latest start time, clean structured cards)
-      document.getElementById("curated-date").textContent = data.curated_date;
-      const plays = (data.curated_plays || []).map((p, origIdx) => {
-        const copy = { ...p, __origIdx: origIdx };
-        copy.__key = extractSelectionCore(copy.selection || copy.title || "") || `play-${origIdx}`;
-        return copy;
-      });
-      sortCuratedByStartTime(plays, data.curated_date || data.today);
-      document.getElementById("curated-count").textContent = `${plays.length} Play${plays.length === 1 ? "" : "s"}`;
-      renderCuratedList(plays, data);
-
-      // 2. Active Pending Tickets (sorted by earliest finish time + live ESPN clock refinement)
+      // 2. Prepare Active Pending Tickets (sorted by earliest finish time + live ESPN clock refinement)
       const pend = (data.pending_tickets || []).map((t, origIdx) => {
         const copy = { ...t, __origIdx: origIdx };
         copy.__finishRank = 2;
@@ -2564,6 +2715,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       sortPendingByFinish(pend);
       document.getElementById("pending-count").textContent = `${pend.length} Active (${fmtMoney(data.pending_total)})`;
       renderPendingList(pend);
+
+      // 3. Today's Curated Bets (sorted earliest-to-latest start time, live Kelly + 80% overlap wager sizing)
+      document.getElementById("curated-date").textContent = data.curated_date;
+      const plays = (data.curated_plays || []).map((p, origIdx) => {
+        const copy = { ...p, __origIdx: origIdx };
+        copy.__key = extractSelectionCore(copy.selection || copy.title || "") || `play-${origIdx}`;
+        return copy;
+      });
+      sortCuratedByStartTime(plays, data.curated_date || data.today);
+      computeSmartCuratedWagers(plays, pend, data);
+      renderCuratedList(plays, data);
+
       if (pend.length > 0 || plays.length > 0) {
         fetchLiveScoresForPending(pend, plays);
       }
@@ -2857,12 +3020,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           const total = aPts + hPts;
           const halfOver = is1H && (state === "post" || detailLow.includes("half") || period > (sp === "NCAAM" ? 1 : 2));
           if (state === "post" || halfOver) {
-            if (total === line) return { status: "push", note: `Push (${total})` };
+            if (total === line) return { status: "push", note: `Push (${total})`, coverMargin: 0, isTotal: true, isOver, isFinal: true };
             const won = isOver ? total > line : total < line;
-            return { status: won ? "win" : "loss", note: `${total} vs ${isOver ? "O" : "U"}${line}` };
+            return { status: won ? "win" : "loss", note: `${total} vs ${isOver ? "O" : "U"}${line}`, coverMargin: isOver ? (total - line) : (line - total), isTotal: true, isOver, isFinal: true };
           }
-          if (isOver && total > line) return { status: "win", note: `Cashed (${total})` };
-          if (!isOver && total > line) return { status: "loss", note: `Over (${total})` };
+          if (isOver && total > line) return { status: "win", note: `Cashed (${total})`, coverMargin: total - line, isCashedOver: true, isTotal: true, isOver: true };
+          if (!isOver && total > line) return { status: "loss", note: `Over (${total})`, coverMargin: line - total, isTotal: true, isOver: false };
 
           // Live pace projection
           let elapsedFrac = 0;
@@ -2883,9 +3046,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           }
           if (elapsedFrac >= 0.05) {
             const proj = total / elapsedFrac;
-            if (Math.abs(proj - line) < 0.05) return { status: "push", note: `Pace ${proj.toFixed(1)}` };
+            const rawMargin = isOver ? (total - line) : (line - total);
+            if (Math.abs(proj - line) < 0.05) return { status: "push", note: `Pace ${proj.toFixed(1)}`, coverMargin: rawMargin, isTotal: true, isOver };
             const trendingWin = isOver ? proj > line : proj < line;
-            return { status: trendingWin ? "win" : "loss", note: `Pace ${proj.toFixed(1)}` };
+            return { status: trendingWin ? "win" : "loss", note: `Pace ${proj.toFixed(1)}`, coverMargin: rawMargin, isTotal: true, isOver };
           }
           return null;
         }
@@ -2906,9 +3070,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const pickedScore = matched.picked === away ? aPts : hPts;
             const oppScore = matched.opp === away ? aPts : hPts;
             const coverMargin = pickedScore - oppScore + spreadVal;
-            if (coverMargin > 0) return { status: "win", note: `Covering (${fmtSigned(coverMargin)})` };
-            if (coverMargin < 0) return { status: "loss", note: `Trailing (${fmtSigned(coverMargin)})` };
-            return { status: "push", note: "On number" };
+            if (coverMargin > 0) return { status: "win", note: `Covering (${fmtSigned(coverMargin)})`, coverMargin };
+            if (coverMargin < 0) return { status: "loss", note: `Trailing (${fmtSigned(coverMargin)})`, coverMargin };
+            return { status: "push", note: "On number", coverMargin: 0 };
           }
         }
       }
@@ -2923,15 +3087,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const pickedScore = matchedMl.picked === away ? aPts : hPts;
         const oppScore = matchedMl.opp === away ? aPts : hPts;
         const margin = pickedScore - oppScore;
-        if (margin > 0) return { status: "win", note: `Ahead (+${margin})` };
-        if (margin < 0) return { status: "loss", note: `Behind (${margin})` };
+        if (margin > 0) return { status: "win", note: `Ahead (+${margin})`, coverMargin: margin };
+        if (margin < 0) return { status: "loss", note: `Behind (${margin})`, coverMargin: margin };
         if (state === "post") {
           const isSoccer = (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER" || sp === "PREMIER LEAGUE");
           return isSoccer
-            ? { status: "loss", note: "Tied (Final)" }
-            : { status: "push", note: "Tied (Push)" };
+            ? { status: "loss", note: "Tied (Final)", coverMargin: 0 }
+            : { status: "push", note: "Tied (Push)", coverMargin: 0 };
         }
-        return { status: "push", note: "Tied" };
+        return { status: "push", note: "Tied", coverMargin: 0 };
       }
 
       return null;
@@ -2957,6 +3121,78 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
       }
       return false;
+    }
+
+    function evaluateBlowoutAnticipation(match, ticket, trend) {
+      if (!match || !trend || trend.status !== "win") return { anticipated: false, reason: "" };
+      if (isTicketFinalForSettlement(match, ticket)) {
+        return { anticipated: true, reason: "Final (awaiting settle)" };
+      }
+      if (trend.isCashedOver) {
+        return { anticipated: true, reason: "Over already cashed" };
+      }
+      const st = match.status?.type || {};
+      if ((st.state || "") !== "in") return { anticipated: false, reason: "" };
+
+      const coverMargin = Number(trend.coverMargin);
+      if (isNaN(coverMargin) || coverMargin <= 0) return { anticipated: false, reason: "" };
+
+      const sp = normalizeSport(ticket && ticket.sport).toUpperCase();
+      const sel = String((ticket && ticket.selections) || "");
+      const is1H = /\b(?:1h|1st\s*half|first\s*half)\b/i.test(sel);
+      const period = Number(match.status?.period || 1);
+      const clockSec = Number(match.status?.clock || 0);
+      const detailLow = String(st.shortDetail || st.detail || "").toLowerCase();
+      const isUnder = Boolean(trend.isTotal && !trend.isOver);
+      const marginTxt = `+${Math.round(coverMargin * 10) / 10}`;
+
+      if (sp === "EPL" || sp === "UCL" || sp === "LALIGA" || sp === "SOCCER" || sp === "PREMIER LEAGUE") {
+        const minM = detailLow.match(/(\d{1,3})/);
+        const elapsedMin = minM ? parseInt(minM[1], 10) : Math.floor(clockSec / 60);
+        const targetMin = is1H ? 45 : 90;
+        const remMin = Math.max(0, targetMin - elapsedMin);
+        const hit = (remMin <= 12 && coverMargin >= 2.5) || (remMin <= 6 && coverMargin >= 1.5);
+        return hit ? { anticipated: true, reason: `Blowout (${marginTxt}, ${remMin}m left)` } : { anticipated: false, reason: "" };
+      }
+
+      if (sp === "MLB") {
+        if (is1H) return { anticipated: false, reason: "" };
+        const hit = (period >= 9 && coverMargin >= 4) || (period >= 8 && coverMargin >= 6);
+        return hit ? { anticipated: true, reason: `Blowout (${marginTxt}, Inn ${period})` } : { anticipated: false, reason: "" };
+      }
+
+      let regP = 4, pLen = 900;
+      if (sp === "NCAAM") { regP = 2; pLen = 1200; }
+      else if (sp === "NBA") { regP = 4; pLen = 720; }
+      else if (sp === "NHL") { regP = 3; pLen = 1200; }
+      const targetP = is1H ? Math.ceil(regP / 2) : regP;
+      const remSec = period <= targetP
+        ? Math.max(0, targetP - period) * pLen + Math.max(0, clockSec)
+        : Math.max(0, clockSec);
+      const remMin = remSec / 60;
+
+      let hit = false;
+      if (sp === "NBA") {
+        hit = isUnder
+          ? ((remMin <= 5 && coverMargin >= 24) || (remMin <= 3 && coverMargin >= 18) || (remMin <= 1.5 && coverMargin >= 12))
+          : ((remMin <= 5 && coverMargin >= 18) || (remMin <= 3 && coverMargin >= 14) || (remMin <= 1.5 && coverMargin >= 10));
+      } else if (sp === "NCAAM") {
+        hit = isUnder
+          ? ((remMin <= 5 && coverMargin >= 22) || (remMin <= 3 && coverMargin >= 16) || (remMin <= 1.5 && coverMargin >= 11))
+          : ((remMin <= 5 && coverMargin >= 16) || (remMin <= 3 && coverMargin >= 12) || (remMin <= 1.5 && coverMargin >= 9));
+      } else if (sp === "NFL" || sp === "CFB" || sp === "NCAAF") {
+        hit = isUnder
+          ? ((remMin <= 4 && coverMargin >= 17) || (remMin <= 2 && coverMargin >= 11))
+          : ((remMin <= 6 && coverMargin >= 17) || (remMin <= 3 && coverMargin >= 14) || (remMin <= 1.5 && coverMargin >= 10));
+      } else if (sp === "NHL") {
+        hit = isUnder
+          ? ((remMin <= 4 && coverMargin >= 3.5) || (remMin <= 2 && coverMargin >= 2.5))
+          : ((remMin <= 6 && coverMargin >= 3.5) || (remMin <= 3 && coverMargin >= 2.5) || (remMin <= 1.5 && coverMargin >= 1.5));
+      }
+
+      return hit
+        ? { anticipated: true, reason: `Blowout (${marginTxt}, ${remMin.toFixed(1)}m left)` }
+        : { anticipated: false, reason: "" };
     }
 
     function renderPendingList(pend) {
@@ -3153,6 +3389,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (mySeq !== pendingScoreSeq) return;
 
       (pendingTickets || []).forEach(t => {
+        t.__anticipatedWin = false;
+        t.__anticipatedReason = "";
         const sp = normalizeSport(t.sport).toUpperCase();
         const match = findEspnMatchForText(eventsBySport[sp], (t.selections || "").toLowerCase());
         if (!match) return;
@@ -3162,16 +3400,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const state = match.status?.type?.state || "";
         const detail = match.status?.type?.shortDetail || "";
         if (!away || !home) return;
+        t.__espnState = state;
+        if (match.date) {
+          const sMs = Date.parse(match.date);
+          if (!isNaN(sMs)) t.__startMs = sMs;
+        }
         const aAbbr = away.team?.abbreviation || away.team?.shortDisplayName || "";
         const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
         const trend = evaluateLiveTicketTrend(match, t);
         t.__trend = trend ? trend.status : "";
+        const ant = evaluateBlowoutAnticipation(match, t, trend);
+        t.__anticipatedWin = ant.anticipated;
+        t.__anticipatedReason = ant.reason;
         const trendSuffix = trend && trend.note ? ` • ${trend.note}` : "";
+        const antSuffix = (ant.anticipated && state === "in") ? " • ⚡ Projected Win" : "";
         if (state === "in") {
           t.__liveColor = trend
             ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
             : "#10b981";
-          t.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}`;
+          t.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}${antSuffix}`;
         } else if (state === "post") {
           t.__liveColor = trend
             ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
@@ -3240,6 +3487,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           }
         });
         sortCuratedByStartTime(curatedPlays, currentData && (currentData.curated_date || currentData.today));
+        computeSmartCuratedWagers(curatedPlays, pendingTickets, currentData || {});
         renderCuratedList(curatedPlays, currentData || {});
       }
     }
@@ -3308,9 +3556,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .trim();
 
       const wagerVal = Number(play.stake || fb.stake || 0);
-      const wagerText = wagerVal > 0 ? fmtMoney(wagerVal) : "";
+      const brRef = Number((play.__wagerBreakdown && play.__wagerBreakdown.unitSize) ? play.__wagerBreakdown.unitSize * 20 : ((currentData && currentData.bankroll) || 0));
+      const unitsVal = (play.units != null && Number(play.units) > 0)
+        ? Number(play.units)
+        : (wagerVal > 0 && brRef > 0 ? Math.round((wagerVal / (brRef * 0.05)) * 10) / 10 : 0);
+      const wagerText = wagerVal > 0
+        ? (unitsVal > 0 ? `${fmtMoney(wagerVal)} (${unitsVal.toFixed(1)}U)` : fmtMoney(wagerVal))
+        : "";
 
-      return { startTime, sport, matchup, betText, wagerText };
+      return { startTime, sport, matchup, betText, wagerText, unitsVal };
     }
 
     function estimateCuratedStartMs(play, dateStr) {
@@ -3376,6 +3630,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const existingSettled = (isPass || existingPend) ? null : findMatchingSettledToday(p);
         const cp = isPass ? null : p.confidence_pct;
         const dParts = parseCuratedDisplayParts(p);
+        const wb = p.__wagerBreakdown || null;
         const drawerKey = p.__key || String(globalIdx);
         const isOpen = openDrawers.has(drawerKey);
 
@@ -3423,6 +3678,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           ? p.game_line.split("|").map(seg => `<div style="margin-bottom:3px;">• ${esc(seg.trim())}</div>`).join("")
           : `<div style="margin-bottom:3px;">• ${esc(dParts.matchup || dParts.betText)}</div>`;
 
+        let wagerBreakdownHtml = "";
+        if (wb && !existingSettled) {
+          const oddsTxt = wb.oddsVal > 0 ? `+${wb.oddsVal}` : `${wb.oddsVal}`;
+          const overlapLabel = wb.overlapCount > 0 ? `${wb.overlapCount} overlapping game${wb.overlapCount === 1 ? "" : "s"}` : "solo window";
+          const extraLines = [];
+          if (wb.antIds && wb.antIds.length > 0) {
+            extraLines.push(`<div style="color:#34d399;margin-top:4px;">⚡ Anticipates ${esc(wb.antIds.join(", "))} win (+${fmtMoney(wb.antProfit)} projected profit → ${fmtMoney(wb.effBr)} sizing base; displayed bankroll stays untouched until final).</div>`);
+          }
+          if (wb.cashNowNote) {
+            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">💵 ${esc(wb.cashNowNote)}</div>`);
+          }
+          if (wb.isDrawdown) {
+            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">🛡️ Drawdown Brake active: caps tightened to ${wb.maxSinglePct}% single / ${wb.maxConcPct}% concurrent.</div>`);
+          }
+          if (wb.goalBrake) {
+            extraLines.push(`<div style="color:#34d399;margin-top:4px;">🎯 $1,000 Goal-Lock Brake: stake trimmed so a win crosses $1,000 cleanly without extra risk.</div>`);
+          }
+          wagerBreakdownHtml = `
+            <div style="margin-top:12px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
+              <div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">💰 Wager Sizing Breakdown</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                <span class="pill pill-blue" style="font-size:0.74rem;">1U = ${fmtMoney(wb.unitSize)} (5% BR)</span>
+                <span class="pill pill-blue" style="font-size:0.74rem;">Win Prob: ${wb.probPct}% @ ${esc(oddsTxt)}</span>
+                <span class="pill pill-blue" style="font-size:0.74rem;">Kelly: ${wb.kellyPct}% (cap ${wb.maxSinglePct}%)</span>
+                <span class="pill ${wb.peakConcPct >= wb.maxConcPct - 2 ? "pill-amber" : "pill-green"}" style="font-size:0.74rem;">Concurrent: ${wb.peakConcPct}% / ${wb.maxConcPct}% (${esc(overlapLabel)})</span>
+              </div>
+              ${extraLines.join("")}
+            </div>
+          `;
+        }
+
         const drawerHtml = isPass ? "" : `
           <div id="curated-detail-${domId}" style="display:${isOpen ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
             <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">🏟️ Game &amp; Line Info</div>
@@ -3431,18 +3717,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </div>
             <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">🧮 How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
             ${pillarChipsHtml}
+            ${wagerBreakdownHtml}
           </div>
         `;
 
         let actionHtml = "";
         if (!isPass) {
           if (existingPend) {
+            const pendUnit = (data && data.bankroll > 0) ? ` • ${(Number(existingPend.stake || 0) / (data.bankroll * 0.05)).toFixed(1)}U` : "";
             const recalcNote = (p.recalculated_stake && Math.abs(p.recalculated_stake - existingPend.stake) >= 0.01)
               ? `<span class="pill pill-blue">${esc(p.wager_pct || "")}% of ${fmtMoney(data.bankroll)} BR = ${fmtMoney(p.recalculated_stake)}</span>`
               : "";
             actionHtml = `
               <div class="bet-actions" onclick="event.stopPropagation()">
-                <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)})</span>
+                <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)}${pendUnit})</span>
                 ${recalcNote}
                 <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Again</button>
               </div>`;
@@ -3455,14 +3743,36 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <span class="pill ${resCls}">🏁 Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
               </div>`;
           } else {
-            const adjBadge = (p.stake_adjusted && p.original_stake)
-              ? `<span class="pill pill-amber">🔄 Adjusted for ${fmtMoney(data.bankroll)} BR (was ${fmtMoney(p.original_stake)})</span>`
-              : "";
-            actionHtml = `
-              <div class="bet-actions" onclick="event.stopPropagation()">
-                <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Bet (${fmtMoney(p.stake)})</button>
-                ${adjBadge}
-              </div>`;
+            const statusPills = [];
+            if (wb && wb.antIds && wb.antIds.length > 0) {
+              statusPills.push(`<span class="pill pill-green">⚡ Anticipates ${esc(wb.antIds.join(", "))} (+${fmtMoney(wb.antProfit)})</span>`);
+            }
+            if (wb && wb.cashNowNote) {
+              statusPills.push(`<span class="pill pill-amber">💵 ${esc(wb.cashNowNote)}</span>`);
+            }
+            if (wb && wb.isDrawdown) {
+              statusPills.push(`<span class="pill pill-amber">🛡️ Drawdown Brake (${wb.maxSinglePct}%/${wb.maxConcPct}%)</span>`);
+            }
+            if (wb && wb.goalBrake) {
+              statusPills.push(`<span class="pill pill-green">🎯 $1k Goal-Lock</span>`);
+            }
+            if (wb && wb.cappedByOverlap) {
+              actionHtml = `
+                <div class="bet-actions" onclick="event.stopPropagation()">
+                  <span class="pill pill-amber">⏸️ Concurrent ${wb.maxConcPct}% Cap Reached</span>
+                  ${statusPills.join("")}
+                  <button class="btn-mini" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Manually</button>
+                </div>`;
+            } else {
+              const btnLabel = dParts.unitsVal > 0
+                ? `+ Log Bet (${fmtMoney(p.stake)} • ${dParts.unitsVal.toFixed(1)}U)`
+                : `+ Log Bet (${fmtMoney(p.stake)})`;
+              actionHtml = `
+                <div class="bet-actions" onclick="event.stopPropagation()">
+                  <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">${btnLabel}</button>
+                  ${statusPills.join("")}
+                </div>`;
+            }
           }
         }
 
