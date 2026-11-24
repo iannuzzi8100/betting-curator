@@ -423,18 +423,18 @@ def fetch_dashboard_data():
     for cp_item in curated_plays:
         if cp_item.get("is_pass"):
             cp_item["confidence_pct"] = None
-            cp_item["confidence_tier"] = "⛔ PASS WINDOW"
+            cp_item["confidence_tier"] = "PASS WINDOW"
             continue
         if cp_item["confidence_pct"] is not None and not cp_item["confidence_tier"]:
             sc = cp_item["confidence_pct"]
             if sc >= 88:
-                cp_item["confidence_tier"] = "🔥 TIER 1: MAX HAMMER"
+                cp_item["confidence_tier"] = "TIER 1: MAX HAMMER"
             elif sc >= 78:
-                cp_item["confidence_tier"] = "💎 TIER 2: STRONG CONVICTION"
+                cp_item["confidence_tier"] = "TIER 2: STRONG CONVICTION"
             elif sc >= 68:
-                cp_item["confidence_tier"] = "✅ TIER 3: SOLID EDGE"
+                cp_item["confidence_tier"] = "TIER 3: SOLID EDGE"
             else:
-                cp_item["confidence_tier"] = "⛔ TIER 4: PASS"
+                cp_item["confidence_tier"] = "TIER 4: PASS"
 
         has_generic_window = bool(re.match(r"^\[Window\s*\d+:", cp_item["title"], flags=re.I))
         if (not cp_item["game_line"] or has_generic_window) and intel_quant_lines:
@@ -1197,14 +1197,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <header>
       <div class="title-group">
         <h1>
-          🎯 Betting Curator Terminal
+          Betting Curator Terminal
           <span class="pill pill-amber" id="sync-mode-pill">STATIC SNAPSHOT</span>
         </h1>
         <p id="updated-at">Loading live ledger...</p>
       </div>
       <div class="header-actions">
-        <button class="btn-secondary" onclick="openSettingsModal()">⚙️ Live Sync</button>
-        <button class="settle-btn" id="settle-btn" onclick="triggerSettleWorkflow()">🏁 Settle Refresh</button>
+        <button class="btn-secondary" onclick="openSettingsModal()">Live Sync</button>
+        <button class="settle-btn" id="settle-btn" onclick="triggerSettleWorkflow()">Settle Refresh</button>
         <button class="refresh-btn" id="refresh-btn" onclick="loadData()">↻ Refresh Live</button>
       </div>
     </header>
@@ -1212,7 +1212,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="stack">
       <!-- 1. AVAILABLE CASH & BANKROLL AT THE TOP -->
       <div class="card">
-        <div class="card-label">💵 Available Cash &amp; Exposure</div>
+        <div class="card-label">Available Cash &amp; Exposure</div>
         <div class="big-num" id="bankroll-val">--</div>
         <div class="sub-row" id="bankroll-sub"></div>
       </div>
@@ -1220,10 +1220,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <!-- 2. ACTIVE PENDING TICKETS -->
       <div class="card">
         <div class="section-title">
-          <span>⏳ Active Pending Tickets</span>
+          <span>Active Pending Tickets</span>
           <div class="section-right">
             <span class="pill pill-amber" id="pending-count">0 Active</span>
-            <button class="btn-mini" id="settle-mini-btn" onclick="triggerSettleWorkflow()" style="border-color:rgba(16,185,129,0.45);color:#34d399;">🏁 Settle Refresh</button>
+            <button class="btn-mini" id="settle-mini-btn" onclick="triggerSettleWorkflow()" style="border-color:rgba(16,185,129,0.45);color:#34d399;">Settle Refresh</button>
             <button class="btn-green" onclick="openLogModal()">+ Log Bet</button>
           </div>
         </div>
@@ -1233,7 +1233,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <!-- 3. TODAY'S CURATED PICKS (Upcoming Only; Click Title for Started & Full Slate) -->
       <div class="card">
         <div class="section-title" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')" title="Tap to view started &amp; all curated bets">
-          <span>🔥 Today's Curated Bets (<span id="curated-date">--</span>)</span>
+          <span>Today's Curated Bets (<span id="curated-date">--</span>)</span>
           <div class="section-right">
             <span class="pill pill-blue" id="curated-count">0 Upcoming</span>
             <span class="card-tap-hint" id="curated-started-hint" style="margin-left:0;"></span>
@@ -1245,7 +1245,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <!-- 4. COMBINED WIN-LOSS RECORDS BUTTON (OVERALL, THIS WEEK, YESTERDAY, TODAY) -->
       <button type="button" class="card card-btn" onclick="openGradedModal('all')">
         <div class="section-title" style="margin-bottom:4px;">
-          <span>📊 Win / Loss Records &amp; Bet History</span>
+          <span>Win / Loss Records &amp; Bet History</span>
           <span class="card-tap-hint" id="wl-tap-hint">Tap for Bet History by Day &rarr;</span>
         </div>
         <div class="wl-grid">
@@ -1275,7 +1275,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <!-- 5. BANKROLL EQUITY CURVE GRAPH -->
       <div class="card">
         <div class="section-title">
-          <span>📈 Bankroll Equity Curve ($100 Start)</span>
+          <span>Bankroll Equity Curve ($100 Start)</span>
         </div>
         <div class="chart-wrap">
           <canvas id="equityChart"></canvas>
@@ -1288,12 +1288,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="modal-backdrop" id="log-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3 id="log-modal-title">➕ Log Placed Bet</h3>
+        <h3 id="log-modal-title">Log Placed Bet</h3>
         <button class="close-btn" onclick="closeModal('log-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="tab-form-btn" onclick="switchLogTab('form')">⚡ Quick Bet Form</button>
-        <button class="tab-btn" id="tab-shot-btn" onclick="switchLogTab('shot')">📸 Upload Screenshot</button>
+        <button class="tab-btn active" id="tab-form-btn" onclick="switchLogTab('form')">Quick Bet Form</button>
+        <button class="tab-btn" id="tab-shot-btn" onclick="switchLogTab('shot')">Upload Screenshot</button>
       </div>
 
       <div id="log-tab-form" class="form-grid">
@@ -1354,7 +1354,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" onclick="closeModal('log-modal')">Cancel</button>
-          <button class="btn-primary" id="f-submit-btn" onclick="submitLogBet()">✓ Confirm &amp; Log Bet</button>
+          <button class="btn-primary" id="f-submit-btn" onclick="submitLogBet()">Confirm &amp; Log Bet</button>
         </div>
       </div>
 
@@ -1370,7 +1370,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <p class="help-text">Gemini Vision parses the ticket and writes straight to your Google Sheet in ~3 seconds.</p>
         <div class="modal-footer">
           <button class="btn-secondary" onclick="closeModal('log-modal')">Cancel</button>
-          <button class="btn-primary" id="s-submit-btn" onclick="submitScreenshot()">📸 Parse &amp; Log</button>
+          <button class="btn-primary" id="s-submit-btn" onclick="submitScreenshot()">Parse &amp; Log</button>
         </div>
       </div>
     </div>
@@ -1380,7 +1380,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="modal-backdrop" id="edit-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3 id="edit-modal-title">✏️ Manage Ticket</h3>
+        <h3 id="edit-modal-title">Manage Ticket</h3>
         <button class="close-btn" onclick="closeModal('edit-modal')">&times;</button>
       </div>
       <input type="hidden" id="e-row" />
@@ -1425,7 +1425,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="field">
           <label>Quick Cash Out / Void</label>
           <div class="form-row-2">
-            <button class="btn-danger" id="e-void-btn" onclick="submitCashout(true)">🗑️ Full Refund / Void</button>
+            <button class="btn-danger" id="e-void-btn" onclick="submitCashout(true)">Full Refund / Void</button>
             <div style="display:flex;gap:6px;">
               <input id="e-cashout-ret" type="number" step="0.01" placeholder="Return $" />
               <button class="btn-secondary" id="e-partial-btn" onclick="submitCashout(false)" style="white-space:nowrap;">Cash Out</button>
@@ -1440,7 +1440,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="modal-backdrop" id="settings-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3>⚙️ Instant Live Sheet &amp; Settle Sync</h3>
+        <h3>Instant Live Sheet &amp; Settle Sync</h3>
         <button class="close-btn" onclick="closeModal('settings-modal')">&times;</button>
       </div>
       <div class="form-grid">
@@ -1472,14 +1472,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="modal-backdrop" id="graded-modal" onclick="if(event.target===this) closeModal('graded-modal')">
     <div class="modal" style="max-width:560px;">
       <div class="modal-header">
-        <h3 id="graded-modal-title">📊 Bet History by Day</h3>
+        <h3 id="graded-modal-title">Bet History by Day</h3>
         <button class="close-btn" onclick="closeModal('graded-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="graded-tab-all" onclick="openGradedModal('all')">📊 Overall</button>
-        <button class="tab-btn" id="graded-tab-week" onclick="openGradedModal('week')">📆 This Week</button>
-        <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">📅 Yesterday</button>
-        <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">🏁 Today</button>
+        <button class="tab-btn active" id="graded-tab-all" onclick="openGradedModal('all')">Overall</button>
+        <button class="tab-btn" id="graded-tab-week" onclick="openGradedModal('week')">This Week</button>
+        <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">Yesterday</button>
+        <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">Today</button>
       </div>
       <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:12px;"></div>
       <div id="graded-modal-list"></div>
@@ -1493,12 +1493,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="modal-backdrop" id="curated-archive-modal" onclick="if(event.target===this) closeModal('curated-archive-modal')">
     <div class="modal" style="max-width:580px;">
       <div class="modal-header">
-        <h3 id="curated-archive-title">🔥 Started Curated Bets</h3>
+        <h3 id="curated-archive-title">Started Curated Bets</h3>
         <button class="close-btn" onclick="closeModal('curated-archive-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="curated-tab-started" onclick="openCuratedArchiveModal('started')">🔴 Started (<span id="curated-tab-started-cnt">0</span>)</button>
-        <button class="tab-btn" id="curated-tab-all" onclick="openCuratedArchiveModal('all')">📋 All Today (<span id="curated-tab-all-cnt">0</span>)</button>
+        <button class="tab-btn active" id="curated-tab-started" onclick="openCuratedArchiveModal('started')">Started (<span id="curated-tab-started-cnt">0</span>)</button>
+        <button class="tab-btn" id="curated-tab-all" onclick="openCuratedArchiveModal('all')">All Today (<span id="curated-tab-all-cnt">0</span>)</button>
       </div>
       <div class="bet-list" id="curated-archive-list"></div>
       <div class="modal-footer">
@@ -1533,6 +1533,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         openDrawers.delete(key);
         if (caret) caret.textContent = "▾ Tap for details";
       }
+    }
+
+    function stripEmojis(s) {
+      return String(s == null ? "" : s)
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\uFE0F]/gu, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
     }
 
     function esc(s) {
@@ -1613,7 +1620,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       if (!url || !pin) {
         closeModal("settings-modal");
-        showToast("✅ Saved GitHub Token for Settle Workflow dispatch!");
+        showToast("Saved GitHub Token for Settle Workflow dispatch.");
         return;
       }
 
@@ -1635,9 +1642,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         render(j.dashboard);
         updateSyncPill(true);
         closeModal("settings-modal");
-        showToast("✅ Connected to Live Google Sheet!");
+        showToast("Connected to Live Google Sheet.");
       } catch (e) {
-        showToast("❌ " + (e.message || "Could not connect to Apps Script"));
+        showToast("Error: " + (e.message || "Could not connect to Apps Script"));
       } finally {
         btn.disabled = false;
         btn.textContent = "Save & Connect";
@@ -1705,8 +1712,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           const brChanged = startBr !== null && Math.abs(Number(currentData.bankroll) - Number(startBr)) >= 0.01;
           showToast(
             brChanged
-              ? `✅ Settle workflow complete! Bankroll: ${fmtMoney(startBr)} → ${fmtMoney(currentData.bankroll)} (remaining wagers adjusted)`
-              : `✅ Settle workflow complete! Ledger synced (${currentData.updated_at})`,
+              ? `Settle workflow complete! Bankroll: ${fmtMoney(startBr)} → ${fmtMoney(currentData.bankroll)} (remaining wagers adjusted)`
+              : `Settle workflow complete! Ledger synced (${currentData.updated_at})`,
             5200
           );
         } else if (attempts >= 9) {
@@ -1721,11 +1728,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const setBusy = (busy) => {
         if (btn) {
           btn.disabled = busy;
-          btn.textContent = busy ? "⏳ Settling..." : "🏁 Settle Refresh";
+          btn.textContent = busy ? "Settling..." : "Settle Refresh";
         }
         if (miniBtn) {
           miniBtn.disabled = busy;
-          miniBtn.textContent = busy ? "⏳ Settling..." : "🏁 Settle Refresh";
+          miniBtn.textContent = busy ? "Settling..." : "Settle Refresh";
         }
       };
 
@@ -1778,11 +1785,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const adjSummary = adjList.length > 0
               ? ` • Adjusted ${adjList.length} remaining bet${adjList.length === 1 ? "" : "s"} (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`
               : "";
-            showToast(`✅ Settled ${totalSettled} bet${totalSettled === 1 ? "" : "s"}${detailTxt}! BR: ${fmtMoney(startBr)} → ${fmtMoney(endBr)}${adjSummary}`, 6000);
+            showToast(`Settled ${totalSettled} bet${totalSettled === 1 ? "" : "s"}${detailTxt}! BR: ${fmtMoney(startBr)} → ${fmtMoney(endBr)}${adjSummary}`, 6000);
           } else if (adjList.length > 0 && adjList.some(a => a.changed)) {
-            showToast(`🔄 Recalculated remaining wagers for ${fmtMoney(endBr)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
+            showToast(`Recalculated remaining wagers for ${fmtMoney(endBr)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
           } else {
-            showToast(`🏁 Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(endBr)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
+            showToast(`Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(endBr)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
           }
           return;
         }
@@ -1795,9 +1802,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           if (j.dashboard) render(j.dashboard);
           const settledCnt = Number(j.settled_count || 0);
           if (settledCnt > 0) {
-            showToast(`✅ Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(j.prev_bankroll)} → ${fmtMoney(j.new_bankroll)} (remaining wagers adjusted)`, 5200);
+            showToast(`Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(j.prev_bankroll)} → ${fmtMoney(j.new_bankroll)} (remaining wagers adjusted)`, 5200);
           } else {
-            showToast(`🏁 Settlement checked • Remaining wagers synced to ${fmtMoney(j.new_bankroll)} BR`, 4000);
+            showToast(`Settlement checked • Remaining wagers synced to ${fmtMoney(j.new_bankroll)} BR`, 4000);
           }
           return;
         }
@@ -1807,7 +1814,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           await dispatchGithubSettleWorkflow(cfg.ghPat);
           await loadData();
           pollAfterSettleDispatch();
-          showToast("🚀 Settle Workflow triggered on GitHub! Auto-refreshing ledger & wager amounts...", 5200);
+          showToast("Settle Workflow triggered on GitHub! Auto-refreshing ledger & wager amounts...", 5200);
           return;
         }
 
@@ -1816,7 +1823,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         openSettingsModal();
         showToast("Connect Live Sync or paste a GitHub Token once to trigger the Settle Workflow in 1 tap.", 5000);
       } catch (e) {
-        showToast("❌ " + (e.message || "Could not run Settle Refresh"), 4800);
+        showToast("Error: " + (e.message || "Could not run Settle Refresh"), 4800);
       } finally {
         setBusy(false);
       }
@@ -2354,7 +2361,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const sel = (rawSel && !/^[•·].*[—–]/.test(rawSel)) ? rawSel : (fb.selection || rawSel);
         const odds = prefillPlay.odds != null ? prefillPlay.odds : fb.odds;
         const stake = (prefillPlay.stake && prefillPlay.stake > 0) ? prefillPlay.stake : (fb.stake || (currentData && currentData.available_cash ? Math.min(currentData.available_cash, 10) : 5));
-        document.getElementById("log-modal-title").textContent = "⚡ Confirm Curated Bet";
+        document.getElementById("log-modal-title").textContent = "Confirm Curated Bet";
         const spEl = document.getElementById("f-sport");
         if ([...spEl.options].some(o => o.value === sport)) spEl.value = sport;
         document.getElementById("f-type").value = "Straight";
@@ -2362,7 +2369,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         setOddsValue("f", odds);
         document.getElementById("f-stake").value = Number(stake).toFixed(2);
       } else {
-        document.getElementById("log-modal-title").textContent = "➕ Log Placed Bet";
+        document.getElementById("log-modal-title").textContent = "Log Placed Bet";
         document.getElementById("f-sel").value = "";
         setOddsValue("f", "-110");
         document.getElementById("f-stake").value = "";
@@ -2393,12 +2400,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const res = await postLiveApi({ action: "log_bet", sport, bet_type, selections, odds, stake });
         if (res.dashboard) render(res.dashboard);
         closeModal("log-modal");
-        showToast(`✅ Logged ${res.bet_id || "bet"} straight to Sheet!`);
+        showToast(`Logged ${res.bet_id} || "bet"} straight to Sheet!`);
       } catch (e) {
-        showToast("❌ " + e.message);
+        showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
-        btn.textContent = "✓ Confirm & Log Bet";
+        btn.textContent = "Confirm & Log Bet";
       }
     }
 
@@ -2434,12 +2441,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         fileInput.value = "";
         document.getElementById("s-caption").value = "";
         closeModal("log-modal");
-        showToast("✅ Screenshot parsed & logged!");
+        showToast("Screenshot parsed and logged.");
       } catch (e) {
-        showToast("❌ " + e.message, 4500);
+        showToast("Error: " + e.message, 4500);
       } finally {
         btn.disabled = false;
-        btn.textContent = "📸 Parse & Log";
+        btn.textContent = "Parse & Log";
       }
     }
 
@@ -2449,7 +2456,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         showToast("Connect Live Sync once to edit or cash out tickets.");
         return;
       }
-      document.getElementById("edit-modal-title").textContent = `✏️ Manage ${ticket.bet_id}`;
+      document.getElementById("edit-modal-title").textContent = `Manage ${ticket.bet_id}`;
       document.getElementById("e-row").value = ticket.row_index || "";
       document.getElementById("e-betid").value = ticket.bet_id || "";
       document.getElementById("e-sport").value = normalizeSport(ticket.sport || "");
@@ -2478,9 +2485,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
         if (res.dashboard) render(res.dashboard);
         closeModal("edit-modal");
-        showToast("✅ Ticket updated in Sheet!");
+        showToast("Ticket updated in Sheet.");
       } catch (e) {
-        showToast("❌ " + e.message);
+        showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
         btn.textContent = "Save Changes";
@@ -2507,9 +2514,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
         if (res.dashboard) render(res.dashboard);
         closeModal("edit-modal");
-        showToast(isFullRefund ? `🗑️ Removed ${betId} (full refund)` : `🔄 Cashed out ${betId}`);
+        showToast(isFullRefund ? `Removed ${betId} (full refund)` : `Cashed out ${betId}`);
       } catch (e) {
-        showToast("❌ " + e.message);
+        showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
       }
@@ -2529,12 +2536,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       });
 
       const titles = {
-        all: "📊 Overall Bet History (Separated by Day)",
-        week: `📆 This Week's Bet History (${st.date || "Last 7 Days"})`,
-        yesterday: `📅 Yesterday's Bet History${st.date ? ` (${st.date})` : ""}`,
-        today: `🏁 Today's Bet History${st.date ? ` (${st.date})` : ""}`,
+        all: "Overall Bet History (Separated by Day)",
+        week: `This Week's Bet History (${st.date || "Last 7 Days"})`,
+        yesterday: `Yesterday's Bet History${st.date ? ` (${st.date})` : ""}`,
+        today: `Today's Bet History${st.date ? ` (${st.date})` : ""}`,
       };
-      document.getElementById("graded-modal-title").textContent = titles[which] || "📊 Bet History by Day";
+      document.getElementById("graded-modal-title").textContent = titles[which] || "Bet History by Day";
 
       const tix = st.tickets || [];
       const plCls = st.net_pl >= 0 ? "pos" : "neg";
@@ -2581,7 +2588,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const dTot = g.wins + g.losses;
         const dPct = dTot > 0 ? Math.round((g.wins / dTot) * 1000) / 10 : 0;
         const dCls = g.net_pl >= 0 ? "pos" : "neg";
-        let dayTitle = `📅 ${esc(g.date)}`;
+        let dayTitle = `${esc(g.date)}`;
         if (g.date === todayDate) dayTitle += " (Today)";
         else if (g.date === yestDate) dayTitle += " (Yesterday)";
 
@@ -3264,7 +3271,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <span id="live-score-${idx}" style="${liveStyle}">${esc(t.__liveText || "")}</span>
           </div>
           <div class="bet-actions">
-            <button class="btn-mini" onclick="openEditModal(window.__pendingTickets[${idx}])">✏️ Edit / Cash Out</button>
+            <button class="btn-mini" onclick="openEditModal(window.__pendingTickets[${idx}])">Edit / Cash Out</button>
           </div>
         </div>
       `;
@@ -3456,12 +3463,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         t.__anticipatedWin = ant.anticipated;
         t.__anticipatedReason = ant.reason;
         const trendSuffix = trend && trend.note ? ` • ${trend.note}` : "";
-        const antSuffix = (ant.anticipated && state === "in") ? " • ⚡ Projected Win" : "";
+        const antSuffix = (ant.anticipated && state === "in") ? " • Projected Win" : "";
         if (state === "in") {
           t.__liveColor = trend
             ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
             : "#10b981";
-          t.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}${antSuffix}`;
+          t.__liveText = `LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}${antSuffix}`;
         } else if (state === "post") {
           t.__liveColor = trend
             ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
@@ -3469,7 +3476,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           t.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}`;
         } else {
           t.__liveColor = "#60a5fa";
-          t.__liveText = `🕒 ${detail}`;
+          t.__liveText = `${detail}`;
         }
         const est = estimateLiveEspnFinish(match, t);
         t.__finishRank = est.rank;
@@ -3498,7 +3505,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
             if (state === "in") {
               p.__liveColor = "#10b981";
-              p.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+              p.__liveText = `LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
             } else if (state === "post") {
               p.__liveColor = "#94a3b8";
               p.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
@@ -3681,7 +3688,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           meterHtml = `
             <div style="margin-top:8px;">
               <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;font-weight:700;color:${barColor};margin-bottom:4px;">
-                <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
+                <span>${esc(stripEmojis(p.confidence_tier || "Confidence Meter"))}</span>
                 <span style="color:var(--muted);font-weight:500;" id="curated-caret-${domId}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
               </div>
               <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
@@ -3721,20 +3728,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           const overlapLabel = wb.overlapCount > 0 ? `${wb.overlapCount} overlapping game${wb.overlapCount === 1 ? "" : "s"}` : "solo window";
           const extraLines = [];
           if (wb.antIds && wb.antIds.length > 0) {
-            extraLines.push(`<div style="color:#34d399;margin-top:4px;">⚡ Anticipates ${esc(wb.antIds.join(", "))} win (+${fmtMoney(wb.antProfit)} projected profit → ${fmtMoney(wb.effBr)} sizing base; displayed bankroll stays untouched until final).</div>`);
+            extraLines.push(`<div style="color:#34d399;margin-top:4px;">Anticipates ${esc(wb.antIds.join(", "))} win (+${fmtMoney(wb.antProfit)} projected profit → ${fmtMoney(wb.effBr)} sizing base; displayed bankroll stays untouched until final).</div>`);
           }
           if (wb.cashNowNote) {
-            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">💵 ${esc(wb.cashNowNote)}</div>`);
+            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">${esc(wb.cashNowNote)}</div>`);
           }
           if (wb.isDrawdown) {
-            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">🛡️ Drawdown Brake active: caps tightened to ${wb.maxSinglePct}% single / ${wb.maxConcPct}% concurrent.</div>`);
+            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">Drawdown Brake active: caps tightened to ${wb.maxSinglePct}% single / ${wb.maxConcPct}% concurrent.</div>`);
           }
           if (wb.goalBrake) {
-            extraLines.push(`<div style="color:#34d399;margin-top:4px;">🎯 $1,000 Goal-Lock Brake: stake trimmed so a win crosses $1,000 cleanly without extra risk.</div>`);
+            extraLines.push(`<div style="color:#34d399;margin-top:4px;">$1,000 Goal-Lock Brake: stake trimmed so a win crosses $1,000 cleanly without extra risk.</div>`);
           }
           wagerBreakdownHtml = `
             <div style="margin-top:12px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
-              <div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">💰 Wager Sizing Breakdown</div>
+              <div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">Wager Sizing Breakdown</div>
               <div style="display:flex;flex-wrap:wrap;gap:6px;">
                 <span class="pill pill-blue" style="font-size:0.74rem;">1U = ${fmtMoney(wb.unitSize)} (5% BR)</span>
                 <span class="pill pill-blue" style="font-size:0.74rem;">Win Prob: ${wb.probPct}% @ ${esc(oddsTxt)}</span>
@@ -3748,11 +3755,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         const drawerHtml = isPass ? "" : `
           <div id="curated-detail-${domId}" style="display:${isOpen ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
-            <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">🏟️ Game &amp; Line Info</div>
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">Game &amp; Line Info</div>
             <div style="color:var(--muted);line-height:1.45;margin-bottom:10px;">
               ${gameLineHtml}
             </div>
-            <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">🧮 How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
             ${pillarChipsHtml}
             ${wagerBreakdownHtml}
           </div>
@@ -3767,7 +3774,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               : "";
             actionHtml = `
               <div class="bet-actions" onclick="event.stopPropagation()">
-                <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)}${pendUnit})</span>
+                <span class="pill pill-green">Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)}${pendUnit})</span>
                 ${recalcNote}
                 <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Again</button>
               </div>`;
@@ -3777,26 +3784,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const plSign = Number(existingSettled.net_pl || 0) >= 0 ? "+" : "";
             actionHtml = `
               <div class="bet-actions" onclick="event.stopPropagation()">
-                <span class="pill ${resCls}">🏁 Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
+                <span class="pill ${resCls}">Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
               </div>`;
           } else {
             const statusPills = [];
             if (wb && wb.antIds && wb.antIds.length > 0) {
-              statusPills.push(`<span class="pill pill-green">⚡ Anticipates ${esc(wb.antIds.join(", "))} (+${fmtMoney(wb.antProfit)})</span>`);
+              statusPills.push(`<span class="pill pill-green">Anticipates ${esc(wb.antIds.join(", "))} (+${fmtMoney(wb.antProfit)})</span>`);
             }
             if (wb && wb.cashNowNote) {
-              statusPills.push(`<span class="pill pill-amber">💵 ${esc(wb.cashNowNote)}</span>`);
+              statusPills.push(`<span class="pill pill-amber">${esc(wb.cashNowNote)}</span>`);
             }
             if (wb && wb.isDrawdown) {
-              statusPills.push(`<span class="pill pill-amber">🛡️ Drawdown Brake (${wb.maxSinglePct}%/${wb.maxConcPct}%)</span>`);
+              statusPills.push(`<span class="pill pill-amber">Drawdown Brake (${wb.maxSinglePct}%/${wb.maxConcPct}%)</span>`);
             }
             if (wb && wb.goalBrake) {
-              statusPills.push(`<span class="pill pill-green">🎯 $1k Goal-Lock</span>`);
+              statusPills.push(`<span class="pill pill-green">$1k Goal-Lock</span>`);
             }
             if (wb && wb.cappedByOverlap) {
               actionHtml = `
                 <div class="bet-actions" onclick="event.stopPropagation()">
-                  <span class="pill pill-amber">⏸️ Concurrent ${wb.maxConcPct}% Cap Reached</span>
+                  <span class="pill pill-amber">Concurrent ${wb.maxConcPct}% Cap Reached</span>
                   ${statusPills.join("")}
                   <button class="btn-mini" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Manually</button>
                 </div>`;
@@ -3820,7 +3827,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           : "";
         const metaRow = `
           <div class="curated-meta">
-            ${dParts.startTime ? `<span class="curated-time">🕒 ${esc(dParts.startTime)}</span>` : ""}
+            ${dParts.startTime ? `<span class="curated-time">${esc(dParts.startTime)}</span>` : ""}
             ${dParts.sport ? `<span class="curated-sport">${esc(dParts.sport)}</span>` : ""}
             ${liveScoreBadge}
           </div>
@@ -3828,7 +3835,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const matchupRow = dParts.matchup ? `<div class="curated-matchup">${esc(dParts.matchup)}</div>` : "";
         const betRow = `
           <div class="curated-bet-row">
-            <span class="curated-bet">${esc(dParts.betText)}</span>
+            <span class="curated-bet">${esc(stripEmojis(dParts.betText))}</span>
             ${(!isPass && dParts.wagerText) ? `<span class="curated-wager">&bull; ${esc(dParts.wagerText)}</span>` : ""}
           </div>
         `;
@@ -3837,7 +3844,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           ? " curated-placed"
           : (existingSettled ? " curated-settled" : "");
         const placedTopPill = existingPend
-          ? `<span class="pill pill-green" style="flex-shrink:0;">✓ PLACED</span>`
+          ? `<span class="pill pill-green" style="flex-shrink:0;">PLACED</span>`
           : "";
 
         return `
@@ -3930,8 +3937,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const dateLbl = (currentData && currentData.curated_date) ? ` (${currentData.curated_date})` : "";
       if (titleEl) {
         titleEl.textContent = tab === "started"
-          ? `🔴 Started Curated Bets${dateLbl}`
-          : `📋 All Today's Curated Bets${dateLbl}`;
+          ? `Started Curated Bets${dateLbl}`
+          : `All Today's Curated Bets${dateLbl}`;
       }
 
       const listEl = document.getElementById("curated-archive-list");

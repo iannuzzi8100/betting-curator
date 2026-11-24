@@ -476,14 +476,14 @@
     <header>
       <div class="title-group">
         <h1>
-          🎯 Betting Curator Terminal
+          Betting Curator Terminal
           <span class="pill pill-amber" id="sync-mode-pill">STATIC SNAPSHOT</span>
         </h1>
         <p id="updated-at">Loading live ledger...</p>
       </div>
       <div class="header-actions">
-        <button class="btn-secondary" onclick="openSettingsModal()">⚙️ Live Sync</button>
-        <button class="settle-btn" id="settle-btn" onclick="triggerSettleWorkflow()">🏁 Settle Refresh</button>
+        <button class="btn-secondary" onclick="openSettingsModal()">Live Sync</button>
+        <button class="settle-btn" id="settle-btn" onclick="triggerSettleWorkflow()">Settle Refresh</button>
         <button class="refresh-btn" id="refresh-btn" onclick="loadData()">↻ Refresh Live</button>
       </div>
     </header>
@@ -491,7 +491,7 @@
     <div class="stack">
       <!-- 1. AVAILABLE CASH & BANKROLL AT THE TOP -->
       <div class="card">
-        <div class="card-label">💵 Available Cash &amp; Exposure</div>
+        <div class="card-label">Available Cash &amp; Exposure</div>
         <div class="big-num" id="bankroll-val">--</div>
         <div class="sub-row" id="bankroll-sub"></div>
       </div>
@@ -499,10 +499,10 @@
       <!-- 2. ACTIVE PENDING TICKETS -->
       <div class="card">
         <div class="section-title">
-          <span>⏳ Active Pending Tickets</span>
+          <span>Active Pending Tickets</span>
           <div class="section-right">
             <span class="pill pill-amber" id="pending-count">0 Active</span>
-            <button class="btn-mini" id="settle-mini-btn" onclick="triggerSettleWorkflow()" style="border-color:rgba(16,185,129,0.45);color:#34d399;">🏁 Settle Refresh</button>
+            <button class="btn-mini" id="settle-mini-btn" onclick="triggerSettleWorkflow()" style="border-color:rgba(16,185,129,0.45);color:#34d399;">Settle Refresh</button>
             <button class="btn-green" onclick="openLogModal()">+ Log Bet</button>
           </div>
         </div>
@@ -512,7 +512,7 @@
       <!-- 3. TODAY'S CURATED PICKS (Upcoming Only; Click Title for Started & Full Slate) -->
       <div class="card">
         <div class="section-title" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')" title="Tap to view started &amp; all curated bets">
-          <span>🔥 Today's Curated Bets (<span id="curated-date">--</span>)</span>
+          <span>Today's Curated Bets (<span id="curated-date">--</span>)</span>
           <div class="section-right">
             <span class="pill pill-blue" id="curated-count">0 Upcoming</span>
             <span class="card-tap-hint" id="curated-started-hint" style="margin-left:0;"></span>
@@ -524,7 +524,7 @@
       <!-- 4. COMBINED WIN-LOSS RECORDS BUTTON (OVERALL, THIS WEEK, YESTERDAY, TODAY) -->
       <button type="button" class="card card-btn" onclick="openGradedModal('all')">
         <div class="section-title" style="margin-bottom:4px;">
-          <span>📊 Win / Loss Records &amp; Bet History</span>
+          <span>Win / Loss Records &amp; Bet History</span>
           <span class="card-tap-hint" id="wl-tap-hint">Tap for Bet History by Day &rarr;</span>
         </div>
         <div class="wl-grid">
@@ -554,7 +554,7 @@
       <!-- 5. BANKROLL EQUITY CURVE GRAPH -->
       <div class="card">
         <div class="section-title">
-          <span>📈 Bankroll Equity Curve ($100 Start)</span>
+          <span>Bankroll Equity Curve ($100 Start)</span>
         </div>
         <div class="chart-wrap">
           <canvas id="equityChart"></canvas>
@@ -567,12 +567,12 @@
   <div class="modal-backdrop" id="log-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3 id="log-modal-title">➕ Log Placed Bet</h3>
+        <h3 id="log-modal-title">Log Placed Bet</h3>
         <button class="close-btn" onclick="closeModal('log-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="tab-form-btn" onclick="switchLogTab('form')">⚡ Quick Bet Form</button>
-        <button class="tab-btn" id="tab-shot-btn" onclick="switchLogTab('shot')">📸 Upload Screenshot</button>
+        <button class="tab-btn active" id="tab-form-btn" onclick="switchLogTab('form')">Quick Bet Form</button>
+        <button class="tab-btn" id="tab-shot-btn" onclick="switchLogTab('shot')">Upload Screenshot</button>
       </div>
 
       <div id="log-tab-form" class="form-grid">
@@ -633,7 +633,7 @@
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" onclick="closeModal('log-modal')">Cancel</button>
-          <button class="btn-primary" id="f-submit-btn" onclick="submitLogBet()">✓ Confirm &amp; Log Bet</button>
+          <button class="btn-primary" id="f-submit-btn" onclick="submitLogBet()">Confirm &amp; Log Bet</button>
         </div>
       </div>
 
@@ -649,7 +649,7 @@
         <p class="help-text">Gemini Vision parses the ticket and writes straight to your Google Sheet in ~3 seconds.</p>
         <div class="modal-footer">
           <button class="btn-secondary" onclick="closeModal('log-modal')">Cancel</button>
-          <button class="btn-primary" id="s-submit-btn" onclick="submitScreenshot()">📸 Parse &amp; Log</button>
+          <button class="btn-primary" id="s-submit-btn" onclick="submitScreenshot()">Parse &amp; Log</button>
         </div>
       </div>
     </div>
@@ -659,7 +659,7 @@
   <div class="modal-backdrop" id="edit-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3 id="edit-modal-title">✏️ Manage Ticket</h3>
+        <h3 id="edit-modal-title">Manage Ticket</h3>
         <button class="close-btn" onclick="closeModal('edit-modal')">&times;</button>
       </div>
       <input type="hidden" id="e-row" />
@@ -704,7 +704,7 @@
         <div class="field">
           <label>Quick Cash Out / Void</label>
           <div class="form-row-2">
-            <button class="btn-danger" id="e-void-btn" onclick="submitCashout(true)">🗑️ Full Refund / Void</button>
+            <button class="btn-danger" id="e-void-btn" onclick="submitCashout(true)">Full Refund / Void</button>
             <div style="display:flex;gap:6px;">
               <input id="e-cashout-ret" type="number" step="0.01" placeholder="Return $" />
               <button class="btn-secondary" id="e-partial-btn" onclick="submitCashout(false)" style="white-space:nowrap;">Cash Out</button>
@@ -719,7 +719,7 @@
   <div class="modal-backdrop" id="settings-modal">
     <div class="modal">
       <div class="modal-header">
-        <h3>⚙️ Instant Live Sheet &amp; Settle Sync</h3>
+        <h3>Instant Live Sheet &amp; Settle Sync</h3>
         <button class="close-btn" onclick="closeModal('settings-modal')">&times;</button>
       </div>
       <div class="form-grid">
@@ -751,14 +751,14 @@
   <div class="modal-backdrop" id="graded-modal" onclick="if(event.target===this) closeModal('graded-modal')">
     <div class="modal" style="max-width:560px;">
       <div class="modal-header">
-        <h3 id="graded-modal-title">📊 Bet History by Day</h3>
+        <h3 id="graded-modal-title">Bet History by Day</h3>
         <button class="close-btn" onclick="closeModal('graded-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="graded-tab-all" onclick="openGradedModal('all')">📊 Overall</button>
-        <button class="tab-btn" id="graded-tab-week" onclick="openGradedModal('week')">📆 This Week</button>
-        <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">📅 Yesterday</button>
-        <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">🏁 Today</button>
+        <button class="tab-btn active" id="graded-tab-all" onclick="openGradedModal('all')">Overall</button>
+        <button class="tab-btn" id="graded-tab-week" onclick="openGradedModal('week')">This Week</button>
+        <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">Yesterday</button>
+        <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">Today</button>
       </div>
       <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:12px;"></div>
       <div id="graded-modal-list"></div>
@@ -772,12 +772,12 @@
   <div class="modal-backdrop" id="curated-archive-modal" onclick="if(event.target===this) closeModal('curated-archive-modal')">
     <div class="modal" style="max-width:580px;">
       <div class="modal-header">
-        <h3 id="curated-archive-title">🔥 Started Curated Bets</h3>
+        <h3 id="curated-archive-title">Started Curated Bets</h3>
         <button class="close-btn" onclick="closeModal('curated-archive-modal')">&times;</button>
       </div>
       <div class="tabs">
-        <button class="tab-btn active" id="curated-tab-started" onclick="openCuratedArchiveModal('started')">🔴 Started (<span id="curated-tab-started-cnt">0</span>)</button>
-        <button class="tab-btn" id="curated-tab-all" onclick="openCuratedArchiveModal('all')">📋 All Today (<span id="curated-tab-all-cnt">0</span>)</button>
+        <button class="tab-btn active" id="curated-tab-started" onclick="openCuratedArchiveModal('started')">Started (<span id="curated-tab-started-cnt">0</span>)</button>
+        <button class="tab-btn" id="curated-tab-all" onclick="openCuratedArchiveModal('all')">All Today (<span id="curated-tab-all-cnt">0</span>)</button>
       </div>
       <div class="bet-list" id="curated-archive-list"></div>
       <div class="modal-footer">
@@ -789,7 +789,7 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const STATIC_DATA = {"updated_at": "2026-11-24 05:49 PM EST", "today": "2026-11-24", "yesterday": "2026-11-23", "week_start": "2026-11-18", "bankroll": 68.16, "pending_total": 0.0, "available_cash": 68.16, "overall": {"wins": 32, "losses": 41, "pushes": 0, "win_pct": 43.8, "net_pl": -31.84, "roi": -4.5, "avg_clv": 1.86, "clv_count": 10}, "week_stats": {"start_date": "2026-11-18", "end_date": "2026-11-24", "wins": 21, "losses": 16, "pushes": 0, "win_pct": 56.8, "net_pl": 40.71, "tickets": [{"bet_id": "BET-074", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "North Dakota Fighting Hawks -4.5 (3:00 PM EST)", "odds": "-110", "stake": 35.0, "result": "Won", "net_pl": 31.82}, {"bet_id": "BET-073", "date": "2026-11-24", "sport": "UCL", "bet_type": "Straight", "selections": "Bodo/Glimt -1.5 (12:45 PM EST)", "odds": "-115", "stake": 12.0, "result": "Lost", "net_pl": -12.0}, {"bet_id": "BET-072", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Northern Colorado Bears -2.5 (12:30 PM EST)", "odds": "-120", "stake": 25.0, "result": "Lost", "net_pl": -25.0}, {"bet_id": "BET-071", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Ohio Bobcats -4.5 (11:00 AM EST)", "odds": "-115", "stake": 32.5, "result": "Lost", "net_pl": -32.5}, {"bet_id": "BET-070", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Oklahoma City Thunder -4.5 (7:30 PM EST)", "odds": "-110", "stake": 27.17, "result": "Lost", "net_pl": -27.17}, {"bet_id": "BET-069", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Phoenix Suns ML (8:00 PM EST)", "odds": "-155", "stake": 27.34, "result": "Won", "net_pl": 17.64}, {"bet_id": "BET-068", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -1.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Lost", "net_pl": -4.71}, {"bet_id": "BET-067", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Memphis Grizzlies -2.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Won", "net_pl": 28.98}, {"bet_id": "BET-066", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "Belmont Bruins ML (4:00 PM EST)", "odds": "-145", "stake": 28.1, "result": "Won", "net_pl": 19.38}, {"bet_id": "BET-065", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Ole Miss Rebels @ Clemson Tigers (CBB) \u2014 Ole Miss Rebels -5.5", "odds": "-120", "stake": 15.0, "result": "Won", "net_pl": 12.5}, {"bet_id": "BET-064", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Tulsa Golden Hurricane @ Oregon State Beavers (CBB) \u2014 Oregon State Beavers -6.5", "odds": "-105", "stake": 21.08, "result": "Lost", "net_pl": -21.08}, {"bet_id": "BET-063", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Northern Iowa Panthers @ Davidson Wildcats (CBB) \u2014 Davidson Wildcats -5.5", "odds": "-105", "stake": 21.08, "result": "Won", "net_pl": 20.08}, {"bet_id": "BET-062", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "San Francisco 49ers -4 (Window 5: 6:30)", "odds": "-115", "stake": 16.8, "result": "Won", "net_pl": 14.61}, {"bet_id": "BET-061", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Jacksonville Jaguars -6.5 (Window 4: 3:00)", "odds": "-110", "stake": 12.02, "result": "Lost", "net_pl": -12.02}, {"bet_id": "BET-060", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Carolina Panthers ML (Window 3)", "odds": "-145", "stake": 7.88, "result": "Won", "net_pl": 5.43}, {"bet_id": "BET-059", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Tampa Bay Buccaneers +3.5 (Window 3)", "odds": "-110", "stake": 7.88, "result": "Lost", "net_pl": -7.88}, {"bet_id": "BET-058", "date": "2026-11-22", "sport": "EPL", "bet_type": "Straight", "selections": "Liverpool ML (Liverpool vs Manchester United \u2022 11:30 AM EST)", "odds": "-135", "stake": 22.0, "result": "Won", "net_pl": 16.3}, {"bet_id": "BET-057", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oklahoma State ML (10:15 PM EST)", "odds": "-145", "stake": 5.77, "result": "Won", "net_pl": 3.98}, {"bet_id": "BET-056", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oregon State -6.5 (10:30 PM EST)", "odds": "-120", "stake": 5.77, "result": "Won", "net_pl": 4.81}, {"bet_id": "BET-055", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Middle Tennessee -7.5 (2:00 PM EST)", "odds": "-110", "stake": 12.61, "result": "Lost", "net_pl": -12.61}, {"bet_id": "BET-054", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Stanford TO WIN (Stanford @ Cal \u2022 7:30 PM EST)", "odds": "-275", "stake": 8.0, "result": "Won", "net_pl": 2.91}, {"bet_id": "BET-053", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Tennessee TO WIN (LSU @ Tennessee \u2022 3:30 PM EST)", "odds": "-105", "stake": 16.43, "result": "Won", "net_pl": 15.65}, {"bet_id": "BET-051", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Memphis ML (Memphis @ Navy \u2022 12:00 PM EST)", "odds": "-135", "stake": 7.0, "result": "Lost", "net_pl": -7.0}, {"bet_id": "BET-050", "date": "2026-11-21", "sport": "EPL", "bet_type": "Straight", "selections": "Bournemouth (Bournemouth vs Nottingham Forest \u2022 10:00 AM EST)", "odds": "-110", "stake": 6.1, "result": "Won", "net_pl": 5.55}, {"bet_id": "BET-049", "date": "2026-11-20", "sport": "NCAAM", "bet_type": "Straight", "selections": "Canisius ML (Mercyhurst @ Canisius \u2022 5:30 PM EST)", "odds": "+130", "stake": 3.39, "result": "Won", "net_pl": 4.41}, {"bet_id": "BET-048", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Under 216.5 Total Points (Raptors @ Pistons \u2022 7:30 PM EST)", "odds": "-115", "stake": 2.69, "result": "Won", "net_pl": 2.34}, {"bet_id": "BET-047", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Dyson Daniels Over 7.5 Rebounds (Hornets @ Hawks \u2022 7:00 PM EST)", "odds": "+115", "stake": 2.22, "result": "Won", "net_pl": 2.55}, {"bet_id": "BET-046", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Josh Giddey Over 7.5 Rebounds (Wizards @ Bulls \u2022 8:00 PM EST)", "odds": "+120", "stake": 2.22, "result": "Lost", "net_pl": -2.22}, {"bet_id": "BET-045", "date": "2026-11-19", "sport": "CFB", "bet_type": "Straight", "selections": "Temple Owls -2.5 (Rice @ Temple)", "odds": "-125", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-044", "date": "2026-11-19", "sport": "NBA", "bet_type": "Straight", "selections": "Julian Champagnie Over 5.5 Rebounds (Clippers @ Spurs)", "odds": "+110", "stake": 3.03, "result": "Lost", "net_pl": -3.03}, {"bet_id": "BET-043", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "St. Louis Blues ML (Blues @ Penguins)", "odds": "-115", "stake": 4.5, "result": "Won", "net_pl": 3.91}, {"bet_id": "BET-042", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "Anaheim Ducks ML (Ducks @ Avalanche)", "odds": "+110", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-041", "date": "2026-11-18", "sport": "NCAAM", "bet_type": "Straight", "selections": "Howard Bison ML (Howard @ Duquesne)", "odds": "+190", "stake": 1.5, "result": "Lost", "net_pl": -1.5}, {"bet_id": "BET-040", "date": "2026-11-18", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers ML (76ers @ Magic)", "odds": "-115", "stake": 2.5, "result": "Won", "net_pl": 2.17}, {"bet_id": "BET-039", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Devon Toews Over 1.5 Shots (Avalanche @ Mammoth)", "odds": "-110", "stake": 4.1, "result": "Won", "net_pl": 3.73}, {"bet_id": "BET-038", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Evan Rodrigues Under 0.5 Points (Canadiens @ Devils)", "odds": "-170", "stake": 5.75, "result": "Won", "net_pl": 3.38}, {"bet_id": "BET-037", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Arseny Gritsyuk Over 0.5 Points (Canadiens @ Devils)", "odds": "+100", "stake": 5.2, "result": "Lost", "net_pl": -5.2}]}, "today_stats": {"date": "2026-11-24", "wins": 1, "losses": 3, "pushes": 0, "win_pct": 25.0, "net_pl": -37.68, "tickets": [{"bet_id": "BET-074", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "North Dakota Fighting Hawks -4.5 (3:00 PM EST)", "odds": "-110", "stake": 35.0, "result": "Won", "net_pl": 31.82}, {"bet_id": "BET-073", "date": "2026-11-24", "sport": "UCL", "bet_type": "Straight", "selections": "Bodo/Glimt -1.5 (12:45 PM EST)", "odds": "-115", "stake": 12.0, "result": "Lost", "net_pl": -12.0}, {"bet_id": "BET-072", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Northern Colorado Bears -2.5 (12:30 PM EST)", "odds": "-120", "stake": 25.0, "result": "Lost", "net_pl": -25.0}, {"bet_id": "BET-071", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Ohio Bobcats -4.5 (11:00 AM EST)", "odds": "-115", "stake": 32.5, "result": "Lost", "net_pl": -32.5}]}, "yesterday_stats": {"date": "2026-11-23", "wins": 5, "losses": 3, "pushes": 0, "win_pct": 62.5, "net_pl": 45.62, "tickets": [{"bet_id": "BET-070", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Oklahoma City Thunder -4.5 (7:30 PM EST)", "odds": "-110", "stake": 27.17, "result": "Lost", "net_pl": -27.17}, {"bet_id": "BET-069", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Phoenix Suns ML (8:00 PM EST)", "odds": "-155", "stake": 27.34, "result": "Won", "net_pl": 17.64}, {"bet_id": "BET-068", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -1.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Lost", "net_pl": -4.71}, {"bet_id": "BET-067", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Memphis Grizzlies -2.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Won", "net_pl": 28.98}, {"bet_id": "BET-066", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "Belmont Bruins ML (4:00 PM EST)", "odds": "-145", "stake": 28.1, "result": "Won", "net_pl": 19.38}, {"bet_id": "BET-065", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Ole Miss Rebels @ Clemson Tigers (CBB) \u2014 Ole Miss Rebels -5.5", "odds": "-120", "stake": 15.0, "result": "Won", "net_pl": 12.5}, {"bet_id": "BET-064", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Tulsa Golden Hurricane @ Oregon State Beavers (CBB) \u2014 Oregon State Beavers -6.5", "odds": "-105", "stake": 21.08, "result": "Lost", "net_pl": -21.08}, {"bet_id": "BET-063", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Northern Iowa Panthers @ Davidson Wildcats (CBB) \u2014 Davidson Wildcats -5.5", "odds": "-105", "stake": 21.08, "result": "Won", "net_pl": 20.08}]}, "settled_tickets": [{"bet_id": "BET-074", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "North Dakota Fighting Hawks -4.5 (3:00 PM EST)", "odds": "-110", "stake": 35.0, "result": "Won", "net_pl": 31.82}, {"bet_id": "BET-073", "date": "2026-11-24", "sport": "UCL", "bet_type": "Straight", "selections": "Bodo/Glimt -1.5 (12:45 PM EST)", "odds": "-115", "stake": 12.0, "result": "Lost", "net_pl": -12.0}, {"bet_id": "BET-072", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Northern Colorado Bears -2.5 (12:30 PM EST)", "odds": "-120", "stake": 25.0, "result": "Lost", "net_pl": -25.0}, {"bet_id": "BET-071", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Ohio Bobcats -4.5 (11:00 AM EST)", "odds": "-115", "stake": 32.5, "result": "Lost", "net_pl": -32.5}, {"bet_id": "BET-070", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Oklahoma City Thunder -4.5 (7:30 PM EST)", "odds": "-110", "stake": 27.17, "result": "Lost", "net_pl": -27.17}, {"bet_id": "BET-069", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Phoenix Suns ML (8:00 PM EST)", "odds": "-155", "stake": 27.34, "result": "Won", "net_pl": 17.64}, {"bet_id": "BET-068", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -1.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Lost", "net_pl": -4.71}, {"bet_id": "BET-067", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Memphis Grizzlies -2.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Won", "net_pl": 28.98}, {"bet_id": "BET-066", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "Belmont Bruins ML (4:00 PM EST)", "odds": "-145", "stake": 28.1, "result": "Won", "net_pl": 19.38}, {"bet_id": "BET-065", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Ole Miss Rebels @ Clemson Tigers (CBB) \u2014 Ole Miss Rebels -5.5", "odds": "-120", "stake": 15.0, "result": "Won", "net_pl": 12.5}, {"bet_id": "BET-064", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Tulsa Golden Hurricane @ Oregon State Beavers (CBB) \u2014 Oregon State Beavers -6.5", "odds": "-105", "stake": 21.08, "result": "Lost", "net_pl": -21.08}, {"bet_id": "BET-063", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Northern Iowa Panthers @ Davidson Wildcats (CBB) \u2014 Davidson Wildcats -5.5", "odds": "-105", "stake": 21.08, "result": "Won", "net_pl": 20.08}, {"bet_id": "BET-062", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "San Francisco 49ers -4 (Window 5: 6:30)", "odds": "-115", "stake": 16.8, "result": "Won", "net_pl": 14.61}, {"bet_id": "BET-061", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Jacksonville Jaguars -6.5 (Window 4: 3:00)", "odds": "-110", "stake": 12.02, "result": "Lost", "net_pl": -12.02}, {"bet_id": "BET-060", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Carolina Panthers ML (Window 3)", "odds": "-145", "stake": 7.88, "result": "Won", "net_pl": 5.43}, {"bet_id": "BET-059", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Tampa Bay Buccaneers +3.5 (Window 3)", "odds": "-110", "stake": 7.88, "result": "Lost", "net_pl": -7.88}, {"bet_id": "BET-058", "date": "2026-11-22", "sport": "EPL", "bet_type": "Straight", "selections": "Liverpool ML (Liverpool vs Manchester United \u2022 11:30 AM EST)", "odds": "-135", "stake": 22.0, "result": "Won", "net_pl": 16.3}, {"bet_id": "BET-057", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oklahoma State ML (10:15 PM EST)", "odds": "-145", "stake": 5.77, "result": "Won", "net_pl": 3.98}, {"bet_id": "BET-056", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oregon State -6.5 (10:30 PM EST)", "odds": "-120", "stake": 5.77, "result": "Won", "net_pl": 4.81}, {"bet_id": "BET-055", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Middle Tennessee -7.5 (2:00 PM EST)", "odds": "-110", "stake": 12.61, "result": "Lost", "net_pl": -12.61}, {"bet_id": "BET-054", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Stanford TO WIN (Stanford @ Cal \u2022 7:30 PM EST)", "odds": "-275", "stake": 8.0, "result": "Won", "net_pl": 2.91}, {"bet_id": "BET-053", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Tennessee TO WIN (LSU @ Tennessee \u2022 3:30 PM EST)", "odds": "-105", "stake": 16.43, "result": "Won", "net_pl": 15.65}, {"bet_id": "BET-051", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Memphis ML (Memphis @ Navy \u2022 12:00 PM EST)", "odds": "-135", "stake": 7.0, "result": "Lost", "net_pl": -7.0}, {"bet_id": "BET-050", "date": "2026-11-21", "sport": "EPL", "bet_type": "Straight", "selections": "Bournemouth (Bournemouth vs Nottingham Forest \u2022 10:00 AM EST)", "odds": "-110", "stake": 6.1, "result": "Won", "net_pl": 5.55}, {"bet_id": "BET-049", "date": "2026-11-20", "sport": "NCAAM", "bet_type": "Straight", "selections": "Canisius ML (Mercyhurst @ Canisius \u2022 5:30 PM EST)", "odds": "+130", "stake": 3.39, "result": "Won", "net_pl": 4.41}, {"bet_id": "BET-048", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Under 216.5 Total Points (Raptors @ Pistons \u2022 7:30 PM EST)", "odds": "-115", "stake": 2.69, "result": "Won", "net_pl": 2.34}, {"bet_id": "BET-047", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Dyson Daniels Over 7.5 Rebounds (Hornets @ Hawks \u2022 7:00 PM EST)", "odds": "+115", "stake": 2.22, "result": "Won", "net_pl": 2.55}, {"bet_id": "BET-046", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Josh Giddey Over 7.5 Rebounds (Wizards @ Bulls \u2022 8:00 PM EST)", "odds": "+120", "stake": 2.22, "result": "Lost", "net_pl": -2.22}, {"bet_id": "BET-045", "date": "2026-11-19", "sport": "CFB", "bet_type": "Straight", "selections": "Temple Owls -2.5 (Rice @ Temple)", "odds": "-125", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-044", "date": "2026-11-19", "sport": "NBA", "bet_type": "Straight", "selections": "Julian Champagnie Over 5.5 Rebounds (Clippers @ Spurs)", "odds": "+110", "stake": 3.03, "result": "Lost", "net_pl": -3.03}, {"bet_id": "BET-043", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "St. Louis Blues ML (Blues @ Penguins)", "odds": "-115", "stake": 4.5, "result": "Won", "net_pl": 3.91}, {"bet_id": "BET-042", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "Anaheim Ducks ML (Ducks @ Avalanche)", "odds": "+110", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-041", "date": "2026-11-18", "sport": "NCAAM", "bet_type": "Straight", "selections": "Howard Bison ML (Howard @ Duquesne)", "odds": "+190", "stake": 1.5, "result": "Lost", "net_pl": -1.5}, {"bet_id": "BET-040", "date": "2026-11-18", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers ML (76ers @ Magic)", "odds": "-115", "stake": 2.5, "result": "Won", "net_pl": 2.17}, {"bet_id": "BET-039", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Devon Toews Over 1.5 Shots (Avalanche @ Mammoth)", "odds": "-110", "stake": 4.1, "result": "Won", "net_pl": 3.73}, {"bet_id": "BET-038", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Evan Rodrigues Under 0.5 Points (Canadiens @ Devils)", "odds": "-170", "stake": 5.75, "result": "Won", "net_pl": 3.38}, {"bet_id": "BET-037", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Arseny Gritsyuk Over 0.5 Points (Canadiens @ Devils)", "odds": "+100", "stake": 5.2, "result": "Lost", "net_pl": -5.2}, {"bet_id": "BET-036", "date": "2026-11-17", "sport": "NBA", "bet_type": "Parlay", "selections": "Knicks ML (-180) + Spurs ML (-475) + Lakers ML (-300) (Odds Boost +151 to +226)", "odds": "+226", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-035", "date": "2026-11-17", "sport": "Multi-Sport", "bet_type": "Parlay", "selections": "Garbage Fun Mega Parlay", "odds": "+5000", "stake": 1.0, "result": "Lost", "net_pl": -1.0}, {"bet_id": "BET-034", "date": "2026-11-17", "sport": "NHL", "bet_type": "SGP", "selections": "Under 5.5 + San Jose Sharks (Flames @ Sharks)", "odds": "+275", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-033", "date": "2026-11-17", "sport": "NBA", "bet_type": "Straight", "selections": "San Antonio Spurs -9.5 (Pistons @ Spurs)", "odds": "-110", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-032", "date": "2026-11-16", "sport": "NHL", "bet_type": "SGP", "selections": "Mammoth -1.5 + Over 6.5 Total Goals (Canucks @ Mammoth)", "odds": "+200", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-031", "date": "2026-11-16", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -6.5 (Philadelphia 76ers @ Brooklyn Nets)", "odds": "+100", "stake": 10.0, "result": "Won", "net_pl": 10.0}, {"bet_id": "BET-030", "date": "2026-11-16", "sport": "NCAAM", "bet_type": "Straight", "selections": "Over 159.5 Total Points (Eastern Kentucky @ Kent State)", "odds": "-110", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-029", "date": "2026-11-16", "sport": "NCAAM", "bet_type": "Straight", "selections": "Iona -1.5 (Iona @ UMBC)", "odds": "-130", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-028", "date": "2026-11-15", "sport": "NFL", "bet_type": "Parlay", "selections": "Patriots @ Lions Over 49.5 + Noah Gray Over 10.5 Rec Yds + Jaguars @ Titans Over 45.5 + DeMarcus Robinson Over 30.5 Rec Yds + Joe Burrow Over 291.5 Pass Yds", "odds": "+1793", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-027", "date": "2026-11-15", "sport": "NFL", "bet_type": "SGP", "selections": "Mike Gesicki Over 24.5 Rec Yds + Tee Higgins Anytime TD + Jaylen Warren Over 93.5 Rush+Rec Yds (Steelers @ Bengals)", "odds": "+617", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-026", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "Cincinnati Bengals -3.5 (Steelers @ Bengals)", "odds": "-110", "stake": 6.5, "result": "Won", "net_pl": 5.91}, {"bet_id": "BET-025", "date": "2026-11-15", "sport": "NFL", "bet_type": "Parlay", "selections": "Seattle Seahawks -6.5 + Rams @ Cardinals Under 39.5 + CeeDee Lamb Anytime TD (49ers @ Cowboys)", "odds": "+569", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-024", "date": "2026-11-15", "sport": "NFL", "bet_type": "Parlay", "selections": "Green Bay Packers -3 + Buffalo Bills -7.5 + Houston Texans -4.5", "odds": "+634", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-023", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "San Francisco 49ers -3.5 (49ers @ Cowboys)", "odds": "-120", "stake": 6.5, "result": "Won", "net_pl": 5.42}, {"bet_id": "BET-022", "date": "2026-11-15", "sport": "CFB", "bet_type": "Straight", "selections": "Ole Miss Rebels +2.5 (Ole Miss @ Oklahoma)", "odds": "-110", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-021", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "Kansas City Chiefs -3 (Chiefs @ Falcons)", "odds": "-120", "stake": 8.0, "result": "Won", "net_pl": 6.67}, {"bet_id": "BET-020", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "Detroit Lions -2.5 (Patriots @ Lions)", "odds": "-125", "stake": 6.0, "result": "Won", "net_pl": 4.8}, {"bet_id": "BET-019", "date": "2026-11-15", "sport": "NFL", "bet_type": "SGP", "selections": "Jahmyr Gibbs Anytime TD + Hunter Henry Over 33.5 Rec Yds + Jared Goff Over 1.5 Pass TDs (Patriots @ Lions)", "odds": "+220", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-018", "date": "2026-11-14", "sport": "CFB", "bet_type": "Parlay", "selections": "Over 49.5 [Texas vs LSU] + LSU -3.5 + Over 74.5 [Texas Tech vs Oklahoma State] + Oklahoma State -3.5 + Arizona +1.5 + Over 55.5 [Utah vs Arizona]", "odds": "+4256", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-017", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Indiana -8.5 vs USC", "odds": "-110", "stake": 10.0, "result": "Won", "net_pl": 9.09}, {"bet_id": "BET-016", "date": "2026-11-14", "sport": "CFB", "bet_type": "Parlay", "selections": "Tennessee -1.5 + Indiana -8.5 + Utah -1.5", "odds": "+612", "stake": 5.0, "result": "Won", "net_pl": 12.2}, {"bet_id": "BET-015", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Tennessee -1.5 (Tennessee @ Texas A&M)", "odds": "-110", "stake": 10.0, "result": "Won", "net_pl": 9.09}, {"bet_id": "BET-014", "date": "2026-11-14", "sport": "CFB", "bet_type": "Parlay", "selections": "SMU -1.5 + Alabama -16.5 + Indiana -9.5 + Utah -1.5", "odds": "+1335", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-013", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Alabama -16.5 (Alabama @ Vanderbilt)", "odds": "+110", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-012", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "SMU -1.5 (Wake Forest @ SMU)", "odds": "-120", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-011", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Iowa State -3.5 (Cincinnati @ Iowa State)", "odds": "+110", "stake": 8.0, "result": "Won", "net_pl": 8.8}, {"bet_id": "BET-010", "date": "2026-11-13", "sport": "Multi-Sport", "bet_type": "Parlay", "selections": "Orlando Magic -9.5 + Florida Gators MBB -36.5 + Pittsburgh Panthers -3.5", "odds": "+597", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-009", "date": "2026-11-13", "sport": "CFB", "bet_type": "Straight", "selections": "Houston Cougars -7.5 (Houston @ Colorado)", "odds": "-115", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-008", "date": "2026-11-13", "sport": "CFB", "bet_type": "Straight", "selections": "UCLA Bruins -9.5 (Illinois @ UCLA)", "odds": "-115", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-007", "date": "2026-11-13", "sport": "NCAAM", "bet_type": "Straight", "selections": "Clemson Tigers -4.5 (Georgetown @ Clemson)", "odds": "-110", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-006", "date": "2026-11-12", "sport": "NBA", "bet_type": "Parlay", "selections": "Pistons ML + 76ers ML + Timberwolves ML (Odds Boost +125 to +193)", "odds": "+193", "stake": 3.0, "result": "Won", "net_pl": 5.79}, {"bet_id": "BET-005", "date": "2026-11-12", "sport": "CFB", "bet_type": "SGP", "selections": "Louisiana ML + Under 56.5 Total Points (Louisiana @ UL-Monroe)", "odds": "-175", "stake": 7.0, "result": "Lost", "net_pl": -7.0}, {"bet_id": "BET-004", "date": "2026-11-11", "sport": "Multi-Sport", "bet_type": "Parlay", "selections": "Pennsylvania ML (-375) + Lakers ML (-750) + Magic ML (-180)", "odds": "+123", "stake": 3.0, "result": "Lost", "net_pl": -3.0}, {"bet_id": "BET-003", "date": "2026-11-11", "sport": "CFB", "bet_type": "SGP", "selections": "Toledo ML + Under 57.5 Total Points (Massachusetts @ Toledo)", "odds": "-190", "stake": 7.0, "result": "Won", "net_pl": 3.68}, {"bet_id": "BET-002", "date": "2026-11-11", "sport": "CFB", "bet_type": "Straight", "selections": "Opening Challenge Ticket #2 (Restored)", "odds": "-110", "stake": 3.0, "result": "Lost", "net_pl": -3.0}, {"bet_id": "BET-001", "date": "2026-11-11", "sport": "CFB", "bet_type": "Straight", "selections": "Opening Challenge Ticket (Restored)", "odds": "-110", "stake": 7.0, "result": "Lost", "net_pl": -7.0}], "pending_tickets": [], "curated_date": "2026-11-24", "curated_plays": [{"title": "7:00 PM EST \u2022 Detroit Pistons @ Orlando Magic (NBA) \u2014 Detroit Pistons ML (-130) \u2014 $11.00 (19.8% BR)", "is_pass": false, "edge": "", "game_line": "DET 10-6 @ ORL 7-9 | DET -2.5 (-104) / ORL +2.5 (-117) | ML: DET (-130) / ORL (+110) | O/U: 212.5 | L5 Form: DET 2-3 (-1.6) vs ORL 3-2 (-1.0) | ESPN BPI WinProb: DET 53.9% / ORL 46.1% | Spread Steam: 1.0 pt toward DET (Open ORL +1.5 -> Now +2.5) | Total Steam: 2.0 pts toward UNDER (Open 214.5 -> Now 212.5)", "confidence_math": "Base 50% + ModFav Sweet-Spot (+14), Sharp Steam (+10), Record Superiority (+5), 3-Pillar Confluence (+8) = 87% (Tier 2: Strong Conviction)", "confidence_pct": 87, "confidence_tier": "\ud83d\udc8e TIER 2: STRONG CONVICTION", "sport": "NBA", "selection": "Detroit Pistons ML (7:00 PM EST)", "odds": -130, "stake": 11.0, "game_time": "7:00 PM EST", "status": "remaining", "units": 3.2, "wager_pct": 16.1, "original_stake": 13.5, "stake_adjusted": true}, {"title": "8:00 PM EST \u2022 Vegas Golden Knights @ Edmonton Oilers (NHL) \u2014 Ryan Nugent-Hopkins Total Points Over 0.5 (-120) \u2014 $11.00 (14.7% BR)", "is_pass": false, "edge": "", "game_line": "VGK 14-6-5 @ EDM 17-5-4 | ML: VGK (-125) / EDM (+105) | O/U: 6.5 | L5 Form: VGK 1-4 (-1.0) vs EDM 2-3 (+0.0) | Goalies: VGK Hart (.886 SV%) vs EDM Levi (.896 SV%) | Hard Rock Prop Steam: Open 0.5 (+120) -> Steamed to 0.5 (-120)", "confidence_math": "Base 50% + Prop Steam Trend (+15), High Success Metric (+10), 2-Pillar Confluence (+8) = 83% (Tier 2: Strong Conviction)", "confidence_pct": 83, "confidence_tier": "\ud83d\udc8e TIER 2: STRONG CONVICTION", "sport": "NHL", "selection": "Ryan Nugent-Hopkins Total Points Over 0.5 (8:00 PM EST)", "odds": -120, "stake": 11.0, "game_time": "8:00 PM EST", "status": "remaining", "units": 3.2, "wager_pct": 16.1, "original_stake": 10.0, "stake_adjusted": true}, {"title": "10:00 PM EST \u2022 Dallas Mavericks @ Denver Nuggets (NBA) \u2014 Kyrie Irving Total Assists Over 4.5 (-132) \u2014 15.0% of Resulting BR (Est. $7.00)", "is_pass": false, "edge": "", "game_line": "DAL 10-7 @ DEN 10-5 | DEN -8.5 (-108) / DAL +8.5 (-112) | ML: DAL (+251) / DEN (-310) | O/U: 234.5 | L5 Form: DAL 3-2 (-2.6) vs DEN 4-1 (+3.0) | ESPN BPI WinProb: DAL 30.4% / DEN 69.6% | Hard Rock Prop Steam: Open 4.5 (+106) -> Steamed to 4.5 (-132)", "confidence_math": "Base 50% + Prop Steam Trend (+14), High Success Metric (+10), 2-Pillar Confluence (+8) = 82% (Tier 2: Strong Conviction)", "confidence_pct": 82, "confidence_tier": "\ud83d\udc8e TIER 2: STRONG CONVICTION", "sport": "NBA", "selection": "Kyrie Irving Total Assists Over 4.5 (10:00 PM EST)", "odds": -132, "stake": 7.0, "game_time": "10:00 PM EST", "status": "remaining", "units": 2.1, "wager_pct": 10.3, "original_stake": 11.5, "stake_adjusted": true}], "curated_raw": "\ud83c\udfaf *2026-11-24 Confidence Meter Time-Slot Slate*\nBankroll: $68.16 | Pending: $0.00 | Available: $68.16\n\n*Pending ($0.00):*\n\u2022 *None*\n\n*Today's Curated Plays:*\n1. *7:00 PM EST \u2022 Detroit Pistons @ Orlando Magic (NBA)* \u2014 *Detroit Pistons ML (-130)* \u2014 *$11.00 (19.8% BR)* \u2014 *87% \ud83d\udc8e [WAIT FOR LINEUP]*\n   - Game & Line: DET 10-6 @ ORL 7-9 | DET -2.5 (-104) / ORL +2.5 (-117) | ML: DET (-130) / ORL (+110) | O/U: 212.5 | L5 Form: DET 2-3 (-1.6) vs ORL 3-2 (-1.0) | ESPN BPI WinProb: DET 53.9% / ORL 46.1% | Spread Steam: 1.0 pt toward DET (Open ORL +1.5 -> Now +2.5) | Total Steam: 2.0 pts toward UNDER (Open 214.5 -> Now 212.5)\n   - Confidence Math: Base 50% + ModFav Sweet-Spot (+14), Sharp Steam (+10), Record Superiority (+5), 3-Pillar Confluence (+8) = 87% (Tier 2: Strong Conviction)\n\n2. *8:00 PM EST \u2022 Vegas Golden Knights @ Edmonton Oilers (NHL)* \u2014 *Ryan Nugent-Hopkins Total Points Over 0.5 (-120)* \u2014 *$11.00 (14.7% BR)* \u2014 *83% \ud83d\udc8e*\n   - Game & Line: VGK 14-6-5 @ EDM 17-5-4 | ML: VGK (-125) / EDM (+105) | O/U: 6.5 | L5 Form: VGK 1-4 (-1.0) vs EDM 2-3 (+0.0) | Goalies: VGK Hart (.886 SV%) vs EDM Levi (.896 SV%) | Hard Rock Prop Steam: Open 0.5 (+120) -> Steamed to 0.5 (-120)\n   - Confidence Math: Base 50% + Prop Steam Trend (+15), High Success Metric (+10), 2-Pillar Confluence (+8) = 83% (Tier 2: Strong Conviction)\n\n3. *10:00 PM EST \u2022 Dallas Mavericks @ Denver Nuggets (NBA)* \u2014 *Kyrie Irving Total Assists Over 4.5 (-132)* \u2014 *15.0% of Resulting BR (Est. $7.00)* \u2014 *82% \ud83d\udc8e*\n   - Game & Line: DAL 10-7 @ DEN 10-5 | DEN -8.5 (-108) / DAL +8.5 (-112) | ML: DAL (+251) / DEN (-310) | O/U: 234.5 | L5 Form: DAL 3-2 (-2.6) vs DEN 4-1 (+3.0) | ESPN BPI WinProb: DAL 30.4% / DEN 69.6% | Hard Rock Prop Steam: Open 4.5 (+106) -> Steamed to 4.5 (-132)\n   - Confidence Math: Base 50% + Prop Steam Trend (+14), High Success Metric (+10), 2-Pillar Confluence (+8) = 82% (Tier 2: Strong Conviction)", "equity_curve": [{"label": "START", "bankroll": 100.0}, {"label": "BET-001", "bankroll": 93.0}, {"label": "BET-002", "bankroll": 90.0}, {"label": "BET-003", "bankroll": 93.68}, {"label": "BET-004", "bankroll": 90.68}, {"label": "BET-005", "bankroll": 83.68}, {"label": "BET-006", "bankroll": 89.47}, {"label": "BET-007", "bankroll": 81.47}, {"label": "BET-008", "bankroll": 71.47}, {"label": "BET-009", "bankroll": 61.47}, {"label": "BET-010", "bankroll": 56.47}, {"label": "BET-011", "bankroll": 65.27}, {"label": "BET-012", "bankroll": 57.27}, {"label": "BET-013", "bankroll": 47.27}, {"label": "BET-014", "bankroll": 42.27}, {"label": "BET-015", "bankroll": 51.36}, {"label": "BET-016", "bankroll": 63.56}, {"label": "BET-017", "bankroll": 72.65}, {"label": "BET-018", "bankroll": 67.65}, {"label": "BET-019", "bankroll": 64.15}, {"label": "BET-020", "bankroll": 68.95}, {"label": "BET-021", "bankroll": 75.62}, {"label": "BET-022", "bankroll": 67.62}, {"label": "BET-023", "bankroll": 73.04}, {"label": "BET-024", "bankroll": 69.04}, {"label": "BET-025", "bankroll": 65.04}, {"label": "BET-026", "bankroll": 70.95}, {"label": "BET-027", "bankroll": 67.45}, {"label": "BET-028", "bankroll": 63.45}, {"label": "BET-029", "bankroll": 55.45}, {"label": "BET-030", "bankroll": 47.45}, {"label": "BET-031", "bankroll": 57.45}, {"label": "BET-032", "bankroll": 53.45}, {"label": "BET-033", "bankroll": 43.45}, {"label": "BET-034", "bankroll": 33.45}, {"label": "BET-035", "bankroll": 32.45}, {"label": "BET-036", "bankroll": 27.45}, {"label": "BET-037", "bankroll": 22.25}, {"label": "BET-038", "bankroll": 25.63}, {"label": "BET-039", "bankroll": 29.36}, {"label": "BET-040", "bankroll": 31.53}, {"label": "BET-041", "bankroll": 30.03}, {"label": "BET-042", "bankroll": 26.03}, {"label": "BET-043", "bankroll": 29.94}, {"label": "BET-044", "bankroll": 26.91}, {"label": "BET-045", "bankroll": 23.41}, {"label": "BET-046", "bankroll": 21.19}, {"label": "BET-047", "bankroll": 23.74}, {"label": "BET-048", "bankroll": 26.08}, {"label": "BET-049", "bankroll": 30.49}, {"label": "BET-050", "bankroll": 36.04}, {"label": "BET-051", "bankroll": 29.04}, {"label": "BET-053", "bankroll": 44.69}, {"label": "BET-054", "bankroll": 47.6}, {"label": "BET-055", "bankroll": 34.99}, {"label": "BET-056", "bankroll": 39.8}, {"label": "BET-057", "bankroll": 43.78}, {"label": "BET-058", "bankroll": 60.08}, {"label": "BET-059", "bankroll": 52.2}, {"label": "BET-060", "bankroll": 57.63}, {"label": "BET-061", "bankroll": 45.61}, {"label": "BET-062", "bankroll": 60.22}, {"label": "BET-063", "bankroll": 80.3}, {"label": "BET-064", "bankroll": 59.22}, {"label": "BET-065", "bankroll": 71.72}, {"label": "BET-066", "bankroll": 91.1}, {"label": "BET-067", "bankroll": 120.08}, {"label": "BET-068", "bankroll": 115.37}, {"label": "BET-069", "bankroll": 133.01}, {"label": "BET-070", "bankroll": 105.84}, {"label": "BET-071", "bankroll": 73.34}, {"label": "BET-072", "bankroll": 48.34}, {"label": "BET-073", "bankroll": 36.34}, {"label": "BET-074", "bankroll": 68.16}]};
+    const STATIC_DATA = {"updated_at": "2026-11-24 05:49 PM EST", "today": "2026-11-24", "yesterday": "2026-11-23", "week_start": "2026-11-18", "bankroll": 68.16, "pending_total": 0.0, "available_cash": 68.16, "overall": {"wins": 32, "losses": 41, "pushes": 0, "win_pct": 43.8, "net_pl": -31.84, "roi": -4.5, "avg_clv": 1.86, "clv_count": 10}, "week_stats": {"start_date": "2026-11-18", "end_date": "2026-11-24", "wins": 21, "losses": 16, "pushes": 0, "win_pct": 56.8, "net_pl": 40.71, "tickets": [{"bet_id": "BET-074", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "North Dakota Fighting Hawks -4.5 (3:00 PM EST)", "odds": "-110", "stake": 35.0, "result": "Won", "net_pl": 31.82}, {"bet_id": "BET-073", "date": "2026-11-24", "sport": "UCL", "bet_type": "Straight", "selections": "Bodo/Glimt -1.5 (12:45 PM EST)", "odds": "-115", "stake": 12.0, "result": "Lost", "net_pl": -12.0}, {"bet_id": "BET-072", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Northern Colorado Bears -2.5 (12:30 PM EST)", "odds": "-120", "stake": 25.0, "result": "Lost", "net_pl": -25.0}, {"bet_id": "BET-071", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Ohio Bobcats -4.5 (11:00 AM EST)", "odds": "-115", "stake": 32.5, "result": "Lost", "net_pl": -32.5}, {"bet_id": "BET-070", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Oklahoma City Thunder -4.5 (7:30 PM EST)", "odds": "-110", "stake": 27.17, "result": "Lost", "net_pl": -27.17}, {"bet_id": "BET-069", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Phoenix Suns ML (8:00 PM EST)", "odds": "-155", "stake": 27.34, "result": "Won", "net_pl": 17.64}, {"bet_id": "BET-068", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -1.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Lost", "net_pl": -4.71}, {"bet_id": "BET-067", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Memphis Grizzlies -2.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Won", "net_pl": 28.98}, {"bet_id": "BET-066", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "Belmont Bruins ML (4:00 PM EST)", "odds": "-145", "stake": 28.1, "result": "Won", "net_pl": 19.38}, {"bet_id": "BET-065", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Ole Miss Rebels @ Clemson Tigers (CBB) \u2014 Ole Miss Rebels -5.5", "odds": "-120", "stake": 15.0, "result": "Won", "net_pl": 12.5}, {"bet_id": "BET-064", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Tulsa Golden Hurricane @ Oregon State Beavers (CBB) \u2014 Oregon State Beavers -6.5", "odds": "-105", "stake": 21.08, "result": "Lost", "net_pl": -21.08}, {"bet_id": "BET-063", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Northern Iowa Panthers @ Davidson Wildcats (CBB) \u2014 Davidson Wildcats -5.5", "odds": "-105", "stake": 21.08, "result": "Won", "net_pl": 20.08}, {"bet_id": "BET-062", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "San Francisco 49ers -4 (Window 5: 6:30)", "odds": "-115", "stake": 16.8, "result": "Won", "net_pl": 14.61}, {"bet_id": "BET-061", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Jacksonville Jaguars -6.5 (Window 4: 3:00)", "odds": "-110", "stake": 12.02, "result": "Lost", "net_pl": -12.02}, {"bet_id": "BET-060", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Carolina Panthers ML (Window 3)", "odds": "-145", "stake": 7.88, "result": "Won", "net_pl": 5.43}, {"bet_id": "BET-059", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Tampa Bay Buccaneers +3.5 (Window 3)", "odds": "-110", "stake": 7.88, "result": "Lost", "net_pl": -7.88}, {"bet_id": "BET-058", "date": "2026-11-22", "sport": "EPL", "bet_type": "Straight", "selections": "Liverpool ML (Liverpool vs Manchester United \u2022 11:30 AM EST)", "odds": "-135", "stake": 22.0, "result": "Won", "net_pl": 16.3}, {"bet_id": "BET-057", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oklahoma State ML (10:15 PM EST)", "odds": "-145", "stake": 5.77, "result": "Won", "net_pl": 3.98}, {"bet_id": "BET-056", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oregon State -6.5 (10:30 PM EST)", "odds": "-120", "stake": 5.77, "result": "Won", "net_pl": 4.81}, {"bet_id": "BET-055", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Middle Tennessee -7.5 (2:00 PM EST)", "odds": "-110", "stake": 12.61, "result": "Lost", "net_pl": -12.61}, {"bet_id": "BET-054", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Stanford TO WIN (Stanford @ Cal \u2022 7:30 PM EST)", "odds": "-275", "stake": 8.0, "result": "Won", "net_pl": 2.91}, {"bet_id": "BET-053", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Tennessee TO WIN (LSU @ Tennessee \u2022 3:30 PM EST)", "odds": "-105", "stake": 16.43, "result": "Won", "net_pl": 15.65}, {"bet_id": "BET-051", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Memphis ML (Memphis @ Navy \u2022 12:00 PM EST)", "odds": "-135", "stake": 7.0, "result": "Lost", "net_pl": -7.0}, {"bet_id": "BET-050", "date": "2026-11-21", "sport": "EPL", "bet_type": "Straight", "selections": "Bournemouth (Bournemouth vs Nottingham Forest \u2022 10:00 AM EST)", "odds": "-110", "stake": 6.1, "result": "Won", "net_pl": 5.55}, {"bet_id": "BET-049", "date": "2026-11-20", "sport": "NCAAM", "bet_type": "Straight", "selections": "Canisius ML (Mercyhurst @ Canisius \u2022 5:30 PM EST)", "odds": "+130", "stake": 3.39, "result": "Won", "net_pl": 4.41}, {"bet_id": "BET-048", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Under 216.5 Total Points (Raptors @ Pistons \u2022 7:30 PM EST)", "odds": "-115", "stake": 2.69, "result": "Won", "net_pl": 2.34}, {"bet_id": "BET-047", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Dyson Daniels Over 7.5 Rebounds (Hornets @ Hawks \u2022 7:00 PM EST)", "odds": "+115", "stake": 2.22, "result": "Won", "net_pl": 2.55}, {"bet_id": "BET-046", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Josh Giddey Over 7.5 Rebounds (Wizards @ Bulls \u2022 8:00 PM EST)", "odds": "+120", "stake": 2.22, "result": "Lost", "net_pl": -2.22}, {"bet_id": "BET-045", "date": "2026-11-19", "sport": "CFB", "bet_type": "Straight", "selections": "Temple Owls -2.5 (Rice @ Temple)", "odds": "-125", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-044", "date": "2026-11-19", "sport": "NBA", "bet_type": "Straight", "selections": "Julian Champagnie Over 5.5 Rebounds (Clippers @ Spurs)", "odds": "+110", "stake": 3.03, "result": "Lost", "net_pl": -3.03}, {"bet_id": "BET-043", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "St. Louis Blues ML (Blues @ Penguins)", "odds": "-115", "stake": 4.5, "result": "Won", "net_pl": 3.91}, {"bet_id": "BET-042", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "Anaheim Ducks ML (Ducks @ Avalanche)", "odds": "+110", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-041", "date": "2026-11-18", "sport": "NCAAM", "bet_type": "Straight", "selections": "Howard Bison ML (Howard @ Duquesne)", "odds": "+190", "stake": 1.5, "result": "Lost", "net_pl": -1.5}, {"bet_id": "BET-040", "date": "2026-11-18", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers ML (76ers @ Magic)", "odds": "-115", "stake": 2.5, "result": "Won", "net_pl": 2.17}, {"bet_id": "BET-039", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Devon Toews Over 1.5 Shots (Avalanche @ Mammoth)", "odds": "-110", "stake": 4.1, "result": "Won", "net_pl": 3.73}, {"bet_id": "BET-038", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Evan Rodrigues Under 0.5 Points (Canadiens @ Devils)", "odds": "-170", "stake": 5.75, "result": "Won", "net_pl": 3.38}, {"bet_id": "BET-037", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Arseny Gritsyuk Over 0.5 Points (Canadiens @ Devils)", "odds": "+100", "stake": 5.2, "result": "Lost", "net_pl": -5.2}]}, "today_stats": {"date": "2026-11-24", "wins": 1, "losses": 3, "pushes": 0, "win_pct": 25.0, "net_pl": -37.68, "tickets": [{"bet_id": "BET-074", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "North Dakota Fighting Hawks -4.5 (3:00 PM EST)", "odds": "-110", "stake": 35.0, "result": "Won", "net_pl": 31.82}, {"bet_id": "BET-073", "date": "2026-11-24", "sport": "UCL", "bet_type": "Straight", "selections": "Bodo/Glimt -1.5 (12:45 PM EST)", "odds": "-115", "stake": 12.0, "result": "Lost", "net_pl": -12.0}, {"bet_id": "BET-072", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Northern Colorado Bears -2.5 (12:30 PM EST)", "odds": "-120", "stake": 25.0, "result": "Lost", "net_pl": -25.0}, {"bet_id": "BET-071", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Ohio Bobcats -4.5 (11:00 AM EST)", "odds": "-115", "stake": 32.5, "result": "Lost", "net_pl": -32.5}]}, "yesterday_stats": {"date": "2026-11-23", "wins": 5, "losses": 3, "pushes": 0, "win_pct": 62.5, "net_pl": 45.62, "tickets": [{"bet_id": "BET-070", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Oklahoma City Thunder -4.5 (7:30 PM EST)", "odds": "-110", "stake": 27.17, "result": "Lost", "net_pl": -27.17}, {"bet_id": "BET-069", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Phoenix Suns ML (8:00 PM EST)", "odds": "-155", "stake": 27.34, "result": "Won", "net_pl": 17.64}, {"bet_id": "BET-068", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -1.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Lost", "net_pl": -4.71}, {"bet_id": "BET-067", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Memphis Grizzlies -2.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Won", "net_pl": 28.98}, {"bet_id": "BET-066", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "Belmont Bruins ML (4:00 PM EST)", "odds": "-145", "stake": 28.1, "result": "Won", "net_pl": 19.38}, {"bet_id": "BET-065", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Ole Miss Rebels @ Clemson Tigers (CBB) \u2014 Ole Miss Rebels -5.5", "odds": "-120", "stake": 15.0, "result": "Won", "net_pl": 12.5}, {"bet_id": "BET-064", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Tulsa Golden Hurricane @ Oregon State Beavers (CBB) \u2014 Oregon State Beavers -6.5", "odds": "-105", "stake": 21.08, "result": "Lost", "net_pl": -21.08}, {"bet_id": "BET-063", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Northern Iowa Panthers @ Davidson Wildcats (CBB) \u2014 Davidson Wildcats -5.5", "odds": "-105", "stake": 21.08, "result": "Won", "net_pl": 20.08}]}, "settled_tickets": [{"bet_id": "BET-074", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "North Dakota Fighting Hawks -4.5 (3:00 PM EST)", "odds": "-110", "stake": 35.0, "result": "Won", "net_pl": 31.82}, {"bet_id": "BET-073", "date": "2026-11-24", "sport": "UCL", "bet_type": "Straight", "selections": "Bodo/Glimt -1.5 (12:45 PM EST)", "odds": "-115", "stake": 12.0, "result": "Lost", "net_pl": -12.0}, {"bet_id": "BET-072", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Northern Colorado Bears -2.5 (12:30 PM EST)", "odds": "-120", "stake": 25.0, "result": "Lost", "net_pl": -25.0}, {"bet_id": "BET-071", "date": "2026-11-24", "sport": "NCAAM", "bet_type": "Straight", "selections": "Ohio Bobcats -4.5 (11:00 AM EST)", "odds": "-115", "stake": 32.5, "result": "Lost", "net_pl": -32.5}, {"bet_id": "BET-070", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Oklahoma City Thunder -4.5 (7:30 PM EST)", "odds": "-110", "stake": 27.17, "result": "Lost", "net_pl": -27.17}, {"bet_id": "BET-069", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Phoenix Suns ML (8:00 PM EST)", "odds": "-155", "stake": 27.34, "result": "Won", "net_pl": 17.64}, {"bet_id": "BET-068", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -1.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Lost", "net_pl": -4.71}, {"bet_id": "BET-067", "date": "2026-11-23", "sport": "NBA", "bet_type": "Straight", "selections": "Memphis Grizzlies -2.5 (7:00 PM EST)", "odds": "-110", "stake": 31.88, "result": "Won", "net_pl": 28.98}, {"bet_id": "BET-066", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "Belmont Bruins ML (4:00 PM EST)", "odds": "-145", "stake": 28.1, "result": "Won", "net_pl": 19.38}, {"bet_id": "BET-065", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Ole Miss Rebels @ Clemson Tigers (CBB) \u2014 Ole Miss Rebels -5.5", "odds": "-120", "stake": 15.0, "result": "Won", "net_pl": 12.5}, {"bet_id": "BET-064", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Tulsa Golden Hurricane @ Oregon State Beavers (CBB) \u2014 Oregon State Beavers -6.5", "odds": "-105", "stake": 21.08, "result": "Lost", "net_pl": -21.08}, {"bet_id": "BET-063", "date": "2026-11-23", "sport": "NCAAM", "bet_type": "Straight", "selections": "\u2022 Northern Iowa Panthers @ Davidson Wildcats (CBB) \u2014 Davidson Wildcats -5.5", "odds": "-105", "stake": 21.08, "result": "Won", "net_pl": 20.08}, {"bet_id": "BET-062", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "San Francisco 49ers -4 (Window 5: 6:30)", "odds": "-115", "stake": 16.8, "result": "Won", "net_pl": 14.61}, {"bet_id": "BET-061", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Jacksonville Jaguars -6.5 (Window 4: 3:00)", "odds": "-110", "stake": 12.02, "result": "Lost", "net_pl": -12.02}, {"bet_id": "BET-060", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Carolina Panthers ML (Window 3)", "odds": "-145", "stake": 7.88, "result": "Won", "net_pl": 5.43}, {"bet_id": "BET-059", "date": "2026-11-22", "sport": "NFL", "bet_type": "Straight", "selections": "Tampa Bay Buccaneers +3.5 (Window 3)", "odds": "-110", "stake": 7.88, "result": "Lost", "net_pl": -7.88}, {"bet_id": "BET-058", "date": "2026-11-22", "sport": "EPL", "bet_type": "Straight", "selections": "Liverpool ML (Liverpool vs Manchester United \u2022 11:30 AM EST)", "odds": "-135", "stake": 22.0, "result": "Won", "net_pl": 16.3}, {"bet_id": "BET-057", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oklahoma State ML (10:15 PM EST)", "odds": "-145", "stake": 5.77, "result": "Won", "net_pl": 3.98}, {"bet_id": "BET-056", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Oregon State -6.5 (10:30 PM EST)", "odds": "-120", "stake": 5.77, "result": "Won", "net_pl": 4.81}, {"bet_id": "BET-055", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Middle Tennessee -7.5 (2:00 PM EST)", "odds": "-110", "stake": 12.61, "result": "Lost", "net_pl": -12.61}, {"bet_id": "BET-054", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Stanford TO WIN (Stanford @ Cal \u2022 7:30 PM EST)", "odds": "-275", "stake": 8.0, "result": "Won", "net_pl": 2.91}, {"bet_id": "BET-053", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Tennessee TO WIN (LSU @ Tennessee \u2022 3:30 PM EST)", "odds": "-105", "stake": 16.43, "result": "Won", "net_pl": 15.65}, {"bet_id": "BET-051", "date": "2026-11-21", "sport": "CFB", "bet_type": "Straight", "selections": "Memphis ML (Memphis @ Navy \u2022 12:00 PM EST)", "odds": "-135", "stake": 7.0, "result": "Lost", "net_pl": -7.0}, {"bet_id": "BET-050", "date": "2026-11-21", "sport": "EPL", "bet_type": "Straight", "selections": "Bournemouth (Bournemouth vs Nottingham Forest \u2022 10:00 AM EST)", "odds": "-110", "stake": 6.1, "result": "Won", "net_pl": 5.55}, {"bet_id": "BET-049", "date": "2026-11-20", "sport": "NCAAM", "bet_type": "Straight", "selections": "Canisius ML (Mercyhurst @ Canisius \u2022 5:30 PM EST)", "odds": "+130", "stake": 3.39, "result": "Won", "net_pl": 4.41}, {"bet_id": "BET-048", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Under 216.5 Total Points (Raptors @ Pistons \u2022 7:30 PM EST)", "odds": "-115", "stake": 2.69, "result": "Won", "net_pl": 2.34}, {"bet_id": "BET-047", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Dyson Daniels Over 7.5 Rebounds (Hornets @ Hawks \u2022 7:00 PM EST)", "odds": "+115", "stake": 2.22, "result": "Won", "net_pl": 2.55}, {"bet_id": "BET-046", "date": "2026-11-20", "sport": "NBA", "bet_type": "Straight", "selections": "Josh Giddey Over 7.5 Rebounds (Wizards @ Bulls \u2022 8:00 PM EST)", "odds": "+120", "stake": 2.22, "result": "Lost", "net_pl": -2.22}, {"bet_id": "BET-045", "date": "2026-11-19", "sport": "CFB", "bet_type": "Straight", "selections": "Temple Owls -2.5 (Rice @ Temple)", "odds": "-125", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-044", "date": "2026-11-19", "sport": "NBA", "bet_type": "Straight", "selections": "Julian Champagnie Over 5.5 Rebounds (Clippers @ Spurs)", "odds": "+110", "stake": 3.03, "result": "Lost", "net_pl": -3.03}, {"bet_id": "BET-043", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "St. Louis Blues ML (Blues @ Penguins)", "odds": "-115", "stake": 4.5, "result": "Won", "net_pl": 3.91}, {"bet_id": "BET-042", "date": "2026-11-19", "sport": "NHL", "bet_type": "Straight", "selections": "Anaheim Ducks ML (Ducks @ Avalanche)", "odds": "+110", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-041", "date": "2026-11-18", "sport": "NCAAM", "bet_type": "Straight", "selections": "Howard Bison ML (Howard @ Duquesne)", "odds": "+190", "stake": 1.5, "result": "Lost", "net_pl": -1.5}, {"bet_id": "BET-040", "date": "2026-11-18", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers ML (76ers @ Magic)", "odds": "-115", "stake": 2.5, "result": "Won", "net_pl": 2.17}, {"bet_id": "BET-039", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Devon Toews Over 1.5 Shots (Avalanche @ Mammoth)", "odds": "-110", "stake": 4.1, "result": "Won", "net_pl": 3.73}, {"bet_id": "BET-038", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Evan Rodrigues Under 0.5 Points (Canadiens @ Devils)", "odds": "-170", "stake": 5.75, "result": "Won", "net_pl": 3.38}, {"bet_id": "BET-037", "date": "2026-11-18", "sport": "NHL", "bet_type": "Straight", "selections": "Arseny Gritsyuk Over 0.5 Points (Canadiens @ Devils)", "odds": "+100", "stake": 5.2, "result": "Lost", "net_pl": -5.2}, {"bet_id": "BET-036", "date": "2026-11-17", "sport": "NBA", "bet_type": "Parlay", "selections": "Knicks ML (-180) + Spurs ML (-475) + Lakers ML (-300) (Odds Boost +151 to +226)", "odds": "+226", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-035", "date": "2026-11-17", "sport": "Multi-Sport", "bet_type": "Parlay", "selections": "Garbage Fun Mega Parlay", "odds": "+5000", "stake": 1.0, "result": "Lost", "net_pl": -1.0}, {"bet_id": "BET-034", "date": "2026-11-17", "sport": "NHL", "bet_type": "SGP", "selections": "Under 5.5 + San Jose Sharks (Flames @ Sharks)", "odds": "+275", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-033", "date": "2026-11-17", "sport": "NBA", "bet_type": "Straight", "selections": "San Antonio Spurs -9.5 (Pistons @ Spurs)", "odds": "-110", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-032", "date": "2026-11-16", "sport": "NHL", "bet_type": "SGP", "selections": "Mammoth -1.5 + Over 6.5 Total Goals (Canucks @ Mammoth)", "odds": "+200", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-031", "date": "2026-11-16", "sport": "NBA", "bet_type": "Straight", "selections": "Philadelphia 76ers -6.5 (Philadelphia 76ers @ Brooklyn Nets)", "odds": "+100", "stake": 10.0, "result": "Won", "net_pl": 10.0}, {"bet_id": "BET-030", "date": "2026-11-16", "sport": "NCAAM", "bet_type": "Straight", "selections": "Over 159.5 Total Points (Eastern Kentucky @ Kent State)", "odds": "-110", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-029", "date": "2026-11-16", "sport": "NCAAM", "bet_type": "Straight", "selections": "Iona -1.5 (Iona @ UMBC)", "odds": "-130", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-028", "date": "2026-11-15", "sport": "NFL", "bet_type": "Parlay", "selections": "Patriots @ Lions Over 49.5 + Noah Gray Over 10.5 Rec Yds + Jaguars @ Titans Over 45.5 + DeMarcus Robinson Over 30.5 Rec Yds + Joe Burrow Over 291.5 Pass Yds", "odds": "+1793", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-027", "date": "2026-11-15", "sport": "NFL", "bet_type": "SGP", "selections": "Mike Gesicki Over 24.5 Rec Yds + Tee Higgins Anytime TD + Jaylen Warren Over 93.5 Rush+Rec Yds (Steelers @ Bengals)", "odds": "+617", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-026", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "Cincinnati Bengals -3.5 (Steelers @ Bengals)", "odds": "-110", "stake": 6.5, "result": "Won", "net_pl": 5.91}, {"bet_id": "BET-025", "date": "2026-11-15", "sport": "NFL", "bet_type": "Parlay", "selections": "Seattle Seahawks -6.5 + Rams @ Cardinals Under 39.5 + CeeDee Lamb Anytime TD (49ers @ Cowboys)", "odds": "+569", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-024", "date": "2026-11-15", "sport": "NFL", "bet_type": "Parlay", "selections": "Green Bay Packers -3 + Buffalo Bills -7.5 + Houston Texans -4.5", "odds": "+634", "stake": 4.0, "result": "Lost", "net_pl": -4.0}, {"bet_id": "BET-023", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "San Francisco 49ers -3.5 (49ers @ Cowboys)", "odds": "-120", "stake": 6.5, "result": "Won", "net_pl": 5.42}, {"bet_id": "BET-022", "date": "2026-11-15", "sport": "CFB", "bet_type": "Straight", "selections": "Ole Miss Rebels +2.5 (Ole Miss @ Oklahoma)", "odds": "-110", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-021", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "Kansas City Chiefs -3 (Chiefs @ Falcons)", "odds": "-120", "stake": 8.0, "result": "Won", "net_pl": 6.67}, {"bet_id": "BET-020", "date": "2026-11-15", "sport": "NFL", "bet_type": "Straight", "selections": "Detroit Lions -2.5 (Patriots @ Lions)", "odds": "-125", "stake": 6.0, "result": "Won", "net_pl": 4.8}, {"bet_id": "BET-019", "date": "2026-11-15", "sport": "NFL", "bet_type": "SGP", "selections": "Jahmyr Gibbs Anytime TD + Hunter Henry Over 33.5 Rec Yds + Jared Goff Over 1.5 Pass TDs (Patriots @ Lions)", "odds": "+220", "stake": 3.5, "result": "Lost", "net_pl": -3.5}, {"bet_id": "BET-018", "date": "2026-11-14", "sport": "CFB", "bet_type": "Parlay", "selections": "Over 49.5 [Texas vs LSU] + LSU -3.5 + Over 74.5 [Texas Tech vs Oklahoma State] + Oklahoma State -3.5 + Arizona +1.5 + Over 55.5 [Utah vs Arizona]", "odds": "+4256", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-017", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Indiana -8.5 vs USC", "odds": "-110", "stake": 10.0, "result": "Won", "net_pl": 9.09}, {"bet_id": "BET-016", "date": "2026-11-14", "sport": "CFB", "bet_type": "Parlay", "selections": "Tennessee -1.5 + Indiana -8.5 + Utah -1.5", "odds": "+612", "stake": 5.0, "result": "Won", "net_pl": 12.2}, {"bet_id": "BET-015", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Tennessee -1.5 (Tennessee @ Texas A&M)", "odds": "-110", "stake": 10.0, "result": "Won", "net_pl": 9.09}, {"bet_id": "BET-014", "date": "2026-11-14", "sport": "CFB", "bet_type": "Parlay", "selections": "SMU -1.5 + Alabama -16.5 + Indiana -9.5 + Utah -1.5", "odds": "+1335", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-013", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Alabama -16.5 (Alabama @ Vanderbilt)", "odds": "+110", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-012", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "SMU -1.5 (Wake Forest @ SMU)", "odds": "-120", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-011", "date": "2026-11-14", "sport": "CFB", "bet_type": "Straight", "selections": "Iowa State -3.5 (Cincinnati @ Iowa State)", "odds": "+110", "stake": 8.0, "result": "Won", "net_pl": 8.8}, {"bet_id": "BET-010", "date": "2026-11-13", "sport": "Multi-Sport", "bet_type": "Parlay", "selections": "Orlando Magic -9.5 + Florida Gators MBB -36.5 + Pittsburgh Panthers -3.5", "odds": "+597", "stake": 5.0, "result": "Lost", "net_pl": -5.0}, {"bet_id": "BET-009", "date": "2026-11-13", "sport": "CFB", "bet_type": "Straight", "selections": "Houston Cougars -7.5 (Houston @ Colorado)", "odds": "-115", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-008", "date": "2026-11-13", "sport": "CFB", "bet_type": "Straight", "selections": "UCLA Bruins -9.5 (Illinois @ UCLA)", "odds": "-115", "stake": 10.0, "result": "Lost", "net_pl": -10.0}, {"bet_id": "BET-007", "date": "2026-11-13", "sport": "NCAAM", "bet_type": "Straight", "selections": "Clemson Tigers -4.5 (Georgetown @ Clemson)", "odds": "-110", "stake": 8.0, "result": "Lost", "net_pl": -8.0}, {"bet_id": "BET-006", "date": "2026-11-12", "sport": "NBA", "bet_type": "Parlay", "selections": "Pistons ML + 76ers ML + Timberwolves ML (Odds Boost +125 to +193)", "odds": "+193", "stake": 3.0, "result": "Won", "net_pl": 5.79}, {"bet_id": "BET-005", "date": "2026-11-12", "sport": "CFB", "bet_type": "SGP", "selections": "Louisiana ML + Under 56.5 Total Points (Louisiana @ UL-Monroe)", "odds": "-175", "stake": 7.0, "result": "Lost", "net_pl": -7.0}, {"bet_id": "BET-004", "date": "2026-11-11", "sport": "Multi-Sport", "bet_type": "Parlay", "selections": "Pennsylvania ML (-375) + Lakers ML (-750) + Magic ML (-180)", "odds": "+123", "stake": 3.0, "result": "Lost", "net_pl": -3.0}, {"bet_id": "BET-003", "date": "2026-11-11", "sport": "CFB", "bet_type": "SGP", "selections": "Toledo ML + Under 57.5 Total Points (Massachusetts @ Toledo)", "odds": "-190", "stake": 7.0, "result": "Won", "net_pl": 3.68}, {"bet_id": "BET-002", "date": "2026-11-11", "sport": "CFB", "bet_type": "Straight", "selections": "Opening Challenge Ticket #2 (Restored)", "odds": "-110", "stake": 3.0, "result": "Lost", "net_pl": -3.0}, {"bet_id": "BET-001", "date": "2026-11-11", "sport": "CFB", "bet_type": "Straight", "selections": "Opening Challenge Ticket (Restored)", "odds": "-110", "stake": 7.0, "result": "Lost", "net_pl": -7.0}], "pending_tickets": [], "curated_date": "2026-11-24", "curated_plays": [{"title": "7:00 PM EST \u2022 Detroit Pistons @ Orlando Magic (NBA) \u2014 Detroit Pistons ML (-130) \u2014 $11.00 (19.8% BR)", "is_pass": false, "edge": "", "game_line": "DET 10-6 @ ORL 7-9 | DET -2.5 (-104) / ORL +2.5 (-117) | ML: DET (-130) / ORL (+110) | O/U: 212.5 | L5 Form: DET 2-3 (-1.6) vs ORL 3-2 (-1.0) | ESPN BPI WinProb: DET 53.9% / ORL 46.1% | Spread Steam: 1.0 pt toward DET (Open ORL +1.5 -> Now +2.5) | Total Steam: 2.0 pts toward UNDER (Open 214.5 -> Now 212.5)", "confidence_math": "Base 50% + ModFav Sweet-Spot (+14), Sharp Steam (+10), Record Superiority (+5), 3-Pillar Confluence (+8) = 87% (Tier 2: Strong Conviction)", "confidence_pct": 87, "confidence_tier": "TIER 2: STRONG CONVICTION", "sport": "NBA", "selection": "Detroit Pistons ML (7:00 PM EST)", "odds": -130, "stake": 11.0, "game_time": "7:00 PM EST", "status": "remaining", "units": 3.2, "wager_pct": 16.1, "original_stake": 13.5, "stake_adjusted": true}, {"title": "8:00 PM EST \u2022 Vegas Golden Knights @ Edmonton Oilers (NHL) \u2014 Ryan Nugent-Hopkins Total Points Over 0.5 (-120) \u2014 $11.00 (14.7% BR)", "is_pass": false, "edge": "", "game_line": "VGK 14-6-5 @ EDM 17-5-4 | ML: VGK (-125) / EDM (+105) | O/U: 6.5 | L5 Form: VGK 1-4 (-1.0) vs EDM 2-3 (+0.0) | Goalies: VGK Hart (.886 SV%) vs EDM Levi (.896 SV%) | Hard Rock Prop Steam: Open 0.5 (+120) -> Steamed to 0.5 (-120)", "confidence_math": "Base 50% + Prop Steam Trend (+15), High Success Metric (+10), 2-Pillar Confluence (+8) = 83% (Tier 2: Strong Conviction)", "confidence_pct": 83, "confidence_tier": "TIER 2: STRONG CONVICTION", "sport": "NHL", "selection": "Ryan Nugent-Hopkins Total Points Over 0.5 (8:00 PM EST)", "odds": -120, "stake": 11.0, "game_time": "8:00 PM EST", "status": "remaining", "units": 3.2, "wager_pct": 16.1, "original_stake": 10.0, "stake_adjusted": true}, {"title": "10:00 PM EST \u2022 Dallas Mavericks @ Denver Nuggets (NBA) \u2014 Kyrie Irving Total Assists Over 4.5 (-132) \u2014 15.0% of Resulting BR (Est. $7.00)", "is_pass": false, "edge": "", "game_line": "DAL 10-7 @ DEN 10-5 | DEN -8.5 (-108) / DAL +8.5 (-112) | ML: DAL (+251) / DEN (-310) | O/U: 234.5 | L5 Form: DAL 3-2 (-2.6) vs DEN 4-1 (+3.0) | ESPN BPI WinProb: DAL 30.4% / DEN 69.6% | Hard Rock Prop Steam: Open 4.5 (+106) -> Steamed to 4.5 (-132)", "confidence_math": "Base 50% + Prop Steam Trend (+14), High Success Metric (+10), 2-Pillar Confluence (+8) = 82% (Tier 2: Strong Conviction)", "confidence_pct": 82, "confidence_tier": "TIER 2: STRONG CONVICTION", "sport": "NBA", "selection": "Kyrie Irving Total Assists Over 4.5 (10:00 PM EST)", "odds": -132, "stake": 7.0, "game_time": "10:00 PM EST", "status": "remaining", "units": 2.1, "wager_pct": 10.3, "original_stake": 11.5, "stake_adjusted": true}], "curated_raw": "\ud83c\udfaf *2026-11-24 Confidence Meter Time-Slot Slate*\nBankroll: $68.16 | Pending: $0.00 | Available: $68.16\n\n*Pending ($0.00):*\n\u2022 *None*\n\n*Today's Curated Plays:*\n1. *7:00 PM EST \u2022 Detroit Pistons @ Orlando Magic (NBA)* \u2014 *Detroit Pistons ML (-130)* \u2014 *$11.00 (19.8% BR)* \u2014 *87% \ud83d\udc8e [WAIT FOR LINEUP]*\n   - Game & Line: DET 10-6 @ ORL 7-9 | DET -2.5 (-104) / ORL +2.5 (-117) | ML: DET (-130) / ORL (+110) | O/U: 212.5 | L5 Form: DET 2-3 (-1.6) vs ORL 3-2 (-1.0) | ESPN BPI WinProb: DET 53.9% / ORL 46.1% | Spread Steam: 1.0 pt toward DET (Open ORL +1.5 -> Now +2.5) | Total Steam: 2.0 pts toward UNDER (Open 214.5 -> Now 212.5)\n   - Confidence Math: Base 50% + ModFav Sweet-Spot (+14), Sharp Steam (+10), Record Superiority (+5), 3-Pillar Confluence (+8) = 87% (Tier 2: Strong Conviction)\n\n2. *8:00 PM EST \u2022 Vegas Golden Knights @ Edmonton Oilers (NHL)* \u2014 *Ryan Nugent-Hopkins Total Points Over 0.5 (-120)* \u2014 *$11.00 (14.7% BR)* \u2014 *83% \ud83d\udc8e*\n   - Game & Line: VGK 14-6-5 @ EDM 17-5-4 | ML: VGK (-125) / EDM (+105) | O/U: 6.5 | L5 Form: VGK 1-4 (-1.0) vs EDM 2-3 (+0.0) | Goalies: VGK Hart (.886 SV%) vs EDM Levi (.896 SV%) | Hard Rock Prop Steam: Open 0.5 (+120) -> Steamed to 0.5 (-120)\n   - Confidence Math: Base 50% + Prop Steam Trend (+15), High Success Metric (+10), 2-Pillar Confluence (+8) = 83% (Tier 2: Strong Conviction)\n\n3. *10:00 PM EST \u2022 Dallas Mavericks @ Denver Nuggets (NBA)* \u2014 *Kyrie Irving Total Assists Over 4.5 (-132)* \u2014 *15.0% of Resulting BR (Est. $7.00)* \u2014 *82% \ud83d\udc8e*\n   - Game & Line: DAL 10-7 @ DEN 10-5 | DEN -8.5 (-108) / DAL +8.5 (-112) | ML: DAL (+251) / DEN (-310) | O/U: 234.5 | L5 Form: DAL 3-2 (-2.6) vs DEN 4-1 (+3.0) | ESPN BPI WinProb: DAL 30.4% / DEN 69.6% | Hard Rock Prop Steam: Open 4.5 (+106) -> Steamed to 4.5 (-132)\n   - Confidence Math: Base 50% + Prop Steam Trend (+14), High Success Metric (+10), 2-Pillar Confluence (+8) = 82% (Tier 2: Strong Conviction)", "equity_curve": [{"label": "START", "bankroll": 100.0}, {"label": "BET-001", "bankroll": 93.0}, {"label": "BET-002", "bankroll": 90.0}, {"label": "BET-003", "bankroll": 93.68}, {"label": "BET-004", "bankroll": 90.68}, {"label": "BET-005", "bankroll": 83.68}, {"label": "BET-006", "bankroll": 89.47}, {"label": "BET-007", "bankroll": 81.47}, {"label": "BET-008", "bankroll": 71.47}, {"label": "BET-009", "bankroll": 61.47}, {"label": "BET-010", "bankroll": 56.47}, {"label": "BET-011", "bankroll": 65.27}, {"label": "BET-012", "bankroll": 57.27}, {"label": "BET-013", "bankroll": 47.27}, {"label": "BET-014", "bankroll": 42.27}, {"label": "BET-015", "bankroll": 51.36}, {"label": "BET-016", "bankroll": 63.56}, {"label": "BET-017", "bankroll": 72.65}, {"label": "BET-018", "bankroll": 67.65}, {"label": "BET-019", "bankroll": 64.15}, {"label": "BET-020", "bankroll": 68.95}, {"label": "BET-021", "bankroll": 75.62}, {"label": "BET-022", "bankroll": 67.62}, {"label": "BET-023", "bankroll": 73.04}, {"label": "BET-024", "bankroll": 69.04}, {"label": "BET-025", "bankroll": 65.04}, {"label": "BET-026", "bankroll": 70.95}, {"label": "BET-027", "bankroll": 67.45}, {"label": "BET-028", "bankroll": 63.45}, {"label": "BET-029", "bankroll": 55.45}, {"label": "BET-030", "bankroll": 47.45}, {"label": "BET-031", "bankroll": 57.45}, {"label": "BET-032", "bankroll": 53.45}, {"label": "BET-033", "bankroll": 43.45}, {"label": "BET-034", "bankroll": 33.45}, {"label": "BET-035", "bankroll": 32.45}, {"label": "BET-036", "bankroll": 27.45}, {"label": "BET-037", "bankroll": 22.25}, {"label": "BET-038", "bankroll": 25.63}, {"label": "BET-039", "bankroll": 29.36}, {"label": "BET-040", "bankroll": 31.53}, {"label": "BET-041", "bankroll": 30.03}, {"label": "BET-042", "bankroll": 26.03}, {"label": "BET-043", "bankroll": 29.94}, {"label": "BET-044", "bankroll": 26.91}, {"label": "BET-045", "bankroll": 23.41}, {"label": "BET-046", "bankroll": 21.19}, {"label": "BET-047", "bankroll": 23.74}, {"label": "BET-048", "bankroll": 26.08}, {"label": "BET-049", "bankroll": 30.49}, {"label": "BET-050", "bankroll": 36.04}, {"label": "BET-051", "bankroll": 29.04}, {"label": "BET-053", "bankroll": 44.69}, {"label": "BET-054", "bankroll": 47.6}, {"label": "BET-055", "bankroll": 34.99}, {"label": "BET-056", "bankroll": 39.8}, {"label": "BET-057", "bankroll": 43.78}, {"label": "BET-058", "bankroll": 60.08}, {"label": "BET-059", "bankroll": 52.2}, {"label": "BET-060", "bankroll": 57.63}, {"label": "BET-061", "bankroll": 45.61}, {"label": "BET-062", "bankroll": 60.22}, {"label": "BET-063", "bankroll": 80.3}, {"label": "BET-064", "bankroll": 59.22}, {"label": "BET-065", "bankroll": 71.72}, {"label": "BET-066", "bankroll": 91.1}, {"label": "BET-067", "bankroll": 120.08}, {"label": "BET-068", "bankroll": 115.37}, {"label": "BET-069", "bankroll": 133.01}, {"label": "BET-070", "bankroll": 105.84}, {"label": "BET-071", "bankroll": 73.34}, {"label": "BET-072", "bankroll": 48.34}, {"label": "BET-073", "bankroll": 36.34}, {"label": "BET-074", "bankroll": 68.16}]};
     const LS_URL_KEY = "bc_live_api_url";
     const LS_PIN_KEY = "bc_live_api_pin";
     const LS_GH_PAT_KEY = "bc_gh_pat";
@@ -812,6 +812,13 @@
         openDrawers.delete(key);
         if (caret) caret.textContent = "▾ Tap for details";
       }
+    }
+
+    function stripEmojis(s) {
+      return String(s == null ? "" : s)
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\uFE0F]/gu, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
     }
 
     function esc(s) {
@@ -892,7 +899,7 @@
 
       if (!url || !pin) {
         closeModal("settings-modal");
-        showToast("✅ Saved GitHub Token for Settle Workflow dispatch!");
+        showToast("Saved GitHub Token for Settle Workflow dispatch.");
         return;
       }
 
@@ -914,9 +921,9 @@
         render(j.dashboard);
         updateSyncPill(true);
         closeModal("settings-modal");
-        showToast("✅ Connected to Live Google Sheet!");
+        showToast("Connected to Live Google Sheet.");
       } catch (e) {
-        showToast("❌ " + (e.message || "Could not connect to Apps Script"));
+        showToast("Error: " + (e.message || "Could not connect to Apps Script"));
       } finally {
         btn.disabled = false;
         btn.textContent = "Save & Connect";
@@ -984,8 +991,8 @@
           const brChanged = startBr !== null && Math.abs(Number(currentData.bankroll) - Number(startBr)) >= 0.01;
           showToast(
             brChanged
-              ? `✅ Settle workflow complete! Bankroll: ${fmtMoney(startBr)} → ${fmtMoney(currentData.bankroll)} (remaining wagers adjusted)`
-              : `✅ Settle workflow complete! Ledger synced (${currentData.updated_at})`,
+              ? `Settle workflow complete! Bankroll: ${fmtMoney(startBr)} → ${fmtMoney(currentData.bankroll)} (remaining wagers adjusted)`
+              : `Settle workflow complete! Ledger synced (${currentData.updated_at})`,
             5200
           );
         } else if (attempts >= 9) {
@@ -1000,11 +1007,11 @@
       const setBusy = (busy) => {
         if (btn) {
           btn.disabled = busy;
-          btn.textContent = busy ? "⏳ Settling..." : "🏁 Settle Refresh";
+          btn.textContent = busy ? "Settling..." : "Settle Refresh";
         }
         if (miniBtn) {
           miniBtn.disabled = busy;
-          miniBtn.textContent = busy ? "⏳ Settling..." : "🏁 Settle Refresh";
+          miniBtn.textContent = busy ? "Settling..." : "Settle Refresh";
         }
       };
 
@@ -1057,11 +1064,11 @@
             const adjSummary = adjList.length > 0
               ? ` • Adjusted ${adjList.length} remaining bet${adjList.length === 1 ? "" : "s"} (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`
               : "";
-            showToast(`✅ Settled ${totalSettled} bet${totalSettled === 1 ? "" : "s"}${detailTxt}! BR: ${fmtMoney(startBr)} → ${fmtMoney(endBr)}${adjSummary}`, 6000);
+            showToast(`Settled ${totalSettled} bet${totalSettled === 1 ? "" : "s"}${detailTxt}! BR: ${fmtMoney(startBr)} → ${fmtMoney(endBr)}${adjSummary}`, 6000);
           } else if (adjList.length > 0 && adjList.some(a => a.changed)) {
-            showToast(`🔄 Recalculated remaining wagers for ${fmtMoney(endBr)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
+            showToast(`Recalculated remaining wagers for ${fmtMoney(endBr)} BR (${adjList.map(a => fmtMoney(a.new_stake)).join(", ")})`, 4800);
           } else {
-            showToast(`🏁 Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(endBr)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
+            showToast(`Checked ESPN scores (0 newly final) • Remaining wagers synced to ${fmtMoney(endBr)} BR${ghDispatched ? " • GitHub workflow triggered" : ""}`, 4200);
           }
           return;
         }
@@ -1074,9 +1081,9 @@
           if (j.dashboard) render(j.dashboard);
           const settledCnt = Number(j.settled_count || 0);
           if (settledCnt > 0) {
-            showToast(`✅ Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(j.prev_bankroll)} → ${fmtMoney(j.new_bankroll)} (remaining wagers adjusted)`, 5200);
+            showToast(`Settled ${settledCnt} bet${settledCnt === 1 ? "" : "s"}! BR: ${fmtMoney(j.prev_bankroll)} → ${fmtMoney(j.new_bankroll)} (remaining wagers adjusted)`, 5200);
           } else {
-            showToast(`🏁 Settlement checked • Remaining wagers synced to ${fmtMoney(j.new_bankroll)} BR`, 4000);
+            showToast(`Settlement checked • Remaining wagers synced to ${fmtMoney(j.new_bankroll)} BR`, 4000);
           }
           return;
         }
@@ -1086,7 +1093,7 @@
           await dispatchGithubSettleWorkflow(cfg.ghPat);
           await loadData();
           pollAfterSettleDispatch();
-          showToast("🚀 Settle Workflow triggered on GitHub! Auto-refreshing ledger & wager amounts...", 5200);
+          showToast("Settle Workflow triggered on GitHub! Auto-refreshing ledger & wager amounts...", 5200);
           return;
         }
 
@@ -1095,7 +1102,7 @@
         openSettingsModal();
         showToast("Connect Live Sync or paste a GitHub Token once to trigger the Settle Workflow in 1 tap.", 5000);
       } catch (e) {
-        showToast("❌ " + (e.message || "Could not run Settle Refresh"), 4800);
+        showToast("Error: " + (e.message || "Could not run Settle Refresh"), 4800);
       } finally {
         setBusy(false);
       }
@@ -1633,7 +1640,7 @@
         const sel = (rawSel && !/^[•·].*[—–]/.test(rawSel)) ? rawSel : (fb.selection || rawSel);
         const odds = prefillPlay.odds != null ? prefillPlay.odds : fb.odds;
         const stake = (prefillPlay.stake && prefillPlay.stake > 0) ? prefillPlay.stake : (fb.stake || (currentData && currentData.available_cash ? Math.min(currentData.available_cash, 10) : 5));
-        document.getElementById("log-modal-title").textContent = "⚡ Confirm Curated Bet";
+        document.getElementById("log-modal-title").textContent = "Confirm Curated Bet";
         const spEl = document.getElementById("f-sport");
         if ([...spEl.options].some(o => o.value === sport)) spEl.value = sport;
         document.getElementById("f-type").value = "Straight";
@@ -1641,7 +1648,7 @@
         setOddsValue("f", odds);
         document.getElementById("f-stake").value = Number(stake).toFixed(2);
       } else {
-        document.getElementById("log-modal-title").textContent = "➕ Log Placed Bet";
+        document.getElementById("log-modal-title").textContent = "Log Placed Bet";
         document.getElementById("f-sel").value = "";
         setOddsValue("f", "-110");
         document.getElementById("f-stake").value = "";
@@ -1672,12 +1679,12 @@
         const res = await postLiveApi({ action: "log_bet", sport, bet_type, selections, odds, stake });
         if (res.dashboard) render(res.dashboard);
         closeModal("log-modal");
-        showToast(`✅ Logged ${res.bet_id || "bet"} straight to Sheet!`);
+        showToast(`Logged ${res.bet_id} || "bet"} straight to Sheet!`);
       } catch (e) {
-        showToast("❌ " + e.message);
+        showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
-        btn.textContent = "✓ Confirm & Log Bet";
+        btn.textContent = "Confirm & Log Bet";
       }
     }
 
@@ -1713,12 +1720,12 @@
         fileInput.value = "";
         document.getElementById("s-caption").value = "";
         closeModal("log-modal");
-        showToast("✅ Screenshot parsed & logged!");
+        showToast("Screenshot parsed and logged.");
       } catch (e) {
-        showToast("❌ " + e.message, 4500);
+        showToast("Error: " + e.message, 4500);
       } finally {
         btn.disabled = false;
-        btn.textContent = "📸 Parse & Log";
+        btn.textContent = "Parse & Log";
       }
     }
 
@@ -1728,7 +1735,7 @@
         showToast("Connect Live Sync once to edit or cash out tickets.");
         return;
       }
-      document.getElementById("edit-modal-title").textContent = `✏️ Manage ${ticket.bet_id}`;
+      document.getElementById("edit-modal-title").textContent = `Manage ${ticket.bet_id}`;
       document.getElementById("e-row").value = ticket.row_index || "";
       document.getElementById("e-betid").value = ticket.bet_id || "";
       document.getElementById("e-sport").value = normalizeSport(ticket.sport || "");
@@ -1757,9 +1764,9 @@
         });
         if (res.dashboard) render(res.dashboard);
         closeModal("edit-modal");
-        showToast("✅ Ticket updated in Sheet!");
+        showToast("Ticket updated in Sheet.");
       } catch (e) {
-        showToast("❌ " + e.message);
+        showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
         btn.textContent = "Save Changes";
@@ -1786,9 +1793,9 @@
         });
         if (res.dashboard) render(res.dashboard);
         closeModal("edit-modal");
-        showToast(isFullRefund ? `🗑️ Removed ${betId} (full refund)` : `🔄 Cashed out ${betId}`);
+        showToast(isFullRefund ? `Removed ${betId} (full refund)` : `Cashed out ${betId}`);
       } catch (e) {
-        showToast("❌ " + e.message);
+        showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
       }
@@ -1808,12 +1815,12 @@
       });
 
       const titles = {
-        all: "📊 Overall Bet History (Separated by Day)",
-        week: `📆 This Week's Bet History (${st.date || "Last 7 Days"})`,
-        yesterday: `📅 Yesterday's Bet History${st.date ? ` (${st.date})` : ""}`,
-        today: `🏁 Today's Bet History${st.date ? ` (${st.date})` : ""}`,
+        all: "Overall Bet History (Separated by Day)",
+        week: `This Week's Bet History (${st.date || "Last 7 Days"})`,
+        yesterday: `Yesterday's Bet History${st.date ? ` (${st.date})` : ""}`,
+        today: `Today's Bet History${st.date ? ` (${st.date})` : ""}`,
       };
-      document.getElementById("graded-modal-title").textContent = titles[which] || "📊 Bet History by Day";
+      document.getElementById("graded-modal-title").textContent = titles[which] || "Bet History by Day";
 
       const tix = st.tickets || [];
       const plCls = st.net_pl >= 0 ? "pos" : "neg";
@@ -1860,7 +1867,7 @@
         const dTot = g.wins + g.losses;
         const dPct = dTot > 0 ? Math.round((g.wins / dTot) * 1000) / 10 : 0;
         const dCls = g.net_pl >= 0 ? "pos" : "neg";
-        let dayTitle = `📅 ${esc(g.date)}`;
+        let dayTitle = `${esc(g.date)}`;
         if (g.date === todayDate) dayTitle += " (Today)";
         else if (g.date === yestDate) dayTitle += " (Yesterday)";
 
@@ -2543,7 +2550,7 @@
             <span id="live-score-${idx}" style="${liveStyle}">${esc(t.__liveText || "")}</span>
           </div>
           <div class="bet-actions">
-            <button class="btn-mini" onclick="openEditModal(window.__pendingTickets[${idx}])">✏️ Edit / Cash Out</button>
+            <button class="btn-mini" onclick="openEditModal(window.__pendingTickets[${idx}])">Edit / Cash Out</button>
           </div>
         </div>
       `;
@@ -2735,12 +2742,12 @@
         t.__anticipatedWin = ant.anticipated;
         t.__anticipatedReason = ant.reason;
         const trendSuffix = trend && trend.note ? ` • ${trend.note}` : "";
-        const antSuffix = (ant.anticipated && state === "in") ? " • ⚡ Projected Win" : "";
+        const antSuffix = (ant.anticipated && state === "in") ? " • Projected Win" : "";
         if (state === "in") {
           t.__liveColor = trend
             ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
             : "#10b981";
-          t.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}${antSuffix}`;
+          t.__liveText = `LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}${antSuffix}`;
         } else if (state === "post") {
           t.__liveColor = trend
             ? (trend.status === "win" ? "#34d399" : (trend.status === "loss" ? "#f87171" : "#fbbf24"))
@@ -2748,7 +2755,7 @@
           t.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}${trendSuffix}`;
         } else {
           t.__liveColor = "#60a5fa";
-          t.__liveText = `🕒 ${detail}`;
+          t.__liveText = `${detail}`;
         }
         const est = estimateLiveEspnFinish(match, t);
         t.__finishRank = est.rank;
@@ -2777,7 +2784,7 @@
             const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
             if (state === "in") {
               p.__liveColor = "#10b981";
-              p.__liveText = `🔴 LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+              p.__liveText = `LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
             } else if (state === "post") {
               p.__liveColor = "#94a3b8";
               p.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
@@ -2960,7 +2967,7 @@
           meterHtml = `
             <div style="margin-top:8px;">
               <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;font-weight:700;color:${barColor};margin-bottom:4px;">
-                <span>${esc(p.confidence_tier || "Confidence Meter")}</span>
+                <span>${esc(stripEmojis(p.confidence_tier || "Confidence Meter"))}</span>
                 <span style="color:var(--muted);font-weight:500;" id="curated-caret-${domId}">${isOpen ? "▴ Hide details" : "▾ Tap for details"}</span>
               </div>
               <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:999px;overflow:hidden;">
@@ -3000,20 +3007,20 @@
           const overlapLabel = wb.overlapCount > 0 ? `${wb.overlapCount} overlapping game${wb.overlapCount === 1 ? "" : "s"}` : "solo window";
           const extraLines = [];
           if (wb.antIds && wb.antIds.length > 0) {
-            extraLines.push(`<div style="color:#34d399;margin-top:4px;">⚡ Anticipates ${esc(wb.antIds.join(", "))} win (+${fmtMoney(wb.antProfit)} projected profit → ${fmtMoney(wb.effBr)} sizing base; displayed bankroll stays untouched until final).</div>`);
+            extraLines.push(`<div style="color:#34d399;margin-top:4px;">Anticipates ${esc(wb.antIds.join(", "))} win (+${fmtMoney(wb.antProfit)} projected profit → ${fmtMoney(wb.effBr)} sizing base; displayed bankroll stays untouched until final).</div>`);
           }
           if (wb.cashNowNote) {
-            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">💵 ${esc(wb.cashNowNote)}</div>`);
+            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">${esc(wb.cashNowNote)}</div>`);
           }
           if (wb.isDrawdown) {
-            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">🛡️ Drawdown Brake active: caps tightened to ${wb.maxSinglePct}% single / ${wb.maxConcPct}% concurrent.</div>`);
+            extraLines.push(`<div style="color:#fbbf24;margin-top:4px;">Drawdown Brake active: caps tightened to ${wb.maxSinglePct}% single / ${wb.maxConcPct}% concurrent.</div>`);
           }
           if (wb.goalBrake) {
-            extraLines.push(`<div style="color:#34d399;margin-top:4px;">🎯 $1,000 Goal-Lock Brake: stake trimmed so a win crosses $1,000 cleanly without extra risk.</div>`);
+            extraLines.push(`<div style="color:#34d399;margin-top:4px;">$1,000 Goal-Lock Brake: stake trimmed so a win crosses $1,000 cleanly without extra risk.</div>`);
           }
           wagerBreakdownHtml = `
             <div style="margin-top:12px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.1);">
-              <div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">💰 Wager Sizing Breakdown</div>
+              <div style="font-weight:700;color:#e2e8f0;margin-bottom:6px;">Wager Sizing Breakdown</div>
               <div style="display:flex;flex-wrap:wrap;gap:6px;">
                 <span class="pill pill-blue" style="font-size:0.74rem;">1U = ${fmtMoney(wb.unitSize)} (5% BR)</span>
                 <span class="pill pill-blue" style="font-size:0.74rem;">Win Prob: ${wb.probPct}% @ ${esc(oddsTxt)}</span>
@@ -3027,11 +3034,11 @@
 
         const drawerHtml = isPass ? "" : `
           <div id="curated-detail-${domId}" style="display:${isOpen ? "block" : "none"};margin-top:12px;padding-top:12px;border-top:1px solid var(--card-border);font-size:0.83rem;">
-            <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">🏟️ Game &amp; Line Info</div>
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:5px;">Game &amp; Line Info</div>
             <div style="color:var(--muted);line-height:1.45;margin-bottom:10px;">
               ${gameLineHtml}
             </div>
-            <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">🧮 How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
+            <div style="font-weight:700;color:#e2e8f0;margin-bottom:4px;">How Confidence (${cp !== null && cp !== undefined ? cp + "%" : "--"}) Was Chosen</div>
             ${pillarChipsHtml}
             ${wagerBreakdownHtml}
           </div>
@@ -3046,7 +3053,7 @@
               : "";
             actionHtml = `
               <div class="bet-actions" onclick="event.stopPropagation()">
-                <span class="pill pill-green">✓ Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)}${pendUnit})</span>
+                <span class="pill pill-green">Placed • Pending (${esc(existingPend.bet_id)} • ${fmtMoney(existingPend.stake)}${pendUnit})</span>
                 ${recalcNote}
                 <button class="btn-mini" onclick="event.stopPropagation(); if(confirm('You already have ${esc(existingPend.bet_id)} pending on this team. Log another bet anyway?')) openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Again</button>
               </div>`;
@@ -3056,26 +3063,26 @@
             const plSign = Number(existingSettled.net_pl || 0) >= 0 ? "+" : "";
             actionHtml = `
               <div class="bet-actions" onclick="event.stopPropagation()">
-                <span class="pill ${resCls}">🏁 Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
+                <span class="pill ${resCls}">Settled: ${esc(resU)} (${esc(existingSettled.bet_id)} • ${plSign}${fmtMoney(existingSettled.net_pl)})</span>
               </div>`;
           } else {
             const statusPills = [];
             if (wb && wb.antIds && wb.antIds.length > 0) {
-              statusPills.push(`<span class="pill pill-green">⚡ Anticipates ${esc(wb.antIds.join(", "))} (+${fmtMoney(wb.antProfit)})</span>`);
+              statusPills.push(`<span class="pill pill-green">Anticipates ${esc(wb.antIds.join(", "))} (+${fmtMoney(wb.antProfit)})</span>`);
             }
             if (wb && wb.cashNowNote) {
-              statusPills.push(`<span class="pill pill-amber">💵 ${esc(wb.cashNowNote)}</span>`);
+              statusPills.push(`<span class="pill pill-amber">${esc(wb.cashNowNote)}</span>`);
             }
             if (wb && wb.isDrawdown) {
-              statusPills.push(`<span class="pill pill-amber">🛡️ Drawdown Brake (${wb.maxSinglePct}%/${wb.maxConcPct}%)</span>`);
+              statusPills.push(`<span class="pill pill-amber">Drawdown Brake (${wb.maxSinglePct}%/${wb.maxConcPct}%)</span>`);
             }
             if (wb && wb.goalBrake) {
-              statusPills.push(`<span class="pill pill-green">🎯 $1k Goal-Lock</span>`);
+              statusPills.push(`<span class="pill pill-green">$1k Goal-Lock</span>`);
             }
             if (wb && wb.cappedByOverlap) {
               actionHtml = `
                 <div class="bet-actions" onclick="event.stopPropagation()">
-                  <span class="pill pill-amber">⏸️ Concurrent ${wb.maxConcPct}% Cap Reached</span>
+                  <span class="pill pill-amber">Concurrent ${wb.maxConcPct}% Cap Reached</span>
                   ${statusPills.join("")}
                   <button class="btn-mini" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Manually</button>
                 </div>`;
@@ -3099,7 +3106,7 @@
           : "";
         const metaRow = `
           <div class="curated-meta">
-            ${dParts.startTime ? `<span class="curated-time">🕒 ${esc(dParts.startTime)}</span>` : ""}
+            ${dParts.startTime ? `<span class="curated-time">${esc(dParts.startTime)}</span>` : ""}
             ${dParts.sport ? `<span class="curated-sport">${esc(dParts.sport)}</span>` : ""}
             ${liveScoreBadge}
           </div>
@@ -3107,7 +3114,7 @@
         const matchupRow = dParts.matchup ? `<div class="curated-matchup">${esc(dParts.matchup)}</div>` : "";
         const betRow = `
           <div class="curated-bet-row">
-            <span class="curated-bet">${esc(dParts.betText)}</span>
+            <span class="curated-bet">${esc(stripEmojis(dParts.betText))}</span>
             ${(!isPass && dParts.wagerText) ? `<span class="curated-wager">&bull; ${esc(dParts.wagerText)}</span>` : ""}
           </div>
         `;
@@ -3116,7 +3123,7 @@
           ? " curated-placed"
           : (existingSettled ? " curated-settled" : "");
         const placedTopPill = existingPend
-          ? `<span class="pill pill-green" style="flex-shrink:0;">✓ PLACED</span>`
+          ? `<span class="pill pill-green" style="flex-shrink:0;">PLACED</span>`
           : "";
 
         return `
@@ -3209,8 +3216,8 @@
       const dateLbl = (currentData && currentData.curated_date) ? ` (${currentData.curated_date})` : "";
       if (titleEl) {
         titleEl.textContent = tab === "started"
-          ? `🔴 Started Curated Bets${dateLbl}`
-          : `📋 All Today's Curated Bets${dateLbl}`;
+          ? `Started Curated Bets${dateLbl}`
+          : `All Today's Curated Bets${dateLbl}`;
       }
 
       const listEl = document.getElementById("curated-archive-list");
