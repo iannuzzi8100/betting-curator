@@ -312,6 +312,8 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
         "gemini-3.1-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
     ]
     try:
         live_models = [
@@ -477,16 +479,38 @@ def send_telegram_alert(message):
         print("Telegram credentials missing. Alert text:\n", message)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message[:4000],
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-        "reply_markup": _build_curated_inline_keyboard(message),
-    }
-    resp = requests.post(url, json=payload, timeout=15)
-    resp.raise_for_status()
-    print("9:12 AM Telegram bet slip delivered successfully.")
+    clean_text = (message or "")[:4000]
+    keyboard = _build_curated_inline_keyboard(message)
+    attempts = [
+        {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": clean_text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+            "reply_markup": keyboard,
+        },
+        {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": clean_text.replace("*", ""),
+            "disable_web_page_preview": True,
+            "reply_markup": keyboard,
+        },
+        {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": clean_text.replace("*", ""),
+            "disable_web_page_preview": True,
+        },
+    ]
+    for idx, payload in enumerate(attempts, start=1):
+        try:
+            resp = requests.post(url, json=payload, timeout=15)
+            if resp.status_code == 200:
+                print(f"Telegram bet slip delivered successfully (attempt {idx}).")
+                return
+            print(f"Telegram attempt {idx} failed ({resp.status_code}): {resp.text[:300]}")
+        except Exception as exc:
+            print(f"Telegram attempt {idx} exception: {exc}")
+    print("Warning: All Telegram delivery attempts failed; continuing so dashboard still publishes.")
 
 
 def record_pretipoff_clv(gc, intel_text):
