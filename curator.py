@@ -185,7 +185,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
 
     client = genai.Client(
         api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1beta"),
+        http_options=types.HttpOptions(api_version="v1beta", timeout=45_000),
     )
     # Confidence Meter Bankroll Allocation Tiers (Single-Bet Window vs. Same-Window Multi-Bet Split):
     settled_bankroll = ledger_meta["settled"]
@@ -308,7 +308,6 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
     candidate_models = [
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
         "gemini-3.6-flash",
@@ -318,20 +317,26 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
         "gemini-3.8-flash",
         "gemini-3.5-flash",
     ]
+    skip_kw = ("embedding", "image", "audio", "tts", "pro", "thinking", "deep-research", "robotics", "computer-use", "veo", "imagen", "learnlm")
     try:
         live_models = [
             m.name.replace("models/", "")
             for m in client.models.list()
             if "generateContent" in (m.supported_actions or [])
             and "gemini" in m.name.lower()
-            and "embedding" not in m.name.lower()
-            and "image" not in m.name.lower()
-            and "audio" not in m.name.lower()
-            and "tts" not in m.name.lower()
+            and "flash" in m.name.lower()
+            and not any(k in m.name.lower() for k in skip_kw)
         ]
+        # Prefer verified live flash models first so we don't waste calls on non-existent names
+        ordered = []
+        for m in candidate_models:
+            if m in live_models and m not in ordered:
+                ordered.append(m)
         for m in live_models:
-            if m not in candidate_models:
-                candidate_models.append(m)
+            if m not in ordered:
+                ordered.append(m)
+        if ordered:
+            candidate_models = ordered[:10]
     except Exception as list_exc:
         print(f"Model listing warning: {list_exc}")
 
@@ -366,7 +371,7 @@ def run_active_ticket_audit(today_str, summary_block, intel_text, ledger_meta):
     """
     client = genai.Client(
         api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1beta"),
+        http_options=types.HttpOptions(api_version="v1beta", timeout=45_000),
     )
     prompt = f"""
 You are the Argon Pre-Tipoff Risk & Lineup Auditor.
