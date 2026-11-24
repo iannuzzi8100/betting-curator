@@ -250,14 +250,15 @@ Recent Bets:
 {audit_text}
 
 ### 3. SCRAPED SLATE INTEL (INCLUDES DETERMINISTIC `[CONFIDENCE METER: XX% | ████████░░ | TIER ...]` TAGS)
-{intel_text[:34000]}
+{intel_text[:95000]}
 
 ### 4. CONFIDENCE METER & SEQUENTIAL TIME-SLOT COMPOUNDING RULES (9 HARD MANDATES):
 1. **USE THE PRE-COMPUTED `[CONFIDENCE METER: XX% ...]` SCORES FROM SECTION 3:**
    - Every matchup in Section 3 has a deterministic Python-computed `[CONFIDENCE METER: XX% | ... | TIER ... -> Top Play: ...]` tag.
-   - Use those exact Confidence Meter scores and factor breakdowns to rank and select plays for each remaining upcoming Time-Slot Window (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}`).
+   - Use those exact Confidence Meter scores and factor breakdowns to rank and select plays for **EVERY** remaining upcoming Time-Slot Window (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}` — including Late Morning 10:00–11:45 AM, Early Afternoon 12:00–2:45 PM, Late Afternoon 3:00–6:00 PM, Primetime 6:30–9:00 PM, and Late Night 9:30 PM+).
    - {league_rule}
 2. **CONFIDENCE METER BANKROLL SIZING & SAME-WINDOW MULTI-BET RULES (CURRENT BR = ${settled_bankroll:.2f}):**
+   - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the single best play (or at most the top 2 highest-confidence plays) per time-slot window. NEVER stack 3–5 plays in one window and NEVER write `[Included in Hammer Slot]` — every play MUST have an explicit `$XX.XX (XX% BR)` wager!
    - **🔥 TIER 1: MAX HAMMER (`88% – 99%` Confidence):**
      * **Standout Solo Play:** Wager **50% of Bankroll = ${stake_t1_solo:.2f}** (or `50% of Resulting BR (Est. ${stake_t1_solo:.2f})` for later windows).
      * *Multi-Bet Rule:* Put the full 50% on this standout lock unless a 2nd game in the exact same time window is `82%+`, in which case split **35% (${stake_t2_solo:.2f}) / 20% (${stake_t3_solo:.2f})**.
@@ -584,7 +585,7 @@ Instead, scrub the freshly scraped 5:00 PM Slate Intel (ESPN injury reports, bre
 {summary_block}
 
 ### 2. FRESH 5:00 PM SLATE INTEL (ODDS MOVEMENT + PROPS + ESPN NEWS & INJURIES)
-{intel_text[:32000]}
+{intel_text[:65000]}
 
 ### AUDIT RULES FOR EACH PENDING TICKET (WITH CASHOUT PRICING & LINE-MOVEMENT MATH):
 - Remember how sportsbook cashouts work:
@@ -765,7 +766,7 @@ PENDING BETS:
 {json.dumps(targets, indent=2)}
 
 FRESH SLATE INTEL:
-{intel_text[:28000]}
+{intel_text[:65000]}
 
 Respond ONLY with valid JSON:
 {{
