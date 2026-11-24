@@ -38,6 +38,7 @@ ESPN_LEAGUES = {
     "MLB": {"path": "baseball/mlb", "groups": None},
     "EPL": {"path": "soccer/eng.1", "groups": None},
     "UCL": {"path": "soccer/uefa.champions", "groups": None},
+    "LALIGA": {"path": "soccer/esp.1", "groups": None},
 }
 
 ALLOWED_EDGE_TAGS = [
@@ -250,6 +251,10 @@ def _grade_straight_bet_deterministic(bet, final_games):
     sp = str(bet.get("sport", "") or "").strip().upper()
     if sp in ("CBB", "NCAAB"):
         sp = "NCAAM"
+    elif sp in ("LA LIGA", "LA_LIGA", "SPANISH LA LIGA"):
+        sp = "LALIGA"
+    elif sp in ("CHAMPIONS LEAGUE", "UEFA CHAMPIONS LEAGUE"):
+        sp = "UCL"
 
     def _alias_score(text_l, full_name, short_name):
         sc = 0
@@ -333,7 +338,7 @@ def _grade_straight_bet_deterministic(bet, final_games):
 
     # 2. Moneyline / PK
     if re.search(r"\b(?:ml|moneyline|to\s+win)\b", sel_clean, flags=re.I):
-        is_soccer = sp in ("EPL", "UCL", "SOCCER", "PREMIER LEAGUE") or matched_game.get("league") in ("EPL", "UCL")
+        is_soccer = sp in ("EPL", "UCL", "LALIGA", "LA LIGA", "SOCCER", "PREMIER LEAGUE") or matched_game.get("league") in ("EPL", "UCL", "LALIGA")
         if my_sc > opp_sc:
             res = "Won"
         elif my_sc == opp_sc and not is_soccer:
@@ -844,14 +849,23 @@ def run_settlement(notify_telegram=True):
             row = all_values[r_idx]
             if len(row) > col_sport:
                 raw_sp = row[col_sport].strip()
-                if raw_sp.upper() in ("CBB", "NCAAB", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+                raw_u = raw_sp.upper()
+                if raw_u in ("CBB", "NCAAB", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
                     sheet.update_acell(f"{sport_col_letter}{r_idx + 1}", "NCAAM")
                     row[col_sport] = "NCAAM"
                     normalized_sport_rows += 1
+                elif raw_u in ("LA LIGA", "LA_LIGA", "SPANISH LA LIGA"):
+                    sheet.update_acell(f"{sport_col_letter}{r_idx + 1}", "LALIGA")
+                    row[col_sport] = "LALIGA"
+                    normalized_sport_rows += 1
+                elif raw_u in ("CHAMPIONS LEAGUE", "UEFA CHAMPIONS LEAGUE"):
+                    sheet.update_acell(f"{sport_col_letter}{r_idx + 1}", "UCL")
+                    row[col_sport] = "UCL"
+                    normalized_sport_rows += 1
         if normalized_sport_rows:
-            print(f"Normalized {normalized_sport_rows} spreadsheet row(s) from CBB/NCAAB -> NCAAM.", flush=True)
+            print(f"Normalized {normalized_sport_rows} spreadsheet row(s) to canonical sport labels.", flush=True)
         try:
-            canonical_sports = ["CFB", "NFL", "NBA", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "ATP", "WTA", "Multi-Sport", "Other"]
+            canonical_sports = ["CFB", "NFL", "NBA", "NCAAM", "MLB", "NHL", "Soccer", "EPL", "UCL", "LALIGA", "ATP", "WTA", "Multi-Sport", "Other"]
             sheet.spreadsheet.batch_update({
                 "requests": [{
                     "setDataValidation": {

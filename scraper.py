@@ -16,7 +16,7 @@ ODDS_API_KEY = os.environ.get("ODDS_API_KEY", "")
 INTEL_DOC_ID = os.environ.get("INTEL_DOC_ID") or "1vTMvUyr_DABrrzVBU7ah1A8RYn9-sfO1Uu-0Syk2jnU"
 GCP_SA_JSON = os.environ.get("GCP_SERVICE_ACCOUNT_JSON") or os.environ.get("GCP_SA_KEY") or ""
 
-# Expanded to include high-edge niche leagues (EPL, UCL, ATP/WTA) alongside core US sports
+# Expanded to include high-edge European soccer (EPL, UCL, La Liga) & tennis alongside core US sports
 SPORTS_ODDS_KEYS = [
     "basketball_nba",
     "icehockey_nhl",
@@ -25,6 +25,7 @@ SPORTS_ODDS_KEYS = [
     "americanfootball_nfl",
     "soccer_epl",
     "soccer_uefa_champs_league",
+    "soccer_spain_la_liga",
     "tennis_atp_finals",
     "tennis_wta_finals",
 ]
@@ -38,6 +39,7 @@ MARKETS_BY_SPORT = {
     "americanfootball_nfl": "h2h,spreads,totals",
     "soccer_epl": "h2h,totals",
     "soccer_uefa_champs_league": "h2h,totals",
+    "soccer_spain_la_liga": "h2h,totals",
     "tennis_atp_finals": "h2h",
     "tennis_wta_finals": "h2h",
 }
@@ -80,6 +82,14 @@ ESPN_ENDPOINTS = {
     "EPL": {
         "scoreboard": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard",
         "news": "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/news",
+    },
+    "UCL": {
+        "scoreboard": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard",
+        "news": "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/news",
+    },
+    "LALIGA": {
+        "scoreboard": "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard",
+        "news": "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/news",
     },
 }
 
@@ -671,14 +681,17 @@ def fetch_espn_quant_matchups_and_props():
 
     all_league_configs = [
         ("EPL", "soccer", "eng.1", None),
+        ("UCL", "soccer", "uefa.champions", None),
+        ("LALIGA", "soccer", "esp.1", None),
         ("CFB", "football", "college-football", "80"),
         ("NFL", "football", "nfl", None),
         ("NBA", "basketball", "nba", None),
         ("NHL", "hockey", "nhl", None),
         ("NCAAM", "basketball", "mens-college-basketball", "50"),
     ]
+    soccer_labels = ("EPL", "UCL", "LALIGA")
 
-    # Auto-detect Weekend Football Mode (Saturday = CFB + EPL only; Sunday = NFL + EPL only).
+    # Auto-detect Weekend Football + European Soccer Mode (Saturday = CFB + EPL/UCL/LALIGA; Sunday = NFL + EPL/UCL/LALIGA).
     # Automatically falls back to ALL leagues as soon as CFB/NFL season ends (0 games scheduled).
     weekday = now_est.weekday()  # 5 = Saturday, 6 = Sunday
     league_configs = all_league_configs
@@ -690,8 +703,8 @@ def fetch_espn_quant_matchups_and_props():
                 timeout=10,
             ).json().get("events", [])
             if len(cfb_check) > 0:
-                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "CFB")]
-                quant_games.append("- [SLATE MODE] SATURDAY FOOTBALL + EPL MODE ACTIVE (Strictly CFB & Premier League Soccer)")
+                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "UCL", "LALIGA", "CFB")]
+                quant_games.append("- [SLATE MODE] SATURDAY FOOTBALL + SOCCER MODE ACTIVE (Strictly CFB & EPL/UCL/La Liga Soccer)")
         except Exception:
             pass
     elif weekday == 6:
@@ -702,8 +715,8 @@ def fetch_espn_quant_matchups_and_props():
                 timeout=10,
             ).json().get("events", [])
             if len(nfl_check) > 0:
-                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "NFL")]
-                quant_games.append("- [SLATE MODE] SUNDAY FOOTBALL + EPL MODE ACTIVE (Strictly NFL & Premier League Soccer)")
+                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "UCL", "LALIGA", "NFL")]
+                quant_games.append("- [SLATE MODE] SUNDAY FOOTBALL + SOCCER MODE ACTIVE (Strictly NFL & EPL/UCL/La Liga Soccer)")
         except Exception:
             pass
 
@@ -728,7 +741,7 @@ def fetch_espn_quant_matchups_and_props():
             except Exception:
                 pass
 
-        # 2. Fetch today's scoreboard
+        # 2. Fetch Today's Games & Odds
         try:
             t_params = {"dates": today_ymd}
             if groups:
@@ -737,7 +750,7 @@ def fetch_espn_quant_matchups_and_props():
         except Exception:
             continue
 
-        max_events = 65 if label == "CFB" else (25 if label in ("NFL", "EPL") else 20)
+        max_events = 65 if label == "CFB" else (25 if label in ("NFL", *soccer_labels) else 20)
         for ev in events[:max_events]:
             ev_id = ev.get("id", "")
             status_state = ev.get("status", {}).get("type", {}).get("state", "")
@@ -795,8 +808,8 @@ def fetch_espn_quant_matchups_and_props():
             rec_str = f"({a_abbr} {a_rec} @ {h_abbr} {h_rec})" if (h_rec or a_rec) else ""
 
             tags = []
-            # EPL Soccer 5-match form string directly from scoreboard (e.g. "WWDLW")
-            if label == "EPL":
+            # European Soccer (EPL / UCL / La Liga) 5-match form string directly from scoreboard (e.g. "WWDLW")
+            if label in soccer_labels:
                 a_form = str(away.get("form", "") or "").upper()
                 h_form = str(home.get("form", "") or "").upper()
                 if a_form and h_form:
@@ -804,7 +817,7 @@ def fetch_espn_quant_matchups_and_props():
                     h_w = h_form.count("W")
                     a_pts = a_w * 3 + a_form.count("D")
                     h_pts = h_w * 3 + h_form.count("D")
-                    tags.append(f"[EPL L5 Form: {a_abbr} {a_form} ({a_pts}pts) vs {h_abbr} {h_form} ({h_pts}pts)]")
+                    tags.append(f"[{label} L5 Form: {a_abbr} {a_form} ({a_pts}pts) vs {h_abbr} {h_form} ({h_pts}pts)]")
                     if (h_pts - a_pts) >= 5:
                         tags.append(f"[📈 FORM EDGE: {h_abbr} L5 {h_form} ({h_pts}pts) vs {a_abbr} L5 {a_form} ({a_pts}pts)]")
                     elif (a_pts - h_pts) >= 5:
@@ -868,13 +881,13 @@ def fetch_espn_quant_matchups_and_props():
                             f"[🔥 SPREAD STEAM: Moved {delta_sp:.1f} pts toward {moved_toward} (Open {h_abbr} {h_sp_open:+.1f} -> Now {h_sp_close:+.1f})]"
                         )
 
-                # Total close vs open (include Over/Under juice for EPL totals like o2.5 / u2.5)
+                # Total close vs open (include Over/Under juice for European soccer totals like o2.5 / u2.5)
                 tot = od.get("total", {})
                 t_close = _safe_float_line(tot.get("over", {}).get("close", {}).get("line"))
                 t_open = _safe_float_line(tot.get("over", {}).get("open", {}).get("line"))
                 t_over_odds = _safe_int_odds(tot.get("over", {}).get("close", {}).get("odds"))
                 t_under_odds = _safe_int_odds(tot.get("under", {}).get("close", {}).get("odds"))
-                if t_close is not None and t_over_odds is not None and t_under_odds is not None and label == "EPL":
+                if t_close is not None and t_over_odds is not None and t_under_odds is not None and label in soccer_labels:
                     odds_summary.append(f"Total Prices: O{t_close} ({t_over_odds:+d}) / U{t_close} ({t_under_odds:+d})")
                 if t_open is not None and t_close is not None and abs(t_close - t_open) >= 1.0:
                     dir_lbl = "OVER" if t_close > t_open else "UNDER"
@@ -965,7 +978,7 @@ def fetch_espn_quant_matchups_and_props():
                     aw, al, am = l5_parsed[a_abbr]
                     hw, hl, hm = l5_parsed[h_abbr]
                     odds_summary.append(f"L5 Form: {a_abbr} {aw}-{al} ({am:+.1f}) vs {h_abbr} {hw}-{hl} ({hm:+.1f})")
-                    margin_thresh = 0.8 if label == "EPL" else (1.2 if label == "NHL" else 4.5)
+                    margin_thresh = 0.8 if label in soccer_labels else (1.2 if label == "NHL" else 4.5)
                     if (hw - aw) >= 2 and (hm - am) >= margin_thresh:
                         tags.append(f"[📈 FORM EDGE: {h_abbr} L5 {hw}-{hl} ({hm:+.1f} avg margin) vs {a_abbr} L5 {aw}-{al} ({am:+.1f})]")
                     elif (aw - hw) >= 2 and (am - hm) >= margin_thresh:

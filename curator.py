@@ -195,40 +195,41 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
     stake_t3_solo = round(min(available_bankroll, max(2.00, settled_bankroll * 0.20)), 2)   # 68-77% Tier 3 Solo: 20% BR
     stake_t3_dual = round(min(available_bankroll / 2.0, max(2.00, settled_bankroll * 0.18)), 2)  # Two 68-77% in same window: 18% BR each (36% total)
 
-    # Detect Weekend Football + EPL Mode automatically from scraped intel / day of week
+    # Detect Weekend Football + European Soccer Mode automatically from scraped intel / day of week
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
     dow = est_now.weekday()  # 5 = Saturday, 6 = Sunday
-    if dow == 5 and ("SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "[CFB QUANT]" in intel_text):
+    if dow == 5 and ("SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SATURDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[CFB QUANT]" in intel_text):
         league_rule = (
-            "**SATURDAY FOOTBALL + EPL ONLY (STRICT):** Today is Saturday during College Football season. "
-            "Pick **SOLELY from College Football (CFB) and Premier League Soccer (EPL)**. "
+            "**SATURDAY FOOTBALL + EUROPEAN SOCCER ONLY (STRICT):** Today is Saturday during College Football season. "
+            "Pick **SOLELY from College Football (CFB) and European Soccer (EPL, UCL, LALIGA)**. "
             "Do NOT recommend NBA, NHL, NCAAM, or any other sport today. "
             "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
-            "     • **Window 1 — Early Morning (7:30 AM EPL):** 7:30 AM – 9:30 AM EST\n"
-            "     • **Window 2 — Late Morning (10:00 AM EPL):** 9:45 AM – 11:45 AM EST\n"
-            "     • **Window 3 — Noon / Early Afternoon (12:00–2:30 PM CFB/EPL):** 11:45 AM – 2:45 PM EST\n"
-            "     • **Window 4 — Late Afternoon (3:00–5:30 PM CFB):** 2:45 PM – 6:15 PM EST\n"
+            "     • **Window 1 — Early Morning (7:30–9:30 AM EPL/LALIGA):** 7:30 AM – 9:30 AM EST\n"
+            "     • **Window 2 — Late Morning (10:00–11:30 AM EPL/LALIGA):** 9:45 AM – 11:45 AM EST\n"
+            "     • **Window 3 — Noon / Early Afternoon (12:00–2:30 PM CFB/EPL/LALIGA/UCL):** 11:45 AM – 2:45 PM EST\n"
+            "     • **Window 4 — Late Afternoon (3:00–5:30 PM CFB/LALIGA/UCL):** 2:45 PM – 6:15 PM EST\n"
             "     • **Window 5 — Primetime (6:30–9:00 PM CFB):** 6:15 PM – 9:15 PM EST\n"
             "     • **Window 6 — Late Night (9:30 PM+ CFB):** 9:15 PM – 11:30 PM EST"
         )
-        slate_header_tag = "Saturday CFB + EPL Confidence Meter Slate"
-    elif dow == 6 and ("SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "[NFL QUANT]" in intel_text):
+        slate_header_tag = "Saturday CFB + European Soccer Confidence Meter Slate"
+    elif dow == 6 and ("SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SUNDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[NFL QUANT]" in intel_text):
         league_rule = (
-            "**SUNDAY FOOTBALL + EPL ONLY (STRICT):** Today is Sunday during NFL season. "
-            "Pick **SOLELY from NFL and Premier League Soccer (EPL)**. "
+            "**SUNDAY FOOTBALL + EUROPEAN SOCCER ONLY (STRICT):** Today is Sunday during NFL season. "
+            "Pick **SOLELY from NFL and European Soccer (EPL, UCL, LALIGA)**. "
             "Do NOT recommend NBA, NHL, NCAAM, or any other sport today. "
             "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
-            "     • **Window 1 — Morning (9:00–11:30 AM EPL):** 9:00 AM – 11:45 AM EST\n"
-            "     • **Window 2 — Early Afternoon (1:00 PM NFL):** 12:30 PM – 3:45 PM EST\n"
+            "     • **Window 1 — Morning (8:00–11:30 AM EPL/LALIGA):** 8:00 AM – 11:45 AM EST\n"
+            "     • **Window 2 — Early Afternoon (1:00 PM NFL / 12:30–3:00 PM LALIGA/EPL):** 12:00 PM – 3:45 PM EST\n"
             "     • **Window 3 — Late Afternoon (4:05 / 4:25 PM NFL):** 4:00 PM – 7:30 PM EST\n"
             "     • **Window 4 — Primetime (8:20 PM NFL SNF):** 8:00 PM – 11:30 PM EST"
         )
-        slate_header_tag = "Sunday NFL + EPL Confidence Meter Slate"
+        slate_header_tag = "Sunday NFL + European Soccer Confidence Meter Slate"
     else:
         league_rule = (
             "**ALL-LEAGUE BEST-EV TIME-SLOT MODE:** Pick the highest-conviction plays across any active league "
-            "(NBA, NHL, CFB, NFL, NCAAM, EPL, MLB) — staggered across every remaining ~3-hour betting window "
-            "so each window settles and compounds the resulting bankroll into the next window."
+            "(NBA, NHL, CFB, NFL, NCAAM, EPL, UCL, LALIGA, MLB) — staggered across every remaining ~3-hour betting window "
+            "so each window settles and compounds the resulting bankroll into the next window. "
+            "Use exact league tags `UCL` for UEFA Champions League and `LALIGA` for Spanish La Liga."
         )
         slate_header_tag = "Confidence Meter Time-Slot Slate"
 
