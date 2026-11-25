@@ -470,6 +470,89 @@
       font-weight: 700;
     }
     .toast.show { display: block; }
+    .exposure-wrap {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--card-border);
+    }
+    .exposure-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 0.76rem;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .exposure-bar-bg {
+      width: 100%;
+      height: 7px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .exposure-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+    .auto-settle-bar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 11px 14px;
+      border-radius: 12px;
+      background: rgba(16, 185, 129, 0.14);
+      border: 1px solid rgba(16, 185, 129, 0.45);
+      color: #d1fae5;
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+    .filter-chips {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .filter-chip {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .filter-chip.active {
+      background: rgba(59, 130, 246, 0.22);
+      border-color: rgba(59, 130, 246, 0.55);
+      color: #93c5fd;
+    }
+    .mkt-split-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .mkt-split-cell {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 0.75rem;
+    }
+    .mkt-split-lbl {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
   </style>
 </head>
 <body>
@@ -495,6 +578,13 @@
         <div class="card-label">Available Cash &amp; Exposure</div>
         <div class="big-num" id="bankroll-val">--</div>
         <div class="sub-row" id="bankroll-sub"></div>
+        <div class="exposure-wrap" id="exposure-bar-wrap" style="display:none;"></div>
+      </div>
+
+      <!-- AUTO-DETECTED ESPN FINAL BANNER -->
+      <div class="auto-settle-bar" id="auto-settle-banner">
+        <span id="auto-settle-text">Final games detected on ESPN.</span>
+        <button class="btn-green" onclick="triggerSettleWorkflow()" style="padding:5px 12px;">Settle Now</button>
       </div>
 
       <!-- 2. ACTIVE PENDING TICKETS -->
@@ -518,6 +608,11 @@
             <span class="pill pill-blue" id="curated-count">0 Upcoming</span>
             <span class="card-tap-hint" id="curated-started-hint" style="margin-left:0;"></span>
           </div>
+        </div>
+        <div class="filter-chips" id="curated-filter-bar" style="display:none;">
+          <button type="button" class="filter-chip active" id="cfilt-all" onclick="setCuratedFilter('all')">All</button>
+          <button type="button" class="filter-chip" id="cfilt-open" onclick="setCuratedFilter('open')">Open Only</button>
+          <button type="button" class="filter-chip" id="cfilt-placed" onclick="setCuratedFilter('placed')">Placed</button>
         </div>
         <div class="bet-list" id="curated-list"></div>
       </div>
@@ -761,7 +856,8 @@
         <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">Yesterday</button>
         <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">Today</button>
       </div>
-      <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:12px;"></div>
+      <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:10px;"></div>
+      <div id="graded-modal-splits"></div>
       <div id="graded-modal-list"></div>
       <div class="modal-footer">
         <button class="btn-secondary" onclick="closeModal('graded-modal')">Close</button>
@@ -1690,12 +1786,50 @@
         const res = await postLiveApi({ action: "log_bet", sport, bet_type, selections, odds, stake });
         if (res.dashboard) render(res.dashboard);
         closeModal("log-modal");
-        showToast(`Logged ${res.bet_id} || "bet"} straight to Sheet!`);
+        showToast(`Logged ${res.bet_id || "bet"} straight to Sheet.`);
       } catch (e) {
         showToast("Error: " + e.message);
       } finally {
         btn.disabled = false;
         btn.textContent = "Confirm & Log Bet";
+      }
+    }
+
+    async function quickLogCuratedPlay(globalIdx, btnEl) {
+      const play = (window.__curatedPlays || [])[globalIdx];
+      if (!play) return;
+      if (!isLiveConfigured()) {
+        openSettingsModal();
+        showToast("Set up Live Sync once to log bets directly in 1 tap.");
+        return;
+      }
+      const fb = parseTitleFallback(play.title);
+      const rawSport = (play.sport && play.sport !== "CFB") ? play.sport : (fb.sport || play.sport);
+      const sport = normalizeSport(rawSport || "NBA");
+      const rawSel = play.selection || "";
+      const selections = stripEmojis((rawSel && !/^[•·].*[—–]/.test(rawSel)) ? rawSel : (fb.selection || rawSel));
+      const oddsNum = Number(play.odds != null ? play.odds : (fb.odds != null ? fb.odds : -110));
+      const odds = oddsNum > 0 ? `+${oddsNum}` : `${oddsNum}`;
+      const stake = Number(play.stake || 0);
+      if (!selections || stake < 2.0) {
+        openLogModal(play);
+        return;
+      }
+      const origTxt = btnEl ? btnEl.textContent : "";
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = "Logging...";
+      }
+      try {
+        const res = await postLiveApi({ action: "log_bet", sport, bet_type: "Straight", selections, odds, stake });
+        if (res.dashboard) render(res.dashboard);
+        showToast(`Quick-logged ${res.bet_id || "bet"} (${fmtMoney(stake)} @ ${odds}) to Sheet.`);
+      } catch (e) {
+        showToast("Error: " + e.message);
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = origTxt;
+        }
       }
     }
 
@@ -1844,6 +1978,49 @@
         `<span>Net P/L: <span class="${plCls}">${st.net_pl >= 0 ? "+" : ""}${fmtMoney(st.net_pl)}</span></span>` +
         extraMeta;
 
+      // Render live Moneyline vs Spread vs Props/Other market split strip
+      const splitEl = document.getElementById("graded-modal-splits");
+      if (splitEl) {
+        if (tix.length === 0) {
+          splitEl.innerHTML = "";
+        } else {
+          const classifyMkt = (t) => {
+            if (t.market_type) return t.market_type;
+            const bt = String(t.bet_type || "").toLowerCase();
+            const s = String(t.selections || "").toLowerCase();
+            if (bt.includes("parlay")) return "Parlay";
+            if (bt.includes("sgp")) return "SGP";
+            if (/^(over|under)\s+\d{2,3}/i.test(s) || /\b(over|under)\s+\d{2,3}(?:\.\d+)?\s+total/i.test(s)) return "Game Total";
+            if (/\b(assists|points|rebounds|threes|shots|yards|touchdown|hits|strikeouts|saves|pra|pts|reb|ast)\b/i.test(s)) return "Player Prop";
+            if (/\b(ml|moneyline|to\s+win)\b/i.test(s)) return "Moneyline";
+            if (/[+-]\d+(?:\.\d+)?/.test(s)) return "Spread";
+            return "Other";
+          };
+          const buckets = [
+            { lbl: "Moneyline", match: (m) => m === "Moneyline" },
+            { lbl: "Spread", match: (m) => m === "Spread" },
+            { lbl: "Props / Other", match: (m) => m !== "Moneyline" && m !== "Spread" },
+          ];
+          splitEl.innerHTML = `<div class="mkt-split-strip">${buckets.map(bk => {
+            const sub = tix.filter(t => bk.match(classifyMkt(t)));
+            const w = sub.filter(t => String(t.result || "").toLowerCase() === "won").length;
+            const l = sub.filter(t => String(t.result || "").toLowerCase() === "lost").length;
+            const stSum = sub.reduce((a, t) => a + Number(t.stake || 0), 0);
+            const plSum = sub.reduce((a, t) => a + Number(t.net_pl || 0), 0);
+            const wp = (w + l) > 0 ? Math.round((w / (w + l)) * 1000) / 10 : 0;
+            const roi = stSum > 0 ? Math.round((plSum / stSum) * 1000) / 10 : 0;
+            const cls = plSum >= 0 ? "pos" : "neg";
+            return `
+              <div class="mkt-split-cell">
+                <div class="mkt-split-lbl">${bk.lbl}</div>
+                <div style="font-weight:800;">${w}W-${l}L <span style="color:var(--muted);font-weight:600;">(${wp}%)</span></div>
+                <div class="${cls}" style="font-size:0.72rem;margin-top:2px;">${plSum >= 0 ? "+" : ""}${fmtMoney(plSum)} (${roi >= 0 ? "+" : ""}${roi}%)</div>
+              </div>
+            `;
+          }).join("")}</div>`;
+        }
+      }
+
       const listEl = document.getElementById("graded-modal-list");
       if (tix.length === 0) {
         listEl.innerHTML = `<div class="empty-msg">No settled bets recorded for this period yet.</div>`;
@@ -1888,7 +2065,12 @@
           const oddsTxt = t.odds ? ` (${esc(t.odds)})` : "";
           const metaParts = [];
           if (t.sport) metaParts.push(esc(normalizeSport(t.sport)));
+          if (t.market_type) metaParts.push(esc(t.market_type));
           if (t.stake != null && t.stake > 0) metaParts.push(`Stake ${fmtMoney(t.stake)}`);
+          if (t.clv !== null && t.clv !== undefined) {
+            const cSign = Number(t.clv) >= 0 ? "+" : "";
+            metaParts.push(`<span class="${Number(t.clv) >= 0 ? "pos" : "neg"}">CLV ${cSign}${t.clv}%</span>`);
+          }
           return `
             <div class="bet-item">
               <div class="bet-top">
@@ -1926,13 +2108,38 @@
       updateSyncPill(Boolean(data.live_mode));
       document.getElementById("updated-at").textContent = "Last synced: " + data.updated_at;
 
-      // 1. Available Cash & Bankroll (Top — Available Cash primary, Live Bankroll + 1U in sub-row)
-      const unitSz = Math.round((Number(data.bankroll || 0) * 0.05) * 100) / 100;
+      // 1. Available Cash & Bankroll (Top — Available Cash primary, Live Bankroll + 1U + Exposure Gauge in sub-row)
+      const brVal = Number(data.bankroll || 0);
+      const pendVal = Number(data.pending_total || 0);
+      const unitSz = Math.round((brVal * 0.05) * 100) / 100;
       document.getElementById("bankroll-val").textContent = fmtMoney(data.available_cash);
       document.getElementById("bankroll-sub").innerHTML =
-        `<span>Active Pending: <span class="warn">${fmtMoney(data.pending_total)}</span></span>` +
-        `<span>Live Bankroll: <span class="pos">${fmtMoney(data.bankroll)}</span></span>` +
+        `<span>Active Pending: <span class="warn">${fmtMoney(pendVal)}</span></span>` +
+        `<span>Live Bankroll: <span class="pos">${fmtMoney(brVal)}</span></span>` +
         `<span>1U (5%): <span style="color:#93c5fd;">${fmtMoney(unitSz)}</span></span>`;
+
+      const expWrap = document.getElementById("exposure-bar-wrap");
+      if (expWrap && brVal > 0) {
+        const eqPts = (data && data.equity_curve) || [];
+        const peakBr = Math.max(100, brVal, ...eqPts.map(pt => Number(pt.bankroll || 0)));
+        const isDd = (brVal < 75) || (peakBr > 0 && ((peakBr - brVal) / peakBr) > 0.20);
+        const capPct = isDd ? 40 : 58;
+        const capAmt = Math.round((brVal * (capPct / 100)) * 100) / 100;
+        const usedPct = Math.round((pendVal / brVal) * 1000) / 10;
+        const fillPct = Math.min(100, Math.max(0, capAmt > 0 ? (pendVal / capAmt) * 100 : 0));
+        const fillCol = fillPct >= 95 ? "#ef4444" : (fillPct >= 75 ? "#f59e0b" : "#10b981");
+        const modeTxt = isDd ? `Drawdown Brake (${capPct}% Cap)` : `Half-Kelly Growth (${capPct}% Cap)`;
+        expWrap.style.display = "block";
+        expWrap.innerHTML = `
+          <div class="exposure-meta">
+            <span>Active Exposure: <strong style="color:var(--text);">${fmtMoney(pendVal)} / ${fmtMoney(capAmt)}</strong> (${usedPct}% of BR)</span>
+            <span style="color:${isDd ? "#fbbf24" : "#34d399"};font-weight:700;">${modeTxt}</span>
+          </div>
+          <div class="exposure-bar-bg">
+            <div class="exposure-bar-fill" style="width:${fillPct.toFixed(1)}%;background:${fillCol};"></div>
+          </div>
+        `;
+      }
 
       // Normalize Today & Yesterday tickets with explicit date field
       const ts = data.today_stats || { date: data.today || "", wins: 0, losses: 0, pushes: 0, win_pct: 0, net_pl: 0, tickets: [] };
@@ -2728,6 +2935,7 @@
       const eventsBySport = await fetchEspnEventsMap(pendingTickets, curatedPlays);
       if (mySeq !== pendingScoreSeq) return;
 
+      let finalReadyCount = 0;
       (pendingTickets || []).forEach(t => {
         t.__anticipatedWin = false;
         t.__anticipatedReason = "";
@@ -2749,6 +2957,7 @@
         const hAbbr = home.team?.abbreviation || home.team?.shortDisplayName || "";
         const trend = evaluateLiveTicketTrend(match, t);
         t.__trend = trend ? trend.status : "";
+        if (isTicketFinalForSettlement(match, t)) finalReadyCount++;
         const ant = evaluateBlowoutAnticipation(match, t, trend);
         t.__anticipatedWin = ant.anticipated;
         t.__anticipatedReason = ant.reason;
@@ -2772,6 +2981,19 @@
         t.__finishRank = est.rank;
         t.__estFinishMs = est.estFinishMs;
       });
+
+      const autoBanner = document.getElementById("auto-settle-banner");
+      const autoBannerTxt = document.getElementById("auto-settle-text");
+      if (autoBanner) {
+        if (finalReadyCount > 0) {
+          autoBanner.style.display = "flex";
+          if (autoBannerTxt) {
+            autoBannerTxt.textContent = `${finalReadyCount} active pending ticket${finalReadyCount === 1 ? " is" : "s are"} FINAL on ESPN — ready to settle.`;
+          }
+        } else {
+          autoBanner.style.display = "none";
+        }
+      }
 
       if (pendingTickets && pendingTickets.length > 0) {
         sortPendingByFinish(pendingTickets);
@@ -3106,11 +3328,12 @@
                 </div>`;
             } else {
               const btnLabel = dParts.unitsVal > 0
-                ? `+ Log Bet (${fmtMoney(p.stake)} • ${dParts.unitsVal.toFixed(1)}U)`
-                : `+ Log Bet (${fmtMoney(p.stake)})`;
+                ? `Quick Log (${fmtMoney(p.stake)} • ${dParts.unitsVal.toFixed(1)}U)`
+                : `Quick Log (${fmtMoney(p.stake)})`;
               actionHtml = `
                 <div class="bet-actions" onclick="event.stopPropagation()">
-                  <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">${btnLabel}</button>
+                  <button class="btn-mini" style="border-color:rgba(59,130,246,0.55);color:#93c5fd;background:rgba(59,130,246,0.16);font-weight:700;padding:6px 12px;" onclick="event.stopPropagation(); quickLogCuratedPlay(${globalIdx}, this)">${btnLabel}</button>
+                  <button class="btn-mini" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">Adjust</button>
                   ${statusPills.join("")}
                 </div>`;
             }
@@ -3165,6 +3388,16 @@
       }).join("");
     }
 
+    let curatedFilterMode = "all";
+    function setCuratedFilter(mode) {
+      curatedFilterMode = mode || "all";
+      ["all", "open", "placed"].forEach(k => {
+        const el = document.getElementById(`cfilt-${k}`);
+        if (el) el.classList.toggle("active", k === curatedFilterMode);
+      });
+      renderCuratedList(window.__curatedPlays || [], currentData || {});
+    }
+
     function renderCuratedList(plays, data) {
       const cList = document.getElementById("curated-list");
       const allPlays = plays || [];
@@ -3193,6 +3426,16 @@
           ? `${openUpcomingCount} Open • ${placedUpcomingCount} Placed`
           : `${upcomingPlays.length} Upcoming`;
       }
+      const filtBar = document.getElementById("curated-filter-bar");
+      if (filtBar) {
+        filtBar.style.display = (upcomingPlays.length > 0 && placedUpcomingCount > 0) ? "flex" : "none";
+        const fAll = document.getElementById("cfilt-all");
+        const fOpen = document.getElementById("cfilt-open");
+        const fPl = document.getElementById("cfilt-placed");
+        if (fAll) fAll.textContent = `All (${upcomingPlays.length})`;
+        if (fOpen) fOpen.textContent = `Open Only (${openUpcomingCount})`;
+        if (fPl) fPl.textContent = `Placed (${placedUpcomingCount})`;
+      }
       const hintEl = document.getElementById("curated-started-hint");
       if (hintEl) {
         hintEl.textContent = startedPlays.length > 0
@@ -3200,12 +3443,21 @@
           : (allPlays.length > 0 ? "Full Slate →" : "");
       }
 
+      const filteredUpcoming = upcomingPlays.filter(p => {
+        const isPl = Boolean(findMatchingTicketForPlay(pendList, p));
+        if (curatedFilterMode === "open") return !isPl;
+        if (curatedFilterMode === "placed") return isPl;
+        return true;
+      });
+
       if (allPlays.length === 0) {
         cList.innerHTML = `<div class="empty-msg">${esc((data && data.curated_raw) || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
       } else if (upcomingPlays.length === 0) {
         cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')">All ${startedPlays.length} curated game${startedPlays.length === 1 ? "" : "s"} for today have already started. Tap here or the title above to view them &rarr;</div>`;
+      } else if (filteredUpcoming.length === 0) {
+        cList.innerHTML = `<div class="empty-msg">No ${curatedFilterMode === "open" ? "open" : "placed"} curated bets right now.</div>`;
       } else {
-        cList.innerHTML = buildCuratedCardsHtml(upcomingPlays, data, "main");
+        cList.innerHTML = buildCuratedCardsHtml(filteredUpcoming, data, "main");
       }
 
       // If the Started / All Today modal is open, refresh it live too
