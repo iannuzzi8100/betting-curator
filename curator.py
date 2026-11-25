@@ -85,6 +85,52 @@ def _parse_dollar(val):
         return 0.0
 
 
+def _calc_half_kelly_target(pick_txt, sport_txt, conf_pct, odds_i, eff_br, is_drawdown):
+    """
+    Phase 1 Calibrated Half-Kelly Wager Sizing:
+    - Maps Confidence Meter 68-99% -> calibrated win prob 54.5%-65.5%
+    - Applies market-type Kelly multiplier:
+        * Straight Moneyline (core Era 2 edge): 0.55x Kelly
+        * New leagues (UCL / LALIGA): 0.30x Kelly + max 10% single cap
+        * Spreads / Totals / Player Props: 0.40x Kelly
+    - Hard caps: 18% single / 58% concurrent (Growth) | 12% single / 40% concurrent (Drawdown Brake)
+    - $1,000 Goal-Lock Brake: never risk more than needed to cross $1,000.00
+    """
+    sp_u = str(sport_txt or "").upper()
+    pk_u = str(pick_txt or "")
+    is_ml = bool(re.search(r"\b(ml|moneyline|to\s+win)\b", pk_u, flags=re.I)) and not bool(
+        re.search(r"\b(over|under)\s+\d", pk_u, flags=re.I)
+    )
+    is_new_league = sp_u in ("UCL", "LALIGA")
+    if is_new_league:
+        k_mult = 0.30
+    elif is_ml:
+        k_mult = 0.55
+    else:
+        k_mult = 0.40
+
+    max_single_pct = 0.12 if is_drawdown else 0.18
+    if is_new_league:
+        max_single_pct = min(max_single_pct, 0.10)
+
+    b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / max(1, abs(odds_i)))
+    cp = conf_pct if conf_pct is not None else 74
+    p_win = 0.545 + (max(0, min(99, cp) - 68) / 31.0) * 0.11
+    full_kelly = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
+    adj_kelly = full_kelly * k_mult
+    raw_st = min(eff_br * max_single_pct, eff_br * adj_kelly)
+    if eff_br < 1000.0 and b_mult > 0:
+        raw_st = min(raw_st, (1000.0 - eff_br) / b_mult)
+    return {
+        "p_win": p_win,
+        "full_kelly": full_kelly,
+        "adj_kelly": adj_kelly,
+        "k_mult": k_mult,
+        "max_single_amt": eff_br * max_single_pct,
+        "raw_st": raw_st,
+    }
+
+
 def read_tracker_context(gc):
     sh = open_tracker_workbook(gc)
     tracker_ws = sh.worksheet("Challenge Tracker ($100-$1k)")
@@ -130,18 +176,16 @@ def read_tracker_context(gc):
                     peak_bankroll = rb
 
     available_bankroll = max(0.0, round(settled_bankroll - pending_total, 2))
-    is_drawdown = (settled_bankroll < 60.0) or (peak_bankroll > 0 and ((peak_bankroll - settled_bankroll) / peak_bankroll) > 0.25)
-    max_conc_ratio = 0.60 if is_drawdown else 0.80
+    is_drawdown = (settled_bankroll < 75.0) or (peak_bankroll > 0 and ((peak_bankroll - settled_bankroll) / peak_bankroll) > 0.20)
+    max_conc_ratio = 0.40 if is_drawdown else 0.58
     max_exposure_cap = round(settled_bankroll * max_conc_ratio, 2)
     remaining_cap_amt = max(0.0, round(max_exposure_cap - pending_total, 2))
     unit_val_banner = round(settled_bankroll * 0.05, 2)
 
-    if settled_bankroll < 50.0:
-        active_tier = f"Survival / Drawdown Brake (< $50.00 | 1U = ${unit_val_banner:.2f} | 25% Single / 60% Concurrent)"
-    elif is_drawdown:
-        active_tier = f"Drawdown Brake Active (>25% off ${peak_bankroll:.2f} peak | 1U = ${unit_val_banner:.2f} | 25% Single / 60% Concurrent)"
+    if is_drawdown:
+        active_tier = f"Drawdown Brake Active (< $75 or >20% off ${peak_bankroll:.2f} peak | 1U = ${unit_val_banner:.2f} | Half-Kelly 12% Single / 40% Concurrent)"
     else:
-        active_tier = f"Growth Mode (1U = ${unit_val_banner:.2f} = 5% BR | 35% Single / 80% Concurrent)"
+        active_tier = f"Growth Mode (1U = ${unit_val_banner:.2f} = 5% BR | Half-Kelly 18% Single / 58% Concurrent)"
 
     verified_bankroll_banner = (
         f"VERIFIED LEDGER NUMBERS (USE EXACTLY THESE IN OUTPUT HEADER):\n"
@@ -173,7 +217,7 @@ def read_tracker_context(gc):
 
 
 def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=None):
-    ledger_meta = ledger_meta or {"settled": 20.0, "peak": 100.0, "is_drawdown": True, "pending_total": 0.0, "available": 20.0, "max_cap": 12.0, "remaining_cap": 12.0, "pending_lines": []}
+    ledger_meta = ledger_meta or {"settled": 20.0, "peak": 100.0, "is_drawdown": True, "pending_total": 0.0, "available": 20.0, "max_cap": 8.0, "remaining_cap": 8.0, "pending_lines": []}
     remaining_cap = ledger_meta["remaining_cap"]
     available_bankroll = ledger_meta["available"]
 
@@ -193,18 +237,18 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
         api_key=GEMINI_API_KEY,
         http_options=types.HttpOptions(api_version="v1beta", timeout=45_000),
     )
-    # Smart Wager Engine parameters (1U = 5% BR, Calibrated Fractional Kelly, 35% single cap, 80% concurrent overlap cap)
+    # Phase 1 Half-Kelly Smart Wager Engine (1U = 5% BR, 18% single / 58% concurrent; Drawdown Brake -> 12% / 40%)
     settled_bankroll = ledger_meta["settled"]
     peak_bankroll = float(ledger_meta.get("peak") or max(100.0, settled_bankroll))
     unit_val = round(settled_bankroll * 0.05, 2)
-    is_drawdown = bool(ledger_meta.get("is_drawdown")) or (settled_bankroll < 60.0) or (peak_bankroll > 0 and ((peak_bankroll - settled_bankroll) / peak_bankroll) > 0.25)
-    max_single_pct = 25 if is_drawdown else 35
-    max_conc_pct = 60 if is_drawdown else 80
+    is_drawdown = bool(ledger_meta.get("is_drawdown")) or (settled_bankroll < 75.0) or (peak_bankroll > 0 and ((peak_bankroll - settled_bankroll) / peak_bankroll) > 0.20)
+    max_single_pct = 12 if is_drawdown else 18
+    max_conc_pct = 40 if is_drawdown else 58
     max_single_amt = round(min(available_bankroll, max(2.00, settled_bankroll * (max_single_pct / 100.0))), 2)
     max_conc_amt = round(settled_bankroll * (max_conc_pct / 100.0), 2)
     stake_t1_solo = round(max_single_amt * 2) / 2.0
-    stake_t2_solo = round(min(max_single_amt, max(2.00, settled_bankroll * 0.22)) * 2) / 2.0
-    stake_t3_solo = round(min(max_single_amt, max(2.00, settled_bankroll * 0.12)) * 2) / 2.0
+    stake_t2_solo = round(min(max_single_amt, max(2.00, settled_bankroll * (0.08 if is_drawdown else 0.11))) * 2) / 2.0
+    stake_t3_solo = round(min(max_single_amt, max(2.00, settled_bankroll * (0.05 if is_drawdown else 0.07))) * 2) / 2.0
 
     # Detect Weekend Football + European Soccer Mode automatically from scraped intel / day of week
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
@@ -267,22 +311,22 @@ Recent Bets:
    - Every matchup in Section 3 has a deterministic Python-computed `[CONFIDENCE METER: XX% | ... | TIER ... -> Top Play: ...]` tag.
    - Use those exact Confidence Meter scores and factor breakdowns to rank and select plays for **EVERY** remaining upcoming Time-Slot Window (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}` — including Late Morning 10:00–11:45 AM, Early Afternoon 12:00–2:45 PM, Late Afternoon 3:00–6:00 PM, Primetime 6:30–9:00 PM, and Late Night 9:30 PM+).
    - {league_rule}
-2. **CALIBRATED KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
+2. **CALIBRATED HALF-KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
    - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the single best play (or at most the top 2 highest-confidence plays) per time-slot window. NEVER stack 3–5 plays in one window and NEVER write `[Included in Hammer Slot]` — every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50`!
    - **HARD CONCURRENT OVERLAP CAP ({max_conc_pct}% BR = ${max_conc_amt:.2f}) & SINGLE-BET CAP ({max_single_pct}% BR = ${max_single_amt:.2f}):** Never let overlapping games (across adjacent windows!) exceed {max_conc_pct}% of bankroll at risk simultaneously.
-   - **ODDS-ADJUSTED KELLY GUIDELINES:**
-     * **🔥 TIER 1 (`88%–99%`):** Up to ~{max_single_pct}% BR (~${stake_t1_solo:.2f}, trimmed slightly on heavier `-130` to `-150` juice).
-     * **💎 TIER 2 (`78%–87%`):** ~15%–25% BR (~${stake_t2_solo:.2f}), scaled down on heavier juice (`-135+`) or overlapping windows.
-     * **✅ TIER 3 (`68%–77%`):** ~7%–15% BR (~${stake_t3_solo:.2f}), min `$2.00`.
+   - **ODDS-ADJUSTED HALF-KELLY GUIDELINES (0.55x ML | 0.40x Spread/Prop | 0.30x UCL/La Liga):**
+     * **🔥 TIER 1 (`88%–99%`):** Up to ~{max_single_pct}% BR (~${stake_t1_solo:.2f}, trimmed slightly on heavier `-130` to `-150` juice or spreads).
+     * **💎 TIER 2 (`78%–87%`):** ~7%–12% BR (~${stake_t2_solo:.2f}), scaled down on heavier juice (`-130+`) or overlapping windows.
+     * **✅ TIER 3 (`68%–77%`):** ~4%–8% BR (~${stake_t3_solo:.2f}), min `$2.00`.
      * **🎯 $1,000 GOAL-LOCK BRAKE:** Never wager more than needed to reach `$1,000.00` total bankroll.
      * **⛔ TIER 4 (`Below 68%`):** PASS (`$0.00`).
 3. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
    - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop). Never recommend SGPs or Parlays.
-4. **MODERATE FAVORITE PRIORITY & "-155 TO +130" SWEET-SPOT BAND:**
-   - Strongly prioritize Moderate Favorites (`-110` to `-150` ML or `-1.5` to `-6.5` spreads; `-7.5` max in CFB) which are `11W-3L (78.6%)` in our ledger audit.
+4. **MONEYLINE SWEET-SPOT PRIORITY & "-155 TO +130" BAND:**
+   - **STRONGLY PRIORITIZE STRAIGHT MONEYLINES (`-110` to `-155`)** — our Era 2 ledger audit shows Moneylines at `8W-1L (88.9%, +62.1% ROI)` vs Spreads at `6W-9L (40.0%, -13.7% ROI)`. Whenever a strong favorite is available on the ML at `-155` or better, ALWAYS prefer the ML over laying `-4.5` to `-6.5`!
    - Restrict all plays to **`-155` to `+130`**. Never lay `-175+` heavy juice and never chase `+150+` longshots.
-5. **THE "-6.5 FAVORITE SPREAD CAP" (`-7.5` MAX IN CFB):**
-   - Never lay more than `-6.5` points (`-7.5` in CFB) on a full-game spread.
+5. **STRICT SPREAD DISCIPLINE (`-3.5` PREFERRED, `-6.5` HARD CAP / `-7.5` CFB):**
+   - Prefer small spreads (`-0.5` to `-3.5`). Only lay `-4.0` to `-6.5` when 2+ independent quantitative edges (BPI/FPI `+EV`, Major L5 Form, Sharp Steam, or B2B Fatigue) clearly align. Never lay steeper than `-6.5` (`-7.5` in CFB).
 6. **NEVER CHASE LATE STEAM:**
    - Strictly ignore any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`.
 7. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
@@ -559,11 +603,9 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
         return best
 
     peak_br = float(ledger_meta.get("peak") or max(100.0, settled_br))
-    is_dd = bool(ledger_meta.get("is_drawdown")) or (settled_br < 60.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.25)
-    max_single_pct = 0.25 if is_dd else 0.35
-    max_conc_pct = 0.60 if is_dd else 0.80
+    is_dd = bool(ledger_meta.get("is_drawdown")) or (settled_br < 75.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.20)
+    max_conc_pct = 0.40 if is_dd else 0.58
     unit_val = max(0.01, settled_br * 0.05)
-    max_single_amt = settled_br * max_single_pct
     max_conc_amt = settled_br * max_conc_pct
 
     # Pre-load any active pending tickets into overlap intervals if times are present
@@ -579,22 +621,18 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
     for item in selected:
         m_o = re.search(r"\(([+-]\d{3,4})\)", item["pick"])
         odds_i = int(m_o.group(1)) if m_o else -110
-        b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / abs(odds_i))
-        p_win = 0.555 + (max(0, min(99, item["conf_pct"]) - 68) / 31.0) * 0.13
-        kelly_f = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
-        raw_st = min(max_single_amt, settled_br * kelly_f)
-        if settled_br < 1000.0 and b_mult > 0:
-            raw_st = min(raw_st, (1000.0 - settled_br) / b_mult)
+        kp = _calc_half_kelly_target(item["pick"], item["league"], item["conf_pct"], odds_i, settled_br, is_dd)
         item["odds_i"] = odds_i
-        item["kelly_f"] = kelly_f
-        item["raw_st"] = raw_st
+        item["kelly_f"] = kp["adj_kelly"]
+        item["max_single_amt"] = kp["max_single_amt"]
+        item["raw_st"] = kp["raw_st"]
         item["e_min"] = item["t_min"] + _sport_dur_min(item["league"])
 
-    # Allocate in priority order (highest Kelly edge first) so stronger plays reserve concurrent room first
+    # Allocate in priority order (highest Half-Kelly edge first) so stronger plays reserve concurrent room first
     for item in sorted(selected, key=lambda x: (-x["kelly_f"], x["t_min"])):
         pk = _peak_overlap_risk(allocated_intervals, item["t_min"], item["e_min"])
         room = max(0.0, max_conc_amt - pk)
-        st = min(item["raw_st"], max_single_amt, room)
+        st = min(item["raw_st"], item["max_single_amt"], room)
         st = round(st * 2.0) / 2.0 if st >= 2.0 else 0.0
         item["stake"] = st
         item["units"] = round(st / unit_val, 1) if st > 0 else 0.0
@@ -820,9 +858,8 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
             avail_br = float(am.group(1))
 
     peak_br = float(meta.get("peak") or max(100.0, settled_br))
-    is_dd = bool(meta.get("is_drawdown")) or (settled_br < 60.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.25)
-    max_single_pct = 0.25 if is_dd else 0.35
-    max_conc_pct = 0.60 if is_dd else 0.80
+    is_dd = bool(meta.get("is_drawdown")) or (settled_br < 75.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.20)
+    max_conc_pct = 0.40 if is_dd else 0.58
     unit_val = max(0.01, settled_br * 0.05)
 
     def _time_to_min(txt):
@@ -940,27 +977,21 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
                 allocated.append({"start": ps_m, "end": ps_m + 150, "stake": st_v})
 
         active_plays = [p for p in parsed_plays if not p["is_pass"] and p.get("pick_seg")]
-        max_single_amt = settled_br * max_single_pct
         max_conc_amt = settled_br * max_conc_pct
         for p in active_plays:
-            odds_i = p["odds_i"]
-            b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / max(1, abs(odds_i)))
-            cp = p["conf_pct"] if p["conf_pct"] is not None else 74
-            p_win = 0.555 + (max(0, min(99, cp) - 68) / 31.0) * 0.13
-            kelly_f = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
-            raw_st = min(max_single_amt, settled_br * kelly_f)
-            if settled_br < 1000.0 and b_mult > 0:
-                raw_st = min(raw_st, (1000.0 - settled_br) / b_mult)
-            p["kelly_f"] = kelly_f
-            p["raw_st"] = raw_st
+            kp = _calc_half_kelly_target(p["pick_seg"], p["sport"], p["conf_pct"], p["odds_i"], settled_br, is_dd)
+            p["kelly_f"] = kp["adj_kelly"]
+            p["max_single_amt"] = kp["max_single_amt"]
+            p["raw_st"] = kp["raw_st"]
 
         for p in sorted(active_plays, key=lambda x: (-x["kelly_f"], x["t_min"])):
             pk = _peak_overlap(allocated, p["t_min"], p["e_min"])
             room = max(0.0, max_conc_amt - pk)
-            st = min(p["raw_st"], max_single_amt, room)
+            st = min(p["raw_st"], p["max_single_amt"], room)
             st = round(st * 2.0) / 2.0 if st >= 2.0 else 0.0
             p["stake"] = st
             p["units"] = round(st / unit_val, 1) if st > 0 else 0.0
+            p["capped_by_overlap"] = (st == 0.0 and p["raw_st"] >= 2.0)
             if st > 0:
                 allocated.append({"start": p["t_min"], "end": p["e_min"], "stake": st})
 
@@ -995,7 +1026,7 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
                 if p.get("stake", 0.0) >= 2.0:
                     wager_str = f"${p['stake']:.2f} ({p['units']:.1f}U)"
                 elif settled_br > 0:
-                    wager_str = f"Cap Full ({int(max_conc_pct * 100)}%)"
+                    wager_str = f"Cap Full ({int(max_conc_pct * 100)}%)" if p.get("capped_by_overlap") else "Pass (Low Edge)"
                 else:
                     # Keep original wager segment cleaned of brackets if no bankroll
                     wager_str = p["orig_segs"][2].strip("[] ") if len(p["orig_segs"]) >= 3 else ""
