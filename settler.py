@@ -327,17 +327,25 @@ def _grade_straight_bet_deterministic(bet, final_games):
     sel_l = _normalize_ascii_text(sel_clean)
     sp = _canonical_sport(bet.get("sport", ""))
 
+    _DIR_PREFIXES = ("western", "eastern", "central", "northern", "southern", "north", "south", "east", "west", "middle", "new", "coastal")
+    has_explicit_matchup = ("@" in sel) or bool(re.search(r"\bvs\.?\b", sel, flags=re.I))
+
     def _alias_score(text_l, full_name, short_name):
         sc = 0
         fn = _normalize_ascii_text(full_name)
         sn = _normalize_ascii_text(short_name)
-        if fn and fn in text_l:
+        if fn and re.search(rf"\b{re.escape(fn)}\b", text_l):
             sc = max(sc, 100 + len(fn))
         if len(sn) >= 3:
-            if re.search(rf"\b{re.escape(sn)}\b", text_l):
-                sc = max(sc, 50 + len(sn))
-            elif sn in text_l:
-                sc = max(sc, 20 + len(sn))
+            m_sn = re.search(rf"\b{re.escape(sn)}\b", text_l)
+            if m_sn:
+                # Reject directional school collisions (e.g. "michigan" matching "western michigan" or "eastern michigan")
+                prefix_words = text_l[: m_sn.start()].strip().split()
+                prev_word = prefix_words[-1] if prefix_words else ""
+                if prev_word in _DIR_PREFIXES and prev_word not in fn.split():
+                    pass
+                else:
+                    sc = max(sc, 50 + len(sn))
         return sc
 
     matched_game = None
@@ -368,8 +376,10 @@ def _grade_straight_bet_deterministic(bet, final_games):
                     picked_side = None
             continue
 
-        # Bonus when the opponent team also appears in the full matchup text (e.g. "Tulsa @ Oregon State — Oregon State -6.5")
+        # Bonus (and requirement when full "Away @ Home" matchup is given) that the opponent team also matches
         opp_bonus = _alias_score(full_sel_l, a_name, a_short) if h_sc_pick >= a_sc_pick else _alias_score(full_sel_l, h_name, h_short)
+        if has_explicit_matchup and opp_bonus == 0:
+            continue
         total_score = max(h_sc_pick, a_sc_pick) + opp_bonus
         if total_score > best_total_score:
             best_total_score = total_score
@@ -914,11 +924,21 @@ def recalculate_remaining_curated_bets(workbook, all_values=None):
         if pr["is_pass"]:
             continue
         core = _extract_selection_core(pr["clean_body"])
-        if not core or len(core) < 3:
+        if not core or len(core) < 2:
             continue
 
-        is_pending = any(core in str(t.get("selections", "")).lower() for t in pending_tickets)
-        is_settled_today = any(core in str(t.get("selections", "")).lower() for t in today_tickets)
+        m_sp = re.search(r"[\(\[•]\s*(CFB|NCAAF|NFL|NBA|NCAAM|NCAAB|CBB|NHL|MLB|EPL|UCL|LALIGA|LA LIGA|SOCCER)\s*[\)\]]", pr["clean_body"], flags=re.I)
+        pr_sport = _canonical_sport(m_sp.group(1)) if m_sp else ""
+        core_re = re.compile(rf"\b{re.escape(core)}\b")
+
+        def _ticket_matches(t):
+            t_sp = _canonical_sport(t.get("sport", ""))
+            if pr_sport and t_sp and pr_sport not in ("MULTI-SPORT", "OTHER") and t_sp not in ("MULTI-SPORT", "OTHER") and pr_sport != t_sp:
+                return False
+            return bool(core_re.search(_normalize_ascii_text(t.get("selections", ""))))
+
+        is_pending = any(_ticket_matches(t) for t in pending_tickets)
+        is_settled_today = any(_ticket_matches(t) for t in today_tickets)
         if is_pending or is_settled_today:
             continue
 
@@ -1254,10 +1274,12 @@ def _get_or_create_shadow_sheet(workbook):
 
 
 def _was_curated_play_placed(play, tracker_entries):
-    """Cross-references a curated play against Challenge Tracker rows within +/- 1 day."""
+    """Cross-references a curated play against Challenge Tracker rows within +/- 1 day (sport + word-boundary safe)."""
     p_core = _extract_selection_core(play.get("selection", ""))
-    if not p_core or len(p_core) < 3:
+    if not p_core or len(p_core) < 2:
         return False
+    p_sport = _canonical_sport(play.get("sport", ""))
+    p_re = re.compile(rf"\b{re.escape(p_core)}\b")
     try:
         p_dt = datetime.strptime(play["date"], "%Y-%m-%d").date()
     except Exception:
@@ -1267,7 +1289,10 @@ def _was_curated_play_placed(play, tracker_entries):
         if p_dt and te.get("date_obj"):
             if abs((te["date_obj"] - p_dt).days) > 1:
                 continue
-        if p_core in te["sel_norm"]:
+        t_sport = te.get("sport", "")
+        if p_sport and t_sport and p_sport not in ("MULTI-SPORT", "OTHER") and t_sport not in ("MULTI-SPORT", "OTHER") and p_sport != t_sport:
+            continue
+        if p_re.search(te["sel_norm"]):
             return True
     return False
 
@@ -1316,6 +1341,7 @@ def run_shadow_grading(workbook, tracker_all_values=None, existing_final_games=N
         if not r or not str(r[0]).strip().startswith("BET-"):
             continue
         b_date = str(r[1]).strip() if len(r) > 1 else ""
+        b_sport = _canonical_sport(r[2]) if len(r) > 2 else ""
         sel_txt = str(r[5]).strip() if len(r) > 5 else ""
         try:
             d_obj = datetime.strptime(b_date, "%Y-%m-%d").date()
@@ -1323,6 +1349,7 @@ def run_shadow_grading(workbook, tracker_all_values=None, existing_final_games=N
             d_obj = None
         tracker_entries.append({
             "date_obj": d_obj,
+            "sport": b_sport,
             "sel_norm": _normalize_ascii_text(sel_txt),
         })
 
@@ -1355,7 +1382,18 @@ def run_shadow_grading(workbook, tracker_all_values=None, existing_final_games=N
     pushes_cnt = 0
 
     for p, bet_obj in zip(ungraded, shadow_bet_objs):
-        graded = _grade_straight_bet_deterministic(bet_obj, combined_games) or _grade_player_prop_deterministic(bet_obj, combined_games)
+        # Strictly scope candidate games to this play's date (plus next UTC day) so unplayed games never match earlier days
+        d_clean = p["date"].replace("-", "")
+        valid_dates = set()
+        if len(d_clean) == 8 and d_clean.isdigit():
+            valid_dates.add(d_clean)
+            dt_obj = datetime.strptime(d_clean, "%Y%m%d")
+            valid_dates.add((dt_obj + timedelta(days=1)).strftime("%Y%m%d"))
+        play_games = [
+            g for g in combined_games
+            if not valid_dates or not g.get("date") or str(g.get("date")).replace("-", "") in valid_dates
+        ]
+        graded = _grade_straight_bet_deterministic(bet_obj, play_games) or _grade_player_prop_deterministic(bet_obj, play_games)
         if not graded:
             continue
         res = graded.get("result", "").strip()
