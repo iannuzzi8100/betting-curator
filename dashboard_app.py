@@ -551,11 +551,12 @@ def _adjust_curated_plays_for_bankroll(
     curated_plays, curated_raw, settled_bankroll, pending_total, pending_tickets, today_tickets, equity_curve=None
 ):
     """
-    Deterministic Wager Engine (Server-Side):
+    Deterministic Half-Kelly Wager Engine (Server-Side):
     - 1U = 5% of Total Bankroll, rounded cleanly to nearest $0.50 (min $2.00)
-    - Calibrated Fractional Kelly sizing (Confidence 68-99 -> 55.5%-68.5% win prob, odds-adjusted)
-    - 35% single-bet cap & 80% concurrent overlap exposure cap across exact start->finish intervals
-    - Drawdown Brake (< $60 or > 25% off peak -> tightens to 25% single / 60% concurrent)
+    - Calibrated Win Prob (Confidence 68-99 -> 54.5%-65.5%, odds-adjusted)
+    - Market Kelly multiplier: 0.55x ML | 0.40x Spread/Prop/Total | 0.30x new leagues (UCL/LALIGA, max 10%)
+    - 18% single-bet cap & 58% concurrent overlap exposure cap across exact start->finish intervals
+    - Drawdown Brake (< $75 or > 20% off peak -> tightens to 12% single / 40% concurrent)
     - $1,000 Endgame Goal-Lock Brake (never risk more than needed to cross $1,000)
     """
     if not curated_plays or settled_bankroll <= 0:
@@ -563,11 +564,10 @@ def _adjust_curated_plays_for_bankroll(
 
     avail_cash = round(max(0.0, settled_bankroll - pending_total), 2)
     peak_br = max([100.0, settled_bankroll] + [float(pt.get("bankroll", 0) or 0) for pt in (equity_curve or [])])
-    is_dd = (settled_bankroll < 60.0) or (peak_br > 0 and ((peak_br - settled_bankroll) / peak_br) > 0.25)
-    max_single_pct = 0.25 if is_dd else 0.35
-    max_conc_pct = 0.60 if is_dd else 0.80
+    is_dd = (settled_bankroll < 75.0) or (peak_br > 0 and ((peak_br - settled_bankroll) / peak_br) > 0.20)
+    base_single_pct = 0.12 if is_dd else 0.18
+    max_conc_pct = 0.40 if is_dd else 0.58
     unit_val = max(0.01, settled_bankroll * 0.05)
-    max_single_amt = settled_bankroll * max_single_pct
     max_conc_amt = settled_bankroll * max_conc_pct
 
     def _dur_min(sp, sel_txt=""):
@@ -664,22 +664,32 @@ def _adjust_curated_plays_for_bankroll(
         odds_i = int(p.get("odds") or -110)
         b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / abs(odds_i))
         cp = float(p.get("confidence_pct") if p.get("confidence_pct") is not None else 74)
-        p_win = 0.555 + (max(0.0, min(99.0, cp) - 68.0) / 31.0) * 0.13
-        kelly_f = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
+        p_win = 0.545 + (max(0.0, min(99.0, cp) - 68.0) / 31.0) * 0.11
+        full_k = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
+        sp_u = _normalize_sport(p.get("sport", "")).upper()
+        sel_txt = str(p.get("selection") or title)
+        is_ml = bool(re.search(r"\b(ml|moneyline|to\s+win)\b", sel_txt, flags=re.I)) and not bool(
+            re.search(r"\b(over|under)\s+\d", sel_txt, flags=re.I)
+        )
+        is_new_lg = sp_u in ("UCL", "LALIGA")
+        k_mult = 0.30 if is_new_lg else (0.55 if is_ml else 0.40)
+        eff_single_pct = min(base_single_pct, 0.10) if is_new_lg else base_single_pct
+        max_single_amt = settled_bankroll * eff_single_pct
+        kelly_f = full_k * k_mult
         raw_st = min(max_single_amt, settled_bankroll * kelly_f)
         if settled_bankroll < 1000.0 and b_mult > 0:
             raw_st = min(raw_st, (1000.0 - settled_bankroll) / b_mult)
         s_m = _time_min(p.get("game_time") or title)
-        e_m = s_m + _dur_min(p.get("sport", ""), p.get("selection") or title)
-        remaining_items.append({"p": p, "kelly_f": kelly_f, "raw_st": raw_st, "s": s_m, "e": e_m})
+        e_m = s_m + _dur_min(p.get("sport", ""), sel_txt)
+        remaining_items.append({"p": p, "kelly_f": kelly_f, "raw_st": raw_st, "max_s": max_single_amt, "s": s_m, "e": e_m})
 
-    # Priority-ordered concurrent overlap allocation (highest Kelly edge reserves room first)
+    # Priority-ordered concurrent overlap allocation (highest Half-Kelly edge reserves room first)
     for item in sorted(remaining_items, key=lambda x: (-x["kelly_f"], x["s"])):
         p = item["p"]
         old_stake = round(float(p.get("stake") or 0.0), 2)
         pk = _peak_overlap(allocated_intervals, item["s"], item["e"])
         room = max(0.0, max_conc_amt - pk)
-        st = min(item["raw_st"], max_single_amt, room)
+        st = min(item["raw_st"], item["max_s"], room)
         new_stake = round(st * 2.0) / 2.0 if st >= 2.0 else 0.0
         p["stake"] = new_stake
         p["units"] = round(new_stake / unit_val, 1) if new_stake > 0 else 0.0
@@ -2188,9 +2198,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const availCash = Math.max(0, Math.round((settledBr - pendingTot) * 100) / 100);
       const eqPts = (data && data.equity_curve) || [];
       const peakBr = Math.max(100, settledBr, ...eqPts.map(pt => Number(pt.bankroll || 0)));
-      const isDrawdown = (settledBr < 60) || (peakBr > 0 && ((peakBr - settledBr) / peakBr) > 0.25);
-      const maxSinglePct = isDrawdown ? 0.25 : 0.35;
-      const maxConcPct = isDrawdown ? 0.60 : 0.80;
+      const isDrawdown = (settledBr < 75) || (peakBr > 0 && ((peakBr - settledBr) / peakBr) > 0.20);
+      const baseSinglePct = isDrawdown ? 0.12 : 0.18;
+      const maxConcPct = isDrawdown ? 0.40 : 0.58;
       const baseUnit = Math.max(0.01, settledBr * 0.05);
       const dateStr = (data && (data.curated_date || data.today)) || "";
 
@@ -2253,17 +2263,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const oddsVal = Number(p.odds != null ? p.odds : (fb.odds != null ? fb.odds : -110));
         const b = oddsVal > 0 ? oddsVal / 100 : 100 / Math.max(1, Math.abs(oddsVal));
         const cp = Number(p.confidence_pct != null ? p.confidence_pct : 74);
-        const pWin = 0.555 + (Math.max(0, Math.min(99, cp) - 68) / 31) * 0.13;
-        const kellyF = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
+        const pWin = 0.545 + (Math.max(0, Math.min(99, cp) - 68) / 31) * 0.11;
+        const fullKellyF = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
+        const spU = normalizeSport(p.sport || fb.sport || "").toUpperCase();
+        const selTxt = String(p.selection || fb.selection || title);
+        const isMl = /\b(ml|moneyline|to\s+win)\b/i.test(selTxt) && !/\b(over|under)\s+\d/i.test(selTxt);
+        const isNewLeague = (spU === "UCL" || spU === "LALIGA");
+        const kMult = isNewLeague ? 0.30 : (isMl ? 0.55 : 0.40);
+        const mktTag = isNewLeague ? "New League 0.30x" : (isMl ? "ML 0.55x" : "Spread/Prop 0.40x");
+        const singlePct = isNewLeague ? Math.min(baseSinglePct, 0.10) : baseSinglePct;
+        const kellyF = fullKellyF * kMult;
         const sMs = estimateCuratedStartMs(p, dateStr);
-        const eMs = sMs + getSportDurationMinutes(p.sport || fb.sport, p.selection || title) * 60000;
+        const eMs = sMs + getSportDurationMinutes(p.sport || fb.sport, selTxt) * 60000;
 
         // Anticipate locked-in blowout payouts ONLY for games finishing before this game's tipoff (+15m buffer)
         const relAnt = anticipatedWins.filter(aw => aw.endMs <= sMs + 15 * 60000);
         const antProfit = relAnt.reduce((acc, a) => acc + a.profit, 0);
         const antPayout = relAnt.reduce((acc, a) => acc + a.payout, 0);
         const effBr = settledBr + antProfit;
-        const effMaxSingle = effBr * maxSinglePct;
+        const effMaxSingle = effBr * singlePct;
         const effMaxConc = effBr * maxConcPct;
 
         let rawTarget = Math.min(effMaxSingle, effBr * kellyF);
@@ -2277,7 +2295,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         remaining.push({
-          p, title, fb, oddsVal, b, cp, pWin, kellyF, sMs, eMs,
+          p, title, fb, oddsVal, b, cp, pWin, kellyF, fullKellyF, kMult, mktTag, singlePct, sMs, eMs,
           effBr, effMaxSingle, effMaxConc, rawTarget, goalBrake,
           antIds: relAnt.map(a => a.bet_id),
           antProfit: Math.round(antProfit * 100) / 100,
@@ -2285,7 +2303,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
       });
 
-      // Priority-ordered allocation: highest Kelly edge reserves concurrent room first (Lookahead Cash Reservation)
+      // Priority-ordered allocation: highest Half-Kelly edge reserves concurrent room first (Lookahead Cash Reservation)
       const allocated = baseIntervals.slice();
       const sortedPriority = remaining.slice().sort((a, b) => (b.kellyF - a.kellyF) || (a.sMs - b.sMs));
       for (const it of sortedPriority) {
@@ -2325,10 +2343,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           effBr: Math.round(it.effBr * 100) / 100,
           probPct: Math.round(it.pWin * 1000) / 10,
           kellyPct: Math.round(it.kellyF * 1000) / 10,
+          mktTag: it.mktTag,
           oddsVal: it.oddsVal,
           peakConcPct: Math.round((peakAfter / it.effBr) * 1000) / 10,
           maxConcPct: Math.round(maxConcPct * 100),
-          maxSinglePct: Math.round(maxSinglePct * 100),
+          maxSinglePct: Math.round(it.singlePct * 100),
           overlapCount,
           isDrawdown,
           goalBrake: it.goalBrake,
@@ -2336,6 +2355,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           antProfit: it.antProfit,
           cashNowNote,
           cappedByOverlap: finalStake === 0 && it.rawTarget >= 2.0,
+          lowEdgePass: finalStake === 0 && it.rawTarget < 2.0,
         };
       }
     }
@@ -3746,7 +3766,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               <div style="display:flex;flex-wrap:wrap;gap:6px;">
                 <span class="pill pill-blue" style="font-size:0.74rem;">1U = ${fmtMoney(wb.unitSize)} (5% BR)</span>
                 <span class="pill pill-blue" style="font-size:0.74rem;">Win Prob: ${wb.probPct}% @ ${esc(oddsTxt)}</span>
-                <span class="pill pill-blue" style="font-size:0.74rem;">Kelly: ${wb.kellyPct}% (cap ${wb.maxSinglePct}%)</span>
+                <span class="pill pill-blue" style="font-size:0.74rem;">Half-Kelly: ${wb.kellyPct}% (${esc(wb.mktTag || "0.50x")}, cap ${wb.maxSinglePct}%)</span>
                 <span class="pill ${wb.peakConcPct >= wb.maxConcPct - 2 ? "pill-amber" : "pill-green"}" style="font-size:0.74rem;">Concurrent: ${wb.peakConcPct}% / ${wb.maxConcPct}% (${esc(overlapLabel)})</span>
               </div>
               ${extraLines.join("")}
@@ -3805,6 +3825,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               actionHtml = `
                 <div class="bet-actions" onclick="event.stopPropagation()">
                   <span class="pill pill-amber">Concurrent ${wb.maxConcPct}% Cap Reached</span>
+                  ${statusPills.join("")}
+                  <button class="btn-mini" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Manually</button>
+                </div>`;
+            } else if (wb && wb.lowEdgePass) {
+              actionHtml = `
+                <div class="bet-actions" onclick="event.stopPropagation()">
+                  <span class="pill pill-amber">Pass • Low Edge at ${wb.oddsVal > 0 ? "+" + wb.oddsVal : wb.oddsVal} (&lt;$2 min)</span>
                   ${statusPills.join("")}
                   <button class="btn-mini" onclick="event.stopPropagation(); openLogModal(window.__curatedPlays[${globalIdx}])">+ Log Manually</button>
                 </div>`;
