@@ -686,16 +686,114 @@ def fetch_dashboard_data():
     }
 
 
+def _norm_match_text(text):
+    s = str(text or "")
+    s = (
+        s.replace("ø", "o").replace("Ø", "o")
+        .replace("æ", "ae").replace("Æ", "ae")
+        .replace("ß", "ss")
+    )
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", s.lower())).strip()
+
+
 def _extract_selection_core(text):
     s = str(text or "").strip()
     s = re.sub(r"^\d+\.\s*", "", s).replace("*", "").strip()
     s = re.sub(r"^\[[^\]]+\]\s*", "", s).strip()
+    if "—" in s:
+        parts = [p.strip() for p in s.split("—") if p.strip()]
+        if len(parts) >= 2 and ("@" in parts[0] or "•" in parts[0] or re.search(r"\b(?:AM|PM)\s+EST\b", parts[0], flags=re.I)):
+            s = parts[1]
     core = re.split(
         r"(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)",
         s,
         flags=re.I,
     )[0]
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", core.lower())).strip()
+    return _norm_match_text(core)
+
+
+def _expand_play_match_candidates(play):
+    title = str(play.get("title", "") or "")
+    sel = str(play.get("selection", "") or "")
+    core = _extract_selection_core(sel or title)
+    cands = []
+    if core and len(core) >= 2:
+        cands.append(core)
+
+    # If core is a 2-4 char abbreviation (e.g. LAR, SJ, OTT, MIN, COL), resolve against matchup "Away @ Home"
+    if core and " " not in core and 2 <= len(core) <= 4:
+        m_hdr = re.split(r"[—–]", title)[0] if ("—" in title or "–" in title) else ""
+        m_hdr = re.sub(r"^\[[^\]]+\]\s*", "", m_hdr)
+        m_hdr = re.sub(r"^\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\s*[•·]?\s*", "", m_hdr, flags=re.I)
+        m_hdr = re.sub(r"\s*\([A-Za-z0-9/ ]{2,10}\)\s*$", "", m_hdr).strip()
+        teams = [t.strip() for t in re.split(r"\s+@\s+|\s+vs\.?\s+", m_hdr, flags=re.I) if t.strip()]
+        if len(teams) == 2:
+            def _abbr_score(abbr, team_name):
+                tn = _norm_match_text(team_name)
+                words = [w for w in tn.split() if w]
+                if not words:
+                    return 0
+                initials_all = "".join(w[0] for w in words)
+                initials_first2 = "".join(w[0] for w in words[:2])
+                if abbr == initials_all or abbr == initials_first2:
+                    return 100
+                if words[0].startswith(abbr):
+                    return 85
+                if len(words) >= 2 and (words[0][0] + words[1][: len(abbr) - 1]) == abbr:
+                    return 75
+                # Ordered subsequence starting on first char (e.g. mtl -> montreal, wsh -> washington)
+                joined = "".join(words)
+                if joined.startswith(abbr[0]):
+                    pos = 0
+                    for ch in abbr:
+                        idx = joined.find(ch, pos)
+                        if idx == -1:
+                            return 0
+                        pos = idx + 1
+                    return 60
+                return 0
+
+            s0 = _abbr_score(core, teams[0])
+            s1 = _abbr_score(core, teams[1])
+            matched_team = teams[0] if (s0 > s1 and s0 >= 60) else (teams[1] if (s1 > s0 and s1 >= 60) else "")
+            if matched_team:
+                tn = _norm_match_text(matched_team)
+                words = [w for w in tn.split() if w]
+                cands.append(tn)
+                if len(words) >= 2 and len(words[-1]) >= 4:
+                    cands.append(words[-1])
+                if len(words) >= 2 and len(words[0]) >= 4:
+                    cands.append(words[0])
+    return list(dict.fromkeys(c for c in cands if len(c) >= 2))
+
+
+def _match_curated_play_to_ticket(play, ticket_list):
+    if not play or not ticket_list:
+        return None
+    p_sport = _normalize_sport(play.get("sport", "")).upper()
+    cands = _expand_play_match_candidates(play)
+    if not cands:
+        return None
+    for t in ticket_list:
+        t_sport = _normalize_sport(t.get("sport", "")).upper()
+        if (
+            p_sport
+            and t_sport
+            and p_sport not in ("MULTI-SPORT", "OTHER")
+            and t_sport not in ("MULTI-SPORT", "OTHER")
+            and p_sport != t_sport
+        ):
+            continue
+        norm_sel = _norm_match_text(t.get("selections", ""))
+        if not norm_sel:
+            continue
+        for cand in cands:
+            if re.search(rf"\b{re.escape(cand)}\b", norm_sel):
+                return t
+    return None
 
 
 def _adjust_curated_plays_for_bankroll(
@@ -782,20 +880,8 @@ def _adjust_curated_plays_for_bankroll(
             p["status"] = "pass"
             continue
 
-        def _norm_t(txt):
-            return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", str(txt or "").lower())).strip()
-
-        core = _extract_selection_core(p.get("selection") or title)
-        match_pend = (
-            next((t for t in (pending_tickets or []) if core and len(core) >= 3 and core in _norm_t(t.get("selections", ""))), None)
-            if core
-            else None
-        )
-        match_settled = (
-            next((t for t in (today_tickets or []) if core and len(core) >= 3 and core in _norm_t(t.get("selections", ""))), None)
-            if (core and not match_pend)
-            else None
-        )
+        match_pend = _match_curated_play_to_ticket(p, pending_tickets)
+        match_settled = _match_curated_play_to_ticket(p, today_tickets) if not match_pend else None
 
         if match_pend:
             p["status"] = "pending"
@@ -2403,17 +2489,79 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       return normalizeSelForMatch(core);
     }
 
+    function expandPlayMatchCandidates(play, fb) {
+      const title = String((play && play.title) || "");
+      const sel = String((play && play.selection) || (fb && fb.selection) || "");
+      const core = extractSelectionCore(sel || title);
+      const cands = [];
+      if (core && core.length >= 2) cands.push(core);
+
+      // Expand 2-4 char abbreviations (LAR, SJ, OTT, MIN, COL, PHI, CHI) against matchup header "Away @ Home"
+      if (core && !core.includes(" ") && core.length >= 2 && core.length <= 4) {
+        let mHdr = /[—–]/.test(title) ? title.split(/[—–]/)[0] : "";
+        mHdr = mHdr
+          .replace(/^\[[^\]]+\]\s*/, "")
+          .replace(/^\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\s*[•·]?\s*/i, "")
+          .replace(/\s*\([A-Za-z0-9/ ]{2,10}\)\s*$/, "")
+          .trim();
+        const teams = mHdr.split(/\s+@\s+|\s+vs\.?\s+/i).map(x => x.trim()).filter(Boolean);
+        if (teams.length === 2) {
+          const abbrScore = (abbr, teamName) => {
+            const tn = normalizeSelForMatch(teamName);
+            const words = tn.split(" ").filter(Boolean);
+            if (!words.length) return 0;
+            const initialsAll = words.map(w => w[0]).join("");
+            const initialsFirst2 = words.slice(0, 2).map(w => w[0]).join("");
+            if (abbr === initialsAll || abbr === initialsFirst2) return 100;
+            if (words[0].startsWith(abbr)) return 85;
+            if (words.length >= 2 && (words[0][0] + words[1].slice(0, abbr.length - 1)) === abbr) return 75;
+            const joined = words.join("");
+            if (joined.startsWith(abbr[0])) {
+              let pos = 0;
+              for (const ch of abbr) {
+                const idx = joined.indexOf(ch, pos);
+                if (idx === -1) return 0;
+                pos = idx + 1;
+              }
+              return 60;
+            }
+            return 0;
+          };
+          const s0 = abbrScore(core, teams[0]);
+          const s1 = abbrScore(core, teams[1]);
+          const matchedTeam = (s0 > s1 && s0 >= 60) ? teams[0] : ((s1 > s0 && s1 >= 60) ? teams[1] : "");
+          if (matchedTeam) {
+            const tn = normalizeSelForMatch(matchedTeam);
+            const words = tn.split(" ").filter(Boolean);
+            cands.push(tn);
+            if (words.length >= 2 && words[words.length - 1].length >= 4) cands.push(words[words.length - 1]);
+            if (words.length >= 2 && words[0].length >= 4) cands.push(words[0]);
+          }
+        }
+      }
+      return Array.from(new Set(cands.filter(c => c.length >= 2)));
+    }
+
     function findMatchingTicketForPlay(ticketList, play) {
       if (!Array.isArray(ticketList) || ticketList.length === 0 || !play) return null;
       const fb = parseTitleFallback(play.title);
-      const core = extractSelectionCore(play.selection || fb.selection || play.title || "");
-      if (!core || core.length < 3) return null;
+      const pSport = normalizeSport(play.sport || fb.sport || "").toUpperCase();
+      const cands = expandPlayMatchCandidates(play, fb);
+      if (cands.length === 0) return null;
+      const candRegexes = cands.map(c => new RegExp("\\b" + c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b"));
       return ticketList.find(t => {
+        const tSport = normalizeSport((t && t.sport) || "").toUpperCase();
+        if (
+          pSport && tSport &&
+          pSport !== "MULTI-SPORT" && pSport !== "OTHER" &&
+          tSport !== "MULTI-SPORT" && tSport !== "OTHER" &&
+          pSport !== tSport
+        ) {
+          return false;
+        }
         const normSel = normalizeSelForMatch(t && t.selections);
         if (!normSel) return false;
-        if (normSel.includes(core)) return true;
-        const tCore = extractSelectionCore(t && t.selections);
-        return Boolean(tCore && tCore.length >= 3 && tCore === core);
+        return candRegexes.some(re => re.test(normSel));
       }) || null;
     }
 
@@ -2490,9 +2638,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const matchPend = findMatchingTicketForPlay(pendList, p);
         const matchSettled = !matchPend ? findMatchingTicketForPlay(todayList, p) : null;
 
+        delete p.recalculated_stake;
         if (matchPend) {
           p.status = "pending";
           p.pending_bet_id = matchPend.bet_id;
+          delete p.settled_bet_id;
+          delete p.settled_result;
+          delete p.settled_pl;
           p.stake = Number(matchPend.stake || p.stake || 0);
           p.units = Math.round((p.stake / baseUnit) * 10) / 10;
           return;
@@ -2502,9 +2654,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           p.settled_bet_id = matchSettled.bet_id;
           p.settled_result = matchSettled.result;
           p.settled_pl = Number(matchSettled.net_pl || 0);
+          delete p.pending_bet_id;
           return;
         }
 
+        delete p.pending_bet_id;
+        delete p.settled_bet_id;
+        delete p.settled_result;
+        delete p.settled_pl;
         p.status = "remaining";
         if (isCuratedPlayStarted(p, dateStr)) return;
 
@@ -4035,10 +4192,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .replace(/^[•·]\s*/, "")
         .trim();
 
-      // Remove trailing wager / confidence segments like "— [$21.08 (35% BR)]" or "— $21.08 (...)"
+      // Remove trailing wager / confidence segments like "— [$21.08 (35% BR)]", "— $21.08 (2.3U)", or malformed "— 8.508.19 (2.3U)"
       stripped = stripped
         .replace(/\s*[—–]\s*\[?\d{2,3}%\s*[^\]]*\]?$/g, "")
-        .replace(/\s*[—–]\s*\[?\$[\d.,]+[^\]]*\]?$/g, "")
+        .replace(/\s*[—–]\s*\[?\$?[\d.,]+(?:\s*\([^)]*(?:U|BR|Bankroll)\))?[^\]]*\]?$/gi, "")
         .replace(/\s*[—–]\s*\[?\d{1,2}(?:\.\d+)?%\s*of\s+Resulting\s+BR[^\]]*\]?$/gi, "")
         .trim();
 
@@ -4067,9 +4224,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
       }
 
-      // Final cleanup on betText (remove any stray leading/trailing brackets or Window tags)
+      // Final cleanup on betText (remove any stray trailing wager, brackets, or Window tags)
       betText = betText
-        .replace(/\s*[—–]\s*\[?\$[\d.,]+.*$/g, "")
+        .replace(/\s*[—–]\s*\[?\$?\d[\d.,]*.*$/g, "")
         .replace(/\s*\(Window\s*\d+:[^)]*\)/gi, "")
         .trim();
 

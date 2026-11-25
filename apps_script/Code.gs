@@ -398,30 +398,119 @@ function getLatestCuratedPlays_(feedWs, fallbackDate) {
   return { date: latestDate, plays: plays, raw: latestText, rowIndex: latestRow };
 }
 
+function normalizeMatchText_(text) {
+  return String(text || "")
+    .replace(/[øØ]/g, "o")
+    .replace(/[æÆ]/g, "ae")
+    .replace(/ß/g, "ss")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractSelectionCore_(text) {
   let s = String(text || "").trim();
   s = s.replace(/^\d+\.\s*/, "").replace(/\*/g, "").trim();
   s = s.replace(/^\[[^\]]+\]\s*/, "").trim();
+  const smStream = s.match(/^(?:(?:\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\([A-Za-z0-9/ ]{2,10}\)\s*[—–]\s*(.+)$/i);
+  if (smStream) s = smStream[1].trim();
   const core = s.split(/(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)/i)[0];
-  return core.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  return normalizeMatchText_(core);
+}
+
+function expandPlayMatchCandidates_(play) {
+  const title = String((play && play.title) || "");
+  const sel = String((play && play.selection) || "");
+  const core = extractSelectionCore_(sel || title);
+  const cands = [];
+  if (core && core.length >= 2) cands.push(core);
+
+  if (core && core.indexOf(" ") === -1 && core.length >= 2 && core.length <= 4) {
+    let mHdr = /[—–]/.test(title) ? title.split(/[—–]/)[0] : "";
+    mHdr = mHdr
+      .replace(/^\[[^\]]+\]\s*/, "")
+      .replace(/^\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\s*[•·]?\s*/i, "")
+      .replace(/\s*\([A-Za-z0-9/ ]{2,10}\)\s*$/, "")
+      .trim();
+    const teams = mHdr.split(/\s+@\s+|\s+vs\.?\s+/i).map(x => x.trim()).filter(Boolean);
+    if (teams.length === 2) {
+      const abbrScore = function(abbr, teamName) {
+        const tn = normalizeMatchText_(teamName);
+        const words = tn.split(" ").filter(Boolean);
+        if (!words.length) return 0;
+        const initialsAll = words.map(w => w[0]).join("");
+        const initialsFirst2 = words.slice(0, 2).map(w => w[0]).join("");
+        if (abbr === initialsAll || abbr === initialsFirst2) return 100;
+        if (words[0].indexOf(abbr) === 0) return 85;
+        if (words.length >= 2 && (words[0][0] + words[1].slice(0, abbr.length - 1)) === abbr) return 75;
+        const joined = words.join("");
+        if (joined.indexOf(abbr[0]) === 0) {
+          let pos = 0;
+          for (let ci = 0; ci < abbr.length; ci++) {
+            const idx = joined.indexOf(abbr[ci], pos);
+            if (idx === -1) return 0;
+            pos = idx + 1;
+          }
+          return 60;
+        }
+        return 0;
+      };
+      const s0 = abbrScore(core, teams[0]);
+      const s1 = abbrScore(core, teams[1]);
+      const matchedTeam = (s0 > s1 && s0 >= 60) ? teams[0] : ((s1 > s0 && s1 >= 60) ? teams[1] : "");
+      if (matchedTeam) {
+        const tn = normalizeMatchText_(matchedTeam);
+        const words = tn.split(" ").filter(Boolean);
+        cands.push(tn);
+        if (words.length >= 2 && words[words.length - 1].length >= 4) cands.push(words[words.length - 1]);
+        if (words.length >= 2 && words[0].length >= 4) cands.push(words[0]);
+      }
+    }
+  }
+  const uniq = [];
+  for (let i = 0; i < cands.length; i++) {
+    if (cands[i].length >= 2 && uniq.indexOf(cands[i]) === -1) uniq.push(cands[i]);
+  }
+  return uniq;
+}
+
+function matchCuratedPlayToTicket_(play, ticketList) {
+  if (!play || !Array.isArray(ticketList) || ticketList.length === 0) return null;
+  const pSport = normalizeSport_(play.sport || "").toUpperCase();
+  const cands = expandPlayMatchCandidates_(play);
+  if (cands.length === 0) return null;
+  const regexes = cands.map(c => new RegExp("\\b" + c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b"));
+  for (let i = 0; i < ticketList.length; i++) {
+    const t = ticketList[i];
+    const tSport = normalizeSport_((t && t.sport) || "").toUpperCase();
+    if (
+      pSport && tSport &&
+      pSport !== "MULTI-SPORT" && pSport !== "OTHER" &&
+      tSport !== "MULTI-SPORT" && tSport !== "OTHER" &&
+      pSport !== tSport
+    ) {
+      continue;
+    }
+    const normSel = normalizeMatchText_(t && t.selections);
+    if (!normSel) continue;
+    for (let j = 0; j < regexes.length; j++) {
+      if (regexes[j].test(normSel)) return t;
+    }
+  }
+  return null;
 }
 
 function adjustCuratedPlaysForBankroll_(curated, settledBankroll, pendingTotal, pendingTickets, todayTickets) {
   if (!curated || !curated.plays || curated.plays.length === 0) return [];
   const plays = curated.plays;
   const raw = String(curated.raw || "");
-  const brMatch = raw.match(/Bankroll:\s*\$(\d+(?:\.\d{1,2})?)/i);
-  const feedBr = brMatch ? parseFloat(brMatch[1]) : settledBankroll;
   const availCash = round2_(Math.max(0.0, settledBankroll - pendingTotal));
-
-  const winCounts = {};
-  for (let i = 0; i < plays.length; i++) {
-    const p = plays[i];
-    const isPass = (p.title || "").indexOf("⛔") !== -1 || /\bPASS\b/.test(p.title || "");
-    if (!isPass && p.game_time) {
-      winCounts[p.game_time] = (winCounts[p.game_time] || 0) + 1;
-    }
-  }
+  const isDrawdown = settledBankroll < 75.0;
+  const baseSinglePct = isDrawdown ? 0.12 : 0.18;
+  const unitVal = Math.max(0.01, settledBankroll * 0.05);
 
   const adjustments = [];
   for (let i = 0; i < plays.length; i++) {
@@ -433,36 +522,14 @@ function adjustCuratedPlaysForBankroll_(curated, settledBankroll, pendingTotal, 
       continue;
     }
 
-    const core = extractSelectionCore_(p.selection || title);
-    const matchPend = (core && core.length >= 3)
-      ? (pendingTickets || []).find(t => String(t.selections || "").toLowerCase().indexOf(core) !== -1)
-      : null;
-    const matchSettled = (!matchPend && core && core.length >= 3)
-      ? (todayTickets || []).find(t => String(t.selections || "").toLowerCase().indexOf(core) !== -1)
-      : null;
-
-    let wagerPct = null;
-    const pctMatch = title.match(/(\d{1,2}(?:\.\d+)?)\s*%\s*(?:of\s+(?:Resulting\s+)?)?(?:BR|Bankroll)/i);
-    if (pctMatch) {
-      wagerPct = parseFloat(pctMatch[1]);
-    } else if (p.confidence_pct !== null && p.confidence_pct !== undefined) {
-      const cp = Number(p.confidence_pct);
-      const dual = (winCounts[p.game_time] || 1) >= 2;
-      if (cp >= 88) wagerPct = dual ? 35 : 50;
-      else if (cp >= 78) wagerPct = dual ? 25 : 35;
-      else if (cp >= 68) wagerPct = dual ? 18 : 20;
-    } else if (feedBr > 0 && p.stake > 0) {
-      wagerPct = round1_((p.stake / feedBr) * 100.0);
-    }
-    if (wagerPct) p.wager_pct = wagerPct;
+    const matchPend = matchCuratedPlayToTicket_(p, pendingTickets);
+    const matchSettled = !matchPend ? matchCuratedPlayToTicket_(p, todayTickets) : null;
 
     if (matchPend) {
       p.status = "pending";
       p.pending_bet_id = matchPend.bet_id;
       p.stake = round2_(matchPend.stake);
-      if (wagerPct && settledBankroll > 0) {
-        p.recalculated_stake = round2_(settledBankroll >= 2.0 ? Math.max(2.0, settledBankroll * (wagerPct / 100.0)) : settledBankroll);
-      }
+      p.units = Math.round((p.stake / unitVal) * 10) / 10;
       continue;
     }
     if (matchSettled) {
@@ -474,11 +541,30 @@ function adjustCuratedPlaysForBankroll_(curated, settledBankroll, pendingTotal, 
     }
 
     p.status = "remaining";
-    if (!wagerPct || wagerPct <= 0 || settledBankroll <= 0) continue;
+    if (settledBankroll <= 0) continue;
 
     const oldStake = round2_(p.stake || 0);
-    const newStake = round2_(settledBankroll >= 2.0 ? Math.max(2.0, settledBankroll * (wagerPct / 100.0)) : settledBankroll);
+    const oddsVal = Number(p.odds != null ? p.odds : -110);
+    const bMult = oddsVal > 0 ? (oddsVal / 100.0) : (100.0 / Math.max(1, Math.abs(oddsVal)));
+    const cp = Number(p.confidence_pct != null ? p.confidence_pct : 74);
+    const pWin = 0.545 + (Math.max(0, Math.min(99, cp) - 68) / 31.0) * 0.11;
+    const fullK = bMult > 0 ? Math.max(0, (pWin * bMult - (1 - pWin)) / bMult) : 0;
+    const spU = normalizeSport_(p.sport || "").toUpperCase();
+    const selTxt = String(p.selection || title);
+    const isMl = /\b(ml|moneyline|to\s+win)\b/i.test(selTxt) && !/\b(over|under)\s+\d/i.test(selTxt);
+    const isNewLg = (spU === "UCL" || spU === "LALIGA");
+    const kMult = isNewLg ? 0.30 : (isMl ? 0.55 : 0.40);
+    const singlePct = isNewLg ? Math.min(baseSinglePct, 0.10) : baseSinglePct;
+    let rawSt = Math.min(settledBankroll * singlePct, settledBankroll * fullK * kMult);
+    if (settledBankroll < 1000.0 && bMult > 0) {
+      rawSt = Math.min(rawSt, (1000.0 - settledBankroll) / bMult);
+    }
+    const newStake = rawSt >= 2.0 ? (Math.round(rawSt * 2.0) / 2.0) : 0.0;
+    const wagerPct = settledBankroll > 0 ? round1_((newStake / settledBankroll) * 100.0) : 0.0;
+
     p.stake = newStake;
+    p.units = newStake > 0 ? Math.round((newStake / unitVal) * 10) / 10 : 0;
+    p.wager_pct = wagerPct;
     if (oldStake > 0 && Math.abs(newStake - oldStake) >= 0.01) {
       p.original_stake = oldStake;
       p.stake_adjusted = true;
@@ -486,21 +572,25 @@ function adjustCuratedPlaysForBankroll_(curated, settledBankroll, pendingTotal, 
       p.stake_adjusted = false;
     }
 
-    // Replace the last $XX.XX in the play title with the recalculated wager amount
-    p.title = title.replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, "$" + newStake.toFixed(2));
-    adjustments.push({
-      selection: p.selection || title.split("—")[0].trim(),
-      wager_pct: wagerPct,
-      old_stake: oldStake,
-      new_stake: newStake,
-      changed: Math.abs(newStake - oldStake) >= 0.01,
-    });
+    if (newStake > 0) {
+      // Use function replacer so "$18.19" never triggers JS "$1" capture-group substitution!
+      p.title = title.replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, function() { return "$" + newStake.toFixed(2); });
+      adjustments.push({
+        selection: p.selection || title.split("—")[0].trim(),
+        wager_pct: wagerPct,
+        old_stake: oldStake,
+        new_stake: newStake,
+        changed: Math.abs(newStake - oldStake) >= 0.01,
+      });
+    }
   }
 
   if (raw) {
     let updatedRaw = raw.replace(
       /Bankroll:\s*\$\d+(?:\.\d{1,2})?\s*\|\s*Pending:\s*\$\d+(?:\.\d{1,2})?\s*\|\s*Available:\s*\$\d+(?:\.\d{1,2})?/i,
-      "Bankroll: $" + settledBankroll.toFixed(2) + " | Pending: $" + pendingTotal.toFixed(2) + " | Available: $" + availCash.toFixed(2)
+      function() {
+        return "Bankroll: $" + settledBankroll.toFixed(2) + " | Pending: $" + pendingTotal.toFixed(2) + " | Available: $" + availCash.toFixed(2);
+      }
     );
     const rawLines = updatedRaw.split(/\r?\n/);
     let playIdx = 0;
@@ -508,7 +598,7 @@ function adjustCuratedPlaysForBankroll_(curated, settledBankroll, pendingTotal, 
       if (/^\s*\d+\.\s+/.test(rawLines[l]) && playIdx < plays.length) {
         const pl = plays[playIdx++];
         if (pl.status === "remaining" && pl.stake > 0) {
-          rawLines[l] = rawLines[l].replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, "$" + pl.stake.toFixed(2));
+          rawLines[l] = rawLines[l].replace(/\$(\d+(?:\.\d{1,2})?)(?!.*?\$\d)/, function() { return "$" + pl.stake.toFixed(2); });
         }
       }
     }
