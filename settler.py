@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import unicodedata
 import requests
 import gspread
 from datetime import datetime, timezone, timedelta
@@ -28,6 +29,21 @@ SHEET_ID = (
 SHEET_NAME = "Betting Tracker & Strategy Log - $100 to $1,000 Challenge"
 TRACKER_TAB_NAME = "Challenge Tracker ($100-$1k)"
 FEED_TAB_NAME = "Curator Feed"
+SHADOW_TAB_NAME = "Shadow Grading Log"
+SHADOW_HEADERS = [
+    "Date",
+    "Sport",
+    "Market",
+    "Selection",
+    "Odds",
+    "Confidence %",
+    "Pillars",
+    "Execution",
+    "Result",
+    "Flat 1U P/L",
+    "Score Note",
+    "Graded At",
+]
 
 ESPN_LEAGUES = {
     "CFB": {"path": "football/college-football", "groups": "80"},
@@ -40,6 +56,37 @@ ESPN_LEAGUES = {
     "UCL": {"path": "soccer/uefa.champions", "groups": None},
     "LALIGA": {"path": "soccer/esp.1", "groups": None},
 }
+
+_ASCII_TRANS = str.maketrans({
+    "ø": "o", "Ø": "O",
+    "æ": "ae", "Æ": "AE",
+    "œ": "oe", "Œ": "OE",
+    "ß": "ss",
+    "ł": "l", "Ł": "L",
+    "đ": "d", "Đ": "D",
+})
+
+
+def _normalize_ascii_text(text):
+    s = str(text or "").translate(_ASCII_TRANS)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", s.lower())).strip()
+
+
+def _canonical_sport(raw_sport):
+    sp = str(raw_sport or "").strip().upper()
+    if sp in ("CBB", "NCAAB", "MEN'S COLLEGE BASKETBALL", "COLLEGE BASKETBALL"):
+        return "NCAAM"
+    if sp in ("LA LIGA", "LA_LIGA", "SPANISH LA LIGA"):
+        return "LALIGA"
+    if sp in ("CHAMPIONS LEAGUE", "UEFA CHAMPIONS LEAGUE"):
+        return "UCL"
+    if sp in ("PREMIER LEAGUE", "ENGLISH PREMIER LEAGUE"):
+        return "EPL"
+    if sp == "NCAAF":
+        return "CFB"
+    return sp
 
 ALLOWED_EDGE_TAGS = [
     "WIN: Correlated Home Favorite + Alt Total Cushion",
@@ -127,8 +174,27 @@ def fetch_final_scores(target_dates, pending_bets=None):
         f"{b.get('sport', '')} {b.get('selections', '')} {b.get('notes', '')}"
         for b in (pending_bets or [])
     ).lower()
+    pending_text_norm = _normalize_ascii_text(pending_text)
+
+    needed_leagues = set()
+    prop_leagues = set()
+    has_unscoped_sport = False
+    for b in (pending_bets or []):
+        sp_c = _canonical_sport(b.get("sport", ""))
+        b_txt = f"{b.get('selections', '')} {b.get('notes', '')}".lower()
+        is_prop = bool(re.search(r"\b(?:rebounds?|assists?|points?|shots?|sog|goals?|pra|pts|reb|ast)\b", b_txt))
+        if not sp_c or sp_c in ("MULTI-SPORT", "SOCCER", "OTHER"):
+            has_unscoped_sport = True
+            if is_prop:
+                prop_leagues.update(("NHL", "NBA"))
+        else:
+            needed_leagues.add(sp_c)
+            if is_prop:
+                prop_leagues.add(sp_c)
 
     for league_name, league_info in ESPN_LEAGUES.items():
+        if pending_bets and not has_unscoped_sport and league_name not in needed_leagues:
+            continue
         path = league_info["path"]
         for d in target_dates:
             url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard?dates={d}"
@@ -175,6 +241,7 @@ def fetch_final_scores(target_dates, pending_bets=None):
                 home_score = int(float(home.get("score", 0) or 0))
                 away_score = int(float(away.get("score", 0) or 0))
 
+                team_matched = False
                 if pending_bets:
                     match_tokens = [
                         tok for tok in (
@@ -184,10 +251,17 @@ def fetch_final_scores(target_dates, pending_bets=None):
                         )
                         if tok and len(tok) >= 3
                     ]
-                    is_relevant = any(tok in pending_text for tok in match_tokens) or any(
-                        abbr and len(abbr) >= 3 and re.search(rf"\b{re.escape(abbr)}\b", pending_text)
-                        for abbr in (home_abbr, away_abbr)
+                    norm_tokens = [_normalize_ascii_text(tok) for tok in match_tokens]
+                    team_matched = (
+                        any(tok in pending_text for tok in match_tokens)
+                        or any(nt and len(nt) >= 3 and nt in pending_text_norm for nt in norm_tokens)
+                        or any(
+                            abbr and len(abbr) >= 3 and re.search(rf"\b{re.escape(abbr)}\b", pending_text)
+                            for abbr in (home_abbr, away_abbr)
+                        )
                     )
+                    # Keep completed NHL/NBA games when there is a prop bet in that league (player props may omit team name)
+                    is_relevant = team_matched or (is_completed and league_name in ("NHL", "NBA") and league_name in prop_leagues)
                     if not is_relevant:
                         continue
 
@@ -196,7 +270,7 @@ def fetch_final_scores(target_dates, pending_bets=None):
                     "date": d,
                     "matchup": f"{away_name} @ {home_name}",
                     "away_team": away_name,
-                    "away_short": home_short and away_short or away_short,
+                    "away_short": away_short,
                     "away_score": away_score,
                     "home_team": home_name,
                     "home_short": home_short,
@@ -206,17 +280,13 @@ def fetch_final_scores(target_dates, pending_bets=None):
                     "status": status_type.get("description", state)
                 }
 
-                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM/CBB games that match a pending bet team (or prop)
-                has_prop_kw = any(kw in pending_text for kw in ("rebound", "assist", "point", "shot", "sog", "goal", "pra", "over ", "under "))
+                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM games with a matching prop bet
                 if (
                     is_completed
                     and event_id
-                    and league_name in ("NHL", "NBA", "NCAAM", "CBB")
-                    and (
-                        (home_short and home_short in pending_text)
-                        or (away_short and away_short in pending_text)
-                        or (has_prop_kw and league_name.lower() in pending_text)
-                    )
+                    and league_name in ("NHL", "NBA", "NCAAM")
+                    and league_name in prop_leagues
+                    and (team_matched or league_name in ("NHL", "NBA"))
                 ):
                     player_stats = fetch_boxscore_players(path, event_id, league_name)
                     if player_stats:
@@ -236,35 +306,38 @@ def _grade_straight_bet_deterministic(bet, final_games):
     if "parlay" in b_type or "sgp" in b_type:
         return None
     sel = str(bet.get("selections", "") or "").strip()
-    if not sel or "+" in sel and " + " in sel:
+    if not sel or ("+" in sel and " + " in sel):
         return None
-    if re.search(r"\b(?:1h|1st\s*half|first\s*half|points|rebounds|assists|shots|sog|goals|pra|yards|touchdown)\b", sel, flags=re.I):
+    if re.search(r"\b(?:1h|1st\s*half|first\s*half|rebounds?|assists?|shots?|sog|goals?|pra|yards|touchdowns?)\b", sel, flags=re.I):
         return None
+    # Distinguish player points props (e.g. "Ryan Nugent-Hopkins Total Points Over 0.5") from game totals ("Over 216.5 Total Points")
+    if re.search(r"\bpoints?\b", sel, flags=re.I):
+        sel_after_dash = sel.split("—")[-1].strip() if "—" in sel else sel
+        if not re.search(r"^(?:over|under)\s+\d{2,3}(?:\.\d+)?\b", sel_after_dash, flags=re.I) and not re.search(
+            r"\b(?:over|under)\s+\d{2,3}(?:\.\d+)?\s+total\s+points?\b", sel_after_dash, flags=re.I
+        ):
+            return None
 
     sel_clean = re.sub(r"\([^)]*\)", "", sel).strip()
     if "—" in sel_clean:
         sel_clean = sel_clean.split("—")[-1].strip()
     elif "–" in sel_clean and "@" in sel_clean.split("–")[0]:
         sel_clean = sel_clean.split("–")[-1].strip()
-    full_sel_l = sel.lower()
-    sel_l = sel_clean.lower()
-    sp = str(bet.get("sport", "") or "").strip().upper()
-    if sp in ("CBB", "NCAAB"):
-        sp = "NCAAM"
-    elif sp in ("LA LIGA", "LA_LIGA", "SPANISH LA LIGA"):
-        sp = "LALIGA"
-    elif sp in ("CHAMPIONS LEAGUE", "UEFA CHAMPIONS LEAGUE"):
-        sp = "UCL"
+    full_sel_l = _normalize_ascii_text(sel)
+    sel_l = _normalize_ascii_text(sel_clean)
+    sp = _canonical_sport(bet.get("sport", ""))
 
     def _alias_score(text_l, full_name, short_name):
         sc = 0
-        if full_name and full_name in text_l:
-            sc = max(sc, 100 + len(full_name))
-        if len(short_name) >= 3:
-            if re.search(rf"\b{re.escape(short_name)}\b", text_l):
-                sc = max(sc, 50 + len(short_name))
-            elif short_name in text_l:
-                sc = max(sc, 20 + len(short_name))
+        fn = _normalize_ascii_text(full_name)
+        sn = _normalize_ascii_text(short_name)
+        if fn and fn in text_l:
+            sc = max(sc, 100 + len(fn))
+        if len(sn) >= 3:
+            if re.search(rf"\b{re.escape(sn)}\b", text_l):
+                sc = max(sc, 50 + len(sn))
+            elif sn in text_l:
+                sc = max(sc, 20 + len(sn))
         return sc
 
     matched_game = None
@@ -273,17 +346,26 @@ def _grade_straight_bet_deterministic(bet, final_games):
     for g in final_games:
         if not g.get("completed"):
             continue
-        g_league = str(g.get("league", "")).upper()
+        g_league = _canonical_sport(g.get("league", ""))
         if sp and sp != "MULTI-SPORT" and g_league and g_league != sp:
             continue
-        h_name = str(g.get("home_team", "")).lower()
-        a_name = str(g.get("away_team", "")).lower()
-        h_short = str(g.get("home_short", "")).lower()
-        a_short = str(g.get("away_short", "")).lower()
+        h_name = str(g.get("home_team", ""))
+        a_name = str(g.get("away_team", ""))
+        h_short = str(g.get("home_short", ""))
+        a_short = str(g.get("away_short", ""))
 
         h_sc_pick = _alias_score(sel_l, h_name, h_short)
         a_sc_pick = _alias_score(sel_l, a_name, a_short)
         if h_sc_pick == 0 and a_sc_pick == 0:
+            # For Game Totals ("Team A @ Team B — Under 44.5"), match both teams in full_sel_l
+            h_sc_full = _alias_score(full_sel_l, h_name, h_short)
+            a_sc_full = _alias_score(full_sel_l, a_name, a_short)
+            if h_sc_full > 0 and a_sc_full > 0 and re.search(r"\b(over|under)\s+\d+(?:\.\d+)?\b", sel_clean, flags=re.I):
+                tot_sc = h_sc_full + a_sc_full
+                if tot_sc > best_total_score:
+                    best_total_score = tot_sc
+                    matched_game = g
+                    picked_side = None
             continue
 
         # Bonus when the opponent team also appears in the full matchup text (e.g. "Tulsa @ Oregon State — Oregon State -6.5")
@@ -322,11 +404,11 @@ def _grade_straight_bet_deterministic(bet, final_games):
             res = "Lost"
         tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Totals Blowout / Late Garbage Time" if res == "Lost" else "")
         return {
-            "row_index": bet["row_index"],
-            "bet_id": bet["bet_id"],
+            "row_index": bet.get("row_index"),
+            "bet_id": bet.get("bet_id", ""),
             "result": res,
             "edge_tag": tag,
-            "verification_note": f"{score_str} (Total {tot} vs {side.title()} {line}).",
+            "verification_note": f"{score_str} (Total {tot} vs {side.title()} {line:g}).",
         }
 
     if not picked_side:
@@ -338,7 +420,7 @@ def _grade_straight_bet_deterministic(bet, final_games):
 
     # 2. Moneyline / PK
     if re.search(r"\b(?:ml|moneyline|to\s+win)\b", sel_clean, flags=re.I):
-        is_soccer = sp in ("EPL", "UCL", "LALIGA", "LA LIGA", "SOCCER", "PREMIER LEAGUE") or matched_game.get("league") in ("EPL", "UCL", "LALIGA")
+        is_soccer = sp in ("EPL", "UCL", "LALIGA", "SOCCER") or matched_game.get("league") in ("EPL", "UCL", "LALIGA")
         if my_sc > opp_sc:
             res = "Won"
         elif my_sc == opp_sc and not is_soccer:
@@ -347,8 +429,8 @@ def _grade_straight_bet_deterministic(bet, final_games):
             res = "Lost"
         tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Hook / Half-Point Variance" if res == "Lost" else "")
         return {
-            "row_index": bet["row_index"],
-            "bet_id": bet["bet_id"],
+            "row_index": bet.get("row_index"),
+            "bet_id": bet.get("bet_id", ""),
             "result": res,
             "edge_tag": tag,
             "verification_note": f"{score_str} ({my_team} ML).",
@@ -367,8 +449,8 @@ def _grade_straight_bet_deterministic(bet, final_games):
             res = "Lost"
         tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Hook / Half-Point Variance" if res == "Lost" else "")
         return {
-            "row_index": bet["row_index"],
-            "bet_id": bet["bet_id"],
+            "row_index": bet.get("row_index"),
+            "bet_id": bet.get("bet_id", ""),
             "result": res,
             "edge_tag": tag,
             "verification_note": f"{score_str} ({my_team} {spread:+g}: {adj:g} vs {opp_sc}).",
@@ -376,15 +458,137 @@ def _grade_straight_bet_deterministic(bet, final_games):
 
     return None
 
-# --- 3. GRADE & AUTO-TAG PENDING TICKETS (DETERMINISTIC FIRST, GEMINI FOR PARLAYS/PROPS) ---
+
+def _grade_player_prop_deterministic(bet, final_games):
+    """
+    Deterministic grader for Straight Player Props (NBA/NCAAM PTS/REB/AST/PRA, NHL PTS/G/A/SOG)
+    against completed ESPN player_boxscore records. Returns None if player is absent (DNP) or not matched.
+    """
+    b_type = str(bet.get("bet_type", "") or "").strip().lower()
+    if "parlay" in b_type or "sgp" in b_type:
+        return None
+    sel = str(bet.get("selections", "") or "").strip()
+    if not sel or " + " in sel:
+        return None
+
+    pick = re.sub(r"\([^)]*\)", "", sel).strip()
+    if "—" in pick:
+        pick = pick.split("—")[-1].strip()
+    elif "–" in pick and "@" in pick.split("–")[0]:
+        pick = pick.split("–")[-1].strip()
+
+    # Must have Over/Under + numeric line
+    m_ou = re.search(r"\b(over|under|o|u)\s*(\d+(?:\.\d+)?)\b", pick, flags=re.I)
+    if not m_ou:
+        return None
+    raw_side = m_ou.group(1).lower()
+    side = "over" if raw_side in ("over", "o") else "under"
+    line = float(m_ou.group(2))
+
+    # Identify stat category
+    stat_patterns = [
+        ("PRA", r"\b(?:pts\s*\+\s*reb\s*\+\s*ast|points\s*\+\s*rebounds\s*\+\s*assists|pra)\b"),
+        ("SOG", r"\b(?:total\s+)?(?:shots\s+on\s+goal|shots|sog)\b"),
+        ("REB", r"\b(?:total\s+)?(?:rebounds?|rebs?)\b"),
+        ("AST", r"\b(?:total\s+)?(?:assists?|asts?)\b"),
+        ("G", r"\b(?:total\s+)?(?:goals?)\b"),
+        ("PTS", r"\b(?:total\s+)?(?:points?|pts)\b"),
+    ]
+    stat_key = None
+    stat_pos = len(pick)
+    for sk, pat in stat_patterns:
+        ms = re.search(pat, pick, flags=re.I)
+        if ms:
+            stat_key = sk
+            stat_pos = min(stat_pos, ms.start())
+            break
+    if not stat_key:
+        return None
+
+    # Candidate player name is text before whichever comes first: stat keyword or Over/Under
+    cut_pos = min(stat_pos, m_ou.start())
+    cand_raw = re.sub(r"\btotal\b\s*$", "", pick[:cut_pos], flags=re.I).strip(" -:|")
+    cand_norm = _normalize_ascii_text(cand_raw)
+    cand_tokens = [t for t in cand_norm.split() if len(t) >= 2]
+    if not cand_norm or len(cand_norm) < 3 or cand_norm[0].isdigit():
+        return None
+
+    sp = _canonical_sport(bet.get("sport", ""))
+    full_sel_norm = _normalize_ascii_text(sel)
+
+    best_match = None
+    best_score = 0
+    for g in final_games:
+        if not g.get("completed"):
+            continue
+        pbox = g.get("player_boxscore") or {}
+        if not pbox:
+            continue
+        g_league = _canonical_sport(g.get("league", ""))
+        if sp and sp != "MULTI-SPORT" and g_league and g_league != sp:
+            continue
+
+        h_norm = _normalize_ascii_text(g.get("home_team", ""))
+        a_norm = _normalize_ascii_text(g.get("away_team", ""))
+        hs_norm = _normalize_ascii_text(g.get("home_short", ""))
+        as_norm = _normalize_ascii_text(g.get("away_short", ""))
+        team_bonus = 15 if any(t and len(t) >= 3 and t in full_sel_norm for t in (h_norm, a_norm, hs_norm, as_norm)) else 0
+
+        for ath_name, stats in pbox.items():
+            if stat_key not in stats:
+                continue
+            ath_norm = _normalize_ascii_text(ath_name)
+            ath_tokens = [t for t in ath_norm.split() if len(t) >= 2]
+            sc = 0
+            if cand_norm == ath_norm:
+                sc = 100
+            elif len(cand_tokens) >= 2 and all(ct in ath_tokens for ct in cand_tokens):
+                sc = 90
+            elif len(cand_tokens) >= 2 and len(ath_tokens) >= 2 and cand_tokens[-1] == ath_tokens[-1] and cand_tokens[0][0] == ath_tokens[0][0]:
+                sc = 80
+            elif len(cand_tokens) == 1 and len(cand_tokens[0]) >= 4 and ath_tokens and cand_tokens[0] == ath_tokens[-1] and team_bonus > 0:
+                sc = 60
+
+            if sc > 0 and (sc + team_bonus) > best_score:
+                best_score = sc + team_bonus
+                best_match = (g, ath_name, stats)
+
+    if not best_match:
+        return None
+
+    g, ath_name, stats = best_match
+    actual = float(stats[stat_key])
+    if abs(actual - line) < 1e-9:
+        res = "Push"
+    elif (side == "over" and actual > line) or (side == "under" and actual < line):
+        res = "Won"
+    else:
+        res = "Lost"
+
+    h_team = g["home_team"]
+    a_team = g["away_team"]
+    h_sc = int(g["home_score"])
+    a_sc = int(g["away_score"])
+    actual_disp = int(actual) if actual.is_integer() else actual
+    tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Hook / Half-Point Variance" if res == "Lost" else "")
+    return {
+        "row_index": bet.get("row_index"),
+        "bet_id": bet.get("bet_id", ""),
+        "result": res,
+        "edge_tag": tag,
+        "verification_note": f"{a_team} {a_sc} - {h_team} {h_sc} ({ath_name}: {actual_disp} {stat_key} vs {side.title()} {line:g}).",
+    }
+
+
+# --- 3. GRADE & AUTO-TAG PENDING TICKETS (DETERMINISTIC FIRST, GEMINI FOR PARLAYS/EXOTIC PROPS) ---
 def grade_pending_bets(pending_bets, final_games):
     graded_map = {}
     remaining_for_gemini = []
 
-    # 1. Deterministic exact arithmetic first for Straight Spread / ML / Totals
+    # 1. Deterministic exact arithmetic first for Straight Spread / ML / Totals / Player Props
     for bet in pending_bets:
         bid = str(bet.get("bet_id", "")).strip()
-        det = _grade_straight_bet_deterministic(bet, final_games)
+        det = _grade_straight_bet_deterministic(bet, final_games) or _grade_player_prop_deterministic(bet, final_games)
         if det and bid:
             graded_map[bid] = det
         else:
@@ -502,12 +706,18 @@ def _extract_selection_core(text):
     s = str(text or "").strip()
     s = re.sub(r"^\d+\.\s*", "", s).replace("*", "").strip()
     s = re.sub(r"^\[[^\]]+\]\s*", "", s).strip()
+    # Handle "7:00 PM EST • Away @ Home (CFB) — Western Michigan -4.5 (-105) — $3.50"
+    if "—" in s:
+        parts = [p.strip() for p in s.split("—") if p.strip()]
+        if len(parts) >= 2 and ("@" in parts[0] or "•" in parts[0] or re.search(r"\b(?:AM|PM)\s+EST\b", parts[0], flags=re.I)):
+            s = parts[1]
     core = re.split(
         r"(\s+[+-]\d|\s+ml\b|\s+over\b|\s+under\b|\s+to\s+win\b|\s+1h\b|\s+first\s+half\b|\(|—)",
         s,
         flags=re.I,
     )[0]
-    return re.sub(r"[^a-z0-9\s]", "", core.lower()).strip()
+    core = re.sub(r"\b(?:total\s+)?(?:points?|rebounds?|assists?|shots(?:\s+on\s+goal)?|sog|goals?|pra|pts|reb|ast)\s*$", "", core, flags=re.I).strip()
+    return _normalize_ascii_text(core)
 
 
 def compute_ledger_state(all_values, today_str=None):
@@ -809,7 +1019,398 @@ def _check_static_data_drift(settled_br, pending_count):
     return False
 
 
-# --- 5. EXECUTION ENTRYPOINT ---
+# --- 5. SHADOW GRADING ENGINE (ALL CURATED PLAYS: PLACED + SKIPPED) ---
+def _classify_shadow_market(sel_text):
+    s = str(sel_text or "").strip().lower()
+    if "—" in s:
+        s = s.split("—")[-1].strip()
+    if re.search(r"^(?:over|under)\s+\d{2,3}(?:\.\d+)?\b", s) or re.search(
+        r"\b(?:over|under)\s+\d{2,3}(?:\.\d+)?\s+total\b", s
+    ):
+        return "Game Total"
+    if re.search(
+        r"\b(?:assists?|points?|rebounds?|threes?|3-?pointers?|shots(?:\s+on\s+goal)?|sog|goals?|yards?|touchdowns?|hits|strikeouts?|saves|pra|pts|reb|ast)\b",
+        s,
+    ):
+        return "Player Prop"
+    if re.search(r"\b(?:ml|moneyline|to\s+win)\b", s):
+        return "Moneyline"
+    if re.search(r"(?:^|\s)[+-]\d+(?:\.\d+)?(?:\s|$)|\bpk\b", s):
+        return "Spread"
+    return "Other"
+
+
+def _calc_flat_unit_pl(result, odds_str):
+    rl = str(result or "").strip().lower()
+    if rl == "push":
+        return 0.0
+    if rl == "lost":
+        return -1.0
+    if rl != "won":
+        return 0.0
+    raw = str(odds_str or "-110").strip().replace("+", "")
+    try:
+        o = int(float(raw))
+    except Exception:
+        o = -110
+    if o == 0:
+        o = -110
+    return round(o / 100.0, 2) if o > 0 else round(100.0 / abs(o), 2)
+
+
+def _shadow_dedup_key(date_str, selection_str, market_str=None):
+    core = _extract_selection_core(selection_str)
+    mkt = market_str or _classify_shadow_market(selection_str)
+    return f"{str(date_str or '').strip()}|{core}|{mkt}"
+
+
+def _parse_curated_play_line(raw_title, sub_bullets, row_date):
+    clean = str(raw_title or "").replace("*", "").strip()
+    if (
+        not clean
+        or "⛔" in clean
+        or "NO GOOD PLAY" in clean.upper()
+        or bool(re.search(r"\bPASS\b", clean.upper()))
+    ):
+        return None
+
+    # Extract trailing confidence % if present (e.g. "— 77% ✅" or "— [87% 💎]")
+    conf_pct = None
+    m_tail_conf = re.search(r"[—-]\s*\[?(\d{2,3})%\s*([^\]]*)\]?$", clean)
+    if m_tail_conf:
+        ctx = (m_tail_conf.group(2) or "").upper()
+        if "BR" not in ctx and "BANKROLL" not in ctx and "RESULTING" not in ctx:
+            conf_pct = int(m_tail_conf.group(1))
+        clean = clean[: m_tail_conf.start()].strip()
+
+    # Strip trailing stake / units chunk ("— $3.50 (1.91U)" or "— $6.50")
+    clean = re.sub(r"\s*[—-]\s*\$\d+(?:\.\d{1,2})?(?:\s*\([^)]*\))?\s*$", "", clean).strip()
+
+    sport = ""
+    matchup = ""
+    selection_chunk = clean
+
+    # Format A (new): "7:00 PM EST • Away @ Home (CFB) — Western Michigan -4.5 (-105)"
+    if "—" in clean:
+        parts = [p.strip() for p in clean.split("—") if p.strip()]
+        if len(parts) >= 2:
+            head_part = parts[0]
+            selection_chunk = parts[1]
+            # Extract sport from "(CFB)" or "[... • CFB]" in header
+            m_sp = re.search(
+                r"[\(\[•]\s*(CFB|NCAAF|NFL|NBA|NCAAM|NCAAB|CBB|NHL|MLB|EPL|UCL|LALIGA|LA LIGA|SOCCER)\s*[\)\]]",
+                head_part,
+                flags=re.I,
+            )
+            if m_sp:
+                sport = _canonical_sport(m_sp.group(1))
+            # Extract matchup after bullet/time
+            m_clean = re.sub(r"^\[[^\]]+\]\s*", "", head_part).strip()
+            m_clean = re.sub(r"^\d{1,2}:\d{2}\s*[AP]M\s*EST\s*[•\-|]?\s*", "", m_clean, flags=re.I).strip()
+            m_clean = re.sub(r"\s*\((?:CFB|NCAAF|NFL|NBA|NCAAM|NCAAB|CBB|NHL|MLB|EPL|UCL|LALIGA|LA LIGA|SOCCER)\)\s*$", "", m_clean, flags=re.I).strip()
+            if "@" in m_clean or " vs " in m_clean.lower():
+                matchup = m_clean
+    else:
+        # Format B (legacy): "[7:00 PM EST • NBA] Detroit Pistons ML (-135)"
+        m_br = re.match(r"^\[([^\]]+)\]\s*(.+)$", clean)
+        if m_br:
+            hdr = m_br.group(1)
+            selection_chunk = m_br.group(2).strip()
+            m_sp = re.search(
+                r"\b(CFB|NCAAF|NFL|NBA|NCAAM|NCAAB|CBB|NHL|MLB|EPL|UCL|LALIGA|LA LIGA|SOCCER)\b",
+                hdr,
+                flags=re.I,
+            )
+            if m_sp:
+                sport = _canonical_sport(m_sp.group(1))
+
+    if not sport:
+        m_sp_any = re.search(
+            r"\((CFB|NCAAF|NFL|NBA|NCAAM|NCAAB|CBB|NHL|MLB|EPL|UCL|LALIGA|LA LIGA)\)",
+            clean,
+            flags=re.I,
+        )
+        if m_sp_any:
+            sport = _canonical_sport(m_sp_any.group(1))
+
+    # Extract American odds from selection chunk (e.g. "(-105)" or "(+125)")
+    odds = "-110"
+    m_odds = re.search(r"\(([+-]\d{3,4})\)", selection_chunk)
+    if m_odds:
+        odds = m_odds.group(1)
+        selection_chunk = (selection_chunk[: m_odds.start()] + selection_chunk[m_odds.end() :]).strip()
+
+    # Clean stray parentheticals like "(7:00 PM EST)" or "(Straight)"
+    selection_clean = re.sub(r"\s*\(\d{1,2}:\d{2}\s*[AP]M\s*EST\)", "", selection_chunk, flags=re.I).strip()
+    selection_clean = re.sub(r"\s{2,}", " ", selection_clean).strip(" —-")
+    if not selection_clean or len(selection_clean) < 3:
+        return None
+
+    # Parse bullet lines for Confidence Math / Confidence % / Pillars
+    pillars = ""
+    for b in (sub_bullets or []):
+        bl = b.lower()
+        if bl.startswith("confidence math:"):
+            cm = re.sub(r"^confidence math:\s*", "", b, flags=re.I).strip()
+            pm = re.search(r"=\s*(\d{2,3})\s*%", cm) or re.search(r"(\d{2,3})\s*%", cm)
+            if pm:
+                conf_pct = int(pm.group(1))
+            # Strip "Base 50% + " prefix and " = 77% (Tier ...)" suffix for clean pillar summary
+            pil = re.sub(r"^Base\s*\d+%\s*\+\s*", "", cm, flags=re.I)
+            pil = re.sub(r"\s*=\s*\d{2,3}%.*$", "", pil).strip()
+            pillars = pil[:140]
+        elif bl.startswith("confidence:"):
+            cb = re.sub(r"^confidence:\s*", "", b, flags=re.I).strip(" []")
+            pm = re.search(r"(\d{2,3})\s*%", cb)
+            if pm and conf_pct is None:
+                conf_pct = int(pm.group(1))
+        elif bl.startswith("edge:") and not pillars:
+            pillars = re.sub(r"^edge:\s*", "", b, flags=re.I).strip()[:140]
+
+    market = _classify_shadow_market(selection_clean)
+    full_sel = f"{matchup} — {selection_clean}" if matchup else selection_clean
+    return {
+        "date": row_date,
+        "sport": sport or "OTHER",
+        "market": market,
+        "selection": selection_clean,
+        "full_selection": full_sel,
+        "odds": odds,
+        "confidence_pct": conf_pct if conf_pct is not None else "",
+        "pillars": pillars,
+        "dedup_key": _shadow_dedup_key(row_date, selection_clean, market),
+    }
+
+
+def _extract_curated_plays_from_feed(feed_vals, lookback_days=4, today_str=None):
+    """
+    Extracts deduplicated curated plays from 'Curator Feed' rows over the last `lookback_days`
+    (inclusive of today EST, excluding audit-only and PASS rows).
+    """
+    if not today_str:
+        today_str = datetime.now(timezone(timedelta(hours=-5))).strftime("%Y-%m-%d")
+    try:
+        today_dt = datetime.strptime(today_str, "%Y-%m-%d").date()
+    except Exception:
+        today_dt = datetime.now(timezone(timedelta(hours=-5))).date()
+    cutoff_dt = today_dt - timedelta(days=max(1, int(lookback_days)))
+
+    plays_by_key = {}
+    for r in (feed_vals or []):
+        if len(r) < 12 or not str(r[11]).strip():
+            continue
+        row_date = str(r[0]).strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", row_date):
+            continue
+        try:
+            rd = datetime.strptime(row_date, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if rd < cutoff_dt or rd > today_dt:
+            continue
+
+        raw_txt = str(r[11]).strip()
+        # Skip pre-tipoff audit-only rows or rows without numbered plays
+        if "primetime pre-tipoff audit" in raw_txt.lower() and not re.search(r"^\s*1\.\s+", raw_txt, flags=re.M):
+            continue
+        if not re.search(r"^\s*1\.\s+", raw_txt, flags=re.M):
+            continue
+
+        lines = raw_txt.splitlines()
+        cur_title = None
+        cur_bullets = []
+        for ln in lines:
+            s = ln.strip()
+            m = re.match(r"^\d+\.\s+(.+)$", s)
+            if m:
+                if cur_title:
+                    parsed = _parse_curated_play_line(cur_title, cur_bullets, row_date)
+                    if parsed:
+                        plays_by_key[parsed["dedup_key"]] = parsed
+                cur_title = m.group(1)
+                cur_bullets = []
+            elif cur_title and (s.startswith("- ") or s.startswith("• ")):
+                cur_bullets.append(re.sub(r"^[-•]\s*", "", s).replace("*", "").replace("`", "").strip())
+        if cur_title:
+            parsed = _parse_curated_play_line(cur_title, cur_bullets, row_date)
+            if parsed:
+                plays_by_key[parsed["dedup_key"]] = parsed
+
+    return list(plays_by_key.values())
+
+
+def _get_or_create_shadow_sheet(workbook):
+    try:
+        ws = workbook.worksheet(SHADOW_TAB_NAME)
+    except Exception:
+        ws = workbook.add_worksheet(title=SHADOW_TAB_NAME, rows=500, cols=len(SHADOW_HEADERS))
+        ws.append_row(SHADOW_HEADERS, value_input_option="USER_ENTERED")
+        return ws
+
+    existing = ws.get_all_values()
+    if not existing:
+        ws.append_row(SHADOW_HEADERS, value_input_option="USER_ENTERED")
+    return ws
+
+
+def _was_curated_play_placed(play, tracker_entries):
+    """Cross-references a curated play against Challenge Tracker rows within +/- 1 day."""
+    p_core = _extract_selection_core(play.get("selection", ""))
+    if not p_core or len(p_core) < 3:
+        return False
+    try:
+        p_dt = datetime.strptime(play["date"], "%Y-%m-%d").date()
+    except Exception:
+        p_dt = None
+
+    for te in tracker_entries:
+        if p_dt and te.get("date_obj"):
+            if abs((te["date_obj"] - p_dt).days) > 1:
+                continue
+        if p_core in te["sel_norm"]:
+            return True
+    return False
+
+
+def run_shadow_grading(workbook, tracker_all_values=None, existing_final_games=None, lookback_days=4):
+    """
+    Deterministically shadow-grades all curated plays (both Placed and Skipped) from the last
+    `lookback_days` in Curator Feed against completed ESPN games + boxscores, persisting unique
+    graded rows to the 'Shadow Grading Log' worksheet tab.
+    """
+    est_now = datetime.now(timezone(timedelta(hours=-5)))
+    today_str = est_now.strftime("%Y-%m-%d")
+    graded_at_str = est_now.strftime("%Y-%m-%d %I:%M %p EST")
+
+    try:
+        feed_ws = workbook.worksheet(FEED_TAB_NAME)
+        feed_vals = feed_ws.get_all_values()
+    except Exception as exc:
+        print(f"Shadow Grading: Could not open {FEED_TAB_NAME}: {exc}", flush=True)
+        return {"graded_count": 0, "placed_count": 0, "skipped_count": 0, "wins": 0, "losses": 0, "pushes": 0}
+
+    curated_plays = _extract_curated_plays_from_feed(feed_vals, lookback_days=lookback_days, today_str=today_str)
+    if not curated_plays:
+        print("Shadow Grading: No curated plays found in lookback window.", flush=True)
+        return {"graded_count": 0, "placed_count": 0, "skipped_count": 0, "wins": 0, "losses": 0, "pushes": 0}
+
+    shadow_ws = _get_or_create_shadow_sheet(workbook)
+    shadow_rows = shadow_ws.get_all_values()
+    existing_keys = set()
+    for r in shadow_rows[1:]:
+        if len(r) >= 4 and str(r[0]).strip() and str(r[3]).strip():
+            mkt = str(r[2]).strip() if len(r) > 2 else ""
+            existing_keys.add(_shadow_dedup_key(r[0], r[3], mkt or None))
+
+    ungraded = [p for p in curated_plays if p["dedup_key"] not in existing_keys]
+    if not ungraded:
+        print("Shadow Grading: All recent curated plays are already shadow-graded.", flush=True)
+        return {"graded_count": 0, "placed_count": 0, "skipped_count": 0, "wins": 0, "losses": 0, "pushes": 0}
+
+    # Build normalized tracker index for Placed vs Skipped detection
+    if tracker_all_values is None:
+        tracker_all_values = get_tracker_sheet(workbook).get_all_values()
+    header_idx = next((i for i, r in enumerate(tracker_all_values) if "Bet ID" in r and "Result" in r), 15)
+    tracker_entries = []
+    for r in tracker_all_values[header_idx + 1 :]:
+        if not r or not str(r[0]).strip().startswith("BET-"):
+            continue
+        b_date = str(r[1]).strip() if len(r) > 1 else ""
+        sel_txt = str(r[5]).strip() if len(r) > 5 else ""
+        try:
+            d_obj = datetime.strptime(b_date, "%Y-%m-%d").date()
+        except Exception:
+            d_obj = None
+        tracker_entries.append({
+            "date_obj": d_obj,
+            "sel_norm": _normalize_ascii_text(sel_txt),
+        })
+
+    # Collect scoreboard dates needed (play date + next UTC day)
+    shadow_dates = set()
+    shadow_bet_objs = []
+    for idx, p in enumerate(ungraded):
+        d_clean = p["date"].replace("-", "")
+        if len(d_clean) == 8 and d_clean.isdigit():
+            shadow_dates.add(d_clean)
+            dt_obj = datetime.strptime(d_clean, "%Y%m%d")
+            shadow_dates.add((dt_obj + timedelta(days=1)).strftime("%Y%m%d"))
+        shadow_bet_objs.append({
+            "bet_id": f"SHADOW-{idx + 1}",
+            "sport": p["sport"],
+            "bet_type": "Straight",
+            "selections": p["full_selection"],
+            "notes": p["pillars"],
+        })
+
+    # Fetch ESPN scores for ungraded shadow plays and merge with any already-fetched games
+    fetched_games = fetch_final_scores(sorted(shadow_dates), pending_bets=shadow_bet_objs) if shadow_dates else []
+    combined_games = list(existing_final_games or []) + fetched_games
+
+    new_rows = []
+    placed_cnt = 0
+    skipped_cnt = 0
+    wins_cnt = 0
+    losses_cnt = 0
+    pushes_cnt = 0
+
+    for p, bet_obj in zip(ungraded, shadow_bet_objs):
+        graded = _grade_straight_bet_deterministic(bet_obj, combined_games) or _grade_player_prop_deterministic(bet_obj, combined_games)
+        if not graded:
+            continue
+        res = graded.get("result", "").strip()
+        if res not in ("Won", "Lost", "Push"):
+            continue
+        execution = "Placed" if _was_curated_play_placed(p, tracker_entries) else "Skipped"
+        flat_pl = _calc_flat_unit_pl(res, p["odds"])
+
+        if execution == "Placed":
+            placed_cnt += 1
+        else:
+            skipped_cnt += 1
+        if res == "Won":
+            wins_cnt += 1
+        elif res == "Lost":
+            losses_cnt += 1
+        else:
+            pushes_cnt += 1
+
+        new_rows.append([
+            p["date"],
+            p["sport"],
+            p["market"],
+            p["selection"],
+            p["odds"],
+            p["confidence_pct"],
+            p["pillars"],
+            execution,
+            res,
+            flat_pl,
+            graded.get("verification_note", ""),
+            graded_at_str,
+        ])
+
+    if new_rows:
+        shadow_ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+        print(
+            f"Shadow Grading: Logged {len(new_rows)} curated play(s) "
+            f"({wins_cnt}W-{losses_cnt}L-{pushes_cnt}P | {placed_cnt} Placed, {skipped_cnt} Skipped).",
+            flush=True,
+        )
+    else:
+        print(f"Shadow Grading: Checked {len(ungraded)} ungraded play(s); none completed/gradable yet.", flush=True)
+
+    return {
+        "graded_count": len(new_rows),
+        "placed_count": placed_cnt,
+        "skipped_count": skipped_cnt,
+        "wins": wins_cnt,
+        "losses": losses_cnt,
+        "pushes": pushes_cnt,
+    }
+
+
+# --- 6. EXECUTION ENTRYPOINT ---
 def run_settlement(notify_telegram=True):
     print("Starting Settlement & Edge Audit Engine...", flush=True)
     workbook = get_workbook()
@@ -929,6 +1530,7 @@ def run_settlement(notify_telegram=True):
     wins_cnt = 0
     losses_cnt = 0
     pushes_cnt = 0
+    final_games = []
 
     if not pending_bets:
         print("No pending bets found to settle. Checking remaining bet wager sync...", flush=True)
@@ -987,10 +1589,26 @@ def run_settlement(notify_telegram=True):
     adjustments = recalc["adjustments"]
     bankroll_changed = abs(new_bankroll_val - prev_bankroll) >= 0.01 or recalc["feed_updated"]
 
-    if updated_count > 0 or recalc["feed_updated"] or _check_static_data_drift(new_bankroll_val, still_pending):
+    # Shadow-grade all completed curated plays (Placed + Skipped) safely without ever blocking live settlement
+    shadow_summary = {"graded_count": 0, "placed_count": 0, "skipped_count": 0, "wins": 0, "losses": 0, "pushes": 0}
+    try:
+        shadow_summary = run_shadow_grading(
+            workbook,
+            tracker_all_values=refreshed,
+            existing_final_games=final_games,
+        )
+    except Exception as sh_exc:
+        print(f"Warning: Shadow grading failed safely without impacting settlement: {sh_exc}", flush=True)
+
+    if (
+        updated_count > 0
+        or recalc["feed_updated"]
+        or shadow_summary.get("graded_count", 0) > 0
+        or _check_static_data_drift(new_bankroll_val, still_pending)
+    ):
         try:
             with open(".tg_changed", "w", encoding="utf-8") as f:
-                f.write(str(max(1, updated_count)))
+                f.write(str(max(1, updated_count + shadow_summary.get("graded_count", 0))))
             if updated_count > 0 or recalc["feed_updated"]:
                 with open(".settled_changed", "w", encoding="utf-8") as f:
                     f.write(str(max(1, updated_count)))
@@ -1041,6 +1659,7 @@ def run_settlement(notify_telegram=True):
         "new_bankroll": new_bankroll_val,
         "bankroll_changed": bankroll_changed,
         "adjusted_plays": adjustments,
+        "shadow_summary": shadow_summary,
     }
 
 

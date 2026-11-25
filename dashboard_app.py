@@ -149,6 +149,128 @@ def _read_intel_quant_lines(creds, today_str=None):
         return []
 
 
+def _read_shadow_stats(sh):
+    """
+    Reads the 'Shadow Grading Log' worksheet (if present) and aggregates model accuracy
+    across All Curated Plays, Placed vs. Skipped, Market splits, and Confidence Tiers.
+    """
+    empty_bucket = lambda: {"total": 0, "wins": 0, "losses": 0, "pushes": 0, "win_pct": 0.0, "flat_units": 0.0, "flat_roi": 0.0}
+    default_out = {
+        "total": 0,
+        "wins": 0,
+        "losses": 0,
+        "pushes": 0,
+        "win_pct": 0.0,
+        "flat_units": 0.0,
+        "flat_roi": 0.0,
+        "placed": empty_bucket(),
+        "skipped": empty_bucket(),
+        "by_market": {
+            "Moneyline": empty_bucket(),
+            "Spread": empty_bucket(),
+            "Player Prop": empty_bucket(),
+            "Other": empty_bucket(),
+        },
+        "by_tier": [
+            {"label": "Tier 1 (88-99%)", **empty_bucket()},
+            {"label": "Tier 2 (78-87%)", **empty_bucket()},
+            {"label": "Tier 3 (68-77%)", **empty_bucket()},
+        ],
+        "recent": [],
+    }
+    try:
+        ws = sh.worksheet("Shadow Grading Log")
+        rows = ws.get_all_values()
+    except Exception:
+        return default_out
+
+    if not rows or len(rows) < 2:
+        return default_out
+
+    def _acc(bucket, res_l, flat_pl):
+        bucket["total"] += 1
+        if res_l == "won":
+            bucket["wins"] += 1
+        elif res_l == "lost":
+            bucket["losses"] += 1
+        elif res_l == "push":
+            bucket["pushes"] += 1
+        bucket["flat_units"] = round(bucket["flat_units"] + flat_pl, 2)
+
+    def _finalize(bucket):
+        dec = bucket["wins"] + bucket["losses"]
+        bucket["win_pct"] = round((bucket["wins"] / dec) * 100.0, 1) if dec > 0 else 0.0
+        bucket["flat_roi"] = round((bucket["flat_units"] / dec) * 100.0, 1) if dec > 0 else 0.0
+
+    parsed_rows = []
+    for r in rows[1:]:
+        if len(r) < 9:
+            continue
+        dt = str(r[0]).strip()
+        sp = _normalize_sport(r[1]) if len(r) > 1 else ""
+        mkt = str(r[2]).strip() if len(r) > 2 else "Other"
+        sel = str(r[3]).strip() if len(r) > 3 else ""
+        odds = str(r[4]).strip() if len(r) > 4 else ""
+        conf_raw = str(r[5]).strip() if len(r) > 5 else ""
+        conf_pct = int(round(_parse_num(conf_raw))) if conf_raw else None
+        pillars = str(r[6]).strip() if len(r) > 6 else ""
+        execution = str(r[7]).strip() if len(r) > 7 else "Skipped"
+        res = str(r[8]).strip() if len(r) > 8 else ""
+        flat_pl = _parse_num(r[9]) if len(r) > 9 else 0.0
+        score_note = str(r[10]).strip() if len(r) > 10 else ""
+        graded_at = str(r[11]).strip() if len(r) > 11 else ""
+
+        res_l = res.lower()
+        if res_l not in ("won", "lost", "push"):
+            continue
+
+        _acc(default_out, res_l, flat_pl)
+        if execution.lower() == "placed":
+            _acc(default_out["placed"], res_l, flat_pl)
+        else:
+            _acc(default_out["skipped"], res_l, flat_pl)
+
+        mkt_key = mkt if mkt in ("Moneyline", "Spread", "Player Prop") else "Other"
+        _acc(default_out["by_market"][mkt_key], res_l, flat_pl)
+
+        if conf_pct is not None:
+            if conf_pct >= 88:
+                _acc(default_out["by_tier"][0], res_l, flat_pl)
+            elif conf_pct >= 78:
+                _acc(default_out["by_tier"][1], res_l, flat_pl)
+            elif conf_pct >= 68:
+                _acc(default_out["by_tier"][2], res_l, flat_pl)
+
+        parsed_rows.append({
+            "date": dt,
+            "sport": sp,
+            "market": mkt,
+            "selection": sel,
+            "odds": odds,
+            "confidence_pct": conf_pct,
+            "pillars": pillars,
+            "execution": "Placed" if execution.lower() == "placed" else "Skipped",
+            "result": res,
+            "flat_pl": round(flat_pl, 2),
+            "score_note": score_note,
+            "graded_at": graded_at,
+        })
+
+    _finalize(default_out)
+    _finalize(default_out["placed"])
+    _finalize(default_out["skipped"])
+    for bk in default_out["by_market"].values():
+        _finalize(bk)
+    for tb in default_out["by_tier"]:
+        _finalize(tb)
+
+    # Newest first, cap at 30 recent shadow plays for crisp mobile rendering
+    parsed_rows.reverse()
+    parsed_rows.sort(key=lambda x: x["date"], reverse=True)
+    default_out["recent"] = parsed_rows[:30]
+    return default_out
+
+
 def fetch_dashboard_data():
     est_tz = datetime.timezone(datetime.timedelta(hours=-5))
     now_est = datetime.datetime.now(est_tz)
@@ -506,6 +628,8 @@ def fetch_dashboard_data():
         equity_curve=equity_curve,
     )
 
+    shadow_stats = _read_shadow_stats(sh)
+
     return {
         "updated_at": now_est.strftime("%Y-%m-%d %I:%M %p EST"),
         "today": today_str,
@@ -558,6 +682,7 @@ def fetch_dashboard_data():
         "curated_plays": curated_plays,
         "curated_raw": latest_curated_text,
         "equity_curve": equity_curve,
+        "shadow_stats": shadow_stats,
     }
 
 
@@ -1607,11 +1732,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <h3 id="graded-modal-title">Bet History by Day</h3>
         <button class="close-btn" onclick="closeModal('graded-modal')">&times;</button>
       </div>
-      <div class="tabs">
+      <div class="tabs" style="flex-wrap:wrap;">
         <button class="tab-btn active" id="graded-tab-all" onclick="openGradedModal('all')">Overall</button>
         <button class="tab-btn" id="graded-tab-week" onclick="openGradedModal('week')">This Week</button>
         <button class="tab-btn" id="graded-tab-yesterday" onclick="openGradedModal('yesterday')">Yesterday</button>
         <button class="tab-btn" id="graded-tab-today" onclick="openGradedModal('today')">Today</button>
+        <button class="tab-btn" id="graded-tab-shadow" onclick="openGradedModal('shadow')">Model Shadow</button>
       </div>
       <div class="sub-row" id="graded-modal-summary" style="margin-top:0;margin-bottom:10px;"></div>
       <div id="graded-modal-splits"></div>
@@ -2711,7 +2837,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const todayDate = (currentData && currentData.today) || "";
       const yestDate = (currentData && currentData.yesterday) || "";
 
-      ["all", "week", "yesterday", "today"].forEach(tabKey => {
+      ["all", "week", "yesterday", "today", "shadow"].forEach(tabKey => {
         const el = document.getElementById(`graded-tab-${tabKey}`);
         if (el) el.classList.toggle("active", tabKey === which);
       });
@@ -2721,8 +2847,81 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         week: `This Week's Bet History (${st.date || "Last 7 Days"})`,
         yesterday: `Yesterday's Bet History${st.date ? ` (${st.date})` : ""}`,
         today: `Today's Bet History${st.date ? ` (${st.date})` : ""}`,
+        shadow: "Model Shadow Accuracy (All Curated Plays)",
       };
       document.getElementById("graded-modal-title").textContent = titles[which] || "Bet History by Day";
+
+      if (which === "shadow") {
+        const sh = (currentData && currentData.shadow_stats) || { total: 0, wins: 0, losses: 0, pushes: 0, win_pct: 0, flat_units: 0, flat_roi: 0, placed: {}, skipped: {}, by_tier: [], recent: [] };
+        const splitEl = document.getElementById("graded-modal-splits");
+        const listEl = document.getElementById("graded-modal-list");
+        const uSign = Number(sh.flat_units || 0) >= 0 ? "+" : "";
+        const rSign = Number(sh.flat_roi || 0) >= 0 ? "+" : "";
+        const uCls = Number(sh.flat_units || 0) >= 0 ? "pos" : "neg";
+
+        document.getElementById("graded-modal-summary").innerHTML =
+          `<span class="pill pill-blue">${sh.total || 0} Shadow Graded</span>` +
+          `<span>Model: <strong>${sh.wins || 0}W - ${sh.losses || 0}L${sh.pushes ? ` - ${sh.pushes}P` : ""} (${sh.win_pct || 0}%)</strong></span>` +
+          `<span>Flat 1U: <span class="${uCls}">${uSign}${Number(sh.flat_units || 0).toFixed(2)}U (${rSign}${sh.flat_roi || 0}%)</span></span>`;
+
+        if (!sh.total) {
+          if (splitEl) splitEl.innerHTML = "";
+          listEl.innerHTML = `<div class="bet-item" style="font-size:0.84rem;color:var(--muted);line-height:1.5;">Shadow grading runs automatically as curated games finish on ESPN. Both placed and skipped curated plays are tracked here at flat 1U so you can measure raw model accuracy vs. your execution.</div>`;
+          return;
+        }
+
+        const fmtCell = (lbl, bk) => {
+          const w = Number(bk.wins || 0), l = Number(bk.losses || 0);
+          const wp = Number(bk.win_pct || 0);
+          const fu = Number(bk.flat_units || 0);
+          const cls = fu >= 0 ? "pos" : "neg";
+          return `
+            <div class="mkt-split-cell">
+              <div class="mkt-split-lbl">${esc(lbl)}</div>
+              <div style="font-weight:800;">${w}W-${l}L <span style="color:var(--muted);font-weight:600;">(${wp}%)</span></div>
+              <div class="${cls}" style="font-size:0.72rem;margin-top:2px;">${fu >= 0 ? "+" : ""}${fu.toFixed(2)}U</div>
+            </div>
+          `;
+        };
+        if (splitEl) {
+          const execHtml = `<div class="mkt-split-strip">${[
+            fmtCell("All Curated", sh),
+            fmtCell("Placed", sh.placed || {}),
+            fmtCell("Skipped", sh.skipped || {}),
+          ].join("")}</div>`;
+          const tiers = (sh.by_tier || []).filter(t => (t.total || 0) > 0);
+          const tierHtml = tiers.length
+            ? `<div class="mkt-split-strip" style="margin-top:-2px;">${(sh.by_tier || []).map(t => fmtCell(t.label, t)).join("")}</div>`
+            : "";
+          splitEl.innerHTML = execHtml + tierHtml;
+        }
+
+        const recent = sh.recent || [];
+        listEl.innerHTML = `<div class="bet-list">${recent.map(p => {
+          const rl = String(p.result || "").toLowerCase();
+          const rClass = rl === "won" ? "pill-green" : (rl === "push" ? "pill-amber" : "pill-red");
+          const exClass = p.execution === "Placed" ? "pill-green" : "pill-blue";
+          const fu = Number(p.flat_pl || 0);
+          const metaParts = [];
+          if (p.date) metaParts.push(esc(p.date));
+          if (p.sport) metaParts.push(esc(normalizeSport(p.sport)));
+          if (p.market) metaParts.push(esc(p.market));
+          if (p.confidence_pct != null) metaParts.push(`${p.confidence_pct}% Conf`);
+          return `
+            <div class="bet-item">
+              <div class="bet-top">
+                <div class="bet-title">${esc(p.selection)}${p.odds ? ` (${esc(p.odds)})` : ""}</div>
+                <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+                  <span class="pill ${exClass}">${esc((p.execution || "Skipped").toUpperCase())}</span>
+                  <span class="pill ${rClass}">${esc((p.result || "").toUpperCase())} (${fu >= 0 ? "+" : ""}${fu.toFixed(2)}U)</span>
+                </div>
+              </div>
+              <div class="bet-meta">${metaParts.join(" &bull; ")}${p.score_note ? `<br>${esc(p.score_note)}` : ""}</div>
+            </div>
+          `;
+        }).join("")}</div>`;
+        return;
+      }
 
       const tix = st.tickets || [];
       const plCls = st.net_pl >= 0 ? "pos" : "neg";
