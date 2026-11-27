@@ -4511,33 +4511,51 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       renderCuratedList(window.__curatedPlays || [], currentData || {});
     }
 
+    function isCuratedPlayHiddenPass(p, pendList, todayList) {
+      if (!p) return true;
+      const title = String(p.title || "");
+      const explicitPass = Boolean(p.is_pass) || p.status === "pass" || title.includes("⛔") || /\bPASS\b/.test(title) || /NO GOOD PLAY/i.test(title);
+      if (explicitPass) return true;
+      // Never hide a play the user already placed or settled
+      if (findMatchingTicketForPlay(pendList, p) || findMatchingTicketForPlay(todayList, p)) return false;
+      const wb = p.__wagerBreakdown || null;
+      if (wb && wb.lowEdgePass) return true;
+      if (p.status === "remaining" && Number(p.stake || 0) < 2.0 && !(wb && wb.cappedByOverlap)) return true;
+      return false;
+    }
+
     function renderCuratedList(plays, data) {
       const cList = document.getElementById("curated-list");
       const allPlays = plays || [];
       allPlays.forEach((p, idx) => { p.__allIdx = idx; });
       window.__curatedPlays = allPlays;
       const dateStr = (data && (data.curated_date || data.today)) || "";
+      const pendList = (data && data.pending_tickets) || [];
+      const todayList = (data && data.today_stats && data.today_stats.tickets) || [];
 
       const upcomingPlays = [];
       const startedPlays = [];
+      const passedPlays = [];
       allPlays.forEach(p => {
         if (isCuratedPlayStarted(p, dateStr)) {
           startedPlays.push(p);
+        } else if (isCuratedPlayHiddenPass(p, pendList, todayList)) {
+          passedPlays.push(p);
         } else {
           upcomingPlays.push(p);
         }
       });
       window.__startedCuratedPlays = startedPlays;
+      window.__passedCuratedPlays = passedPlays;
       window.__upcomingCuratedPlays = upcomingPlays;
 
-      const pendList = (data && data.pending_tickets) || [];
       const placedUpcomingCount = upcomingPlays.filter(p => Boolean(findMatchingTicketForPlay(pendList, p))).length;
       const openUpcomingCount = Math.max(0, upcomingPlays.length - placedUpcomingCount);
       const cntEl = document.getElementById("curated-count");
       if (cntEl) {
         cntEl.textContent = placedUpcomingCount > 0
           ? `${openUpcomingCount} Open • ${placedUpcomingCount} Placed`
-          : `${upcomingPlays.length} Upcoming`;
+          : `${upcomingPlays.length} Playable`;
       }
       const filtBar = document.getElementById("curated-filter-bar");
       if (filtBar) {
@@ -4551,8 +4569,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }
       const hintEl = document.getElementById("curated-started-hint");
       if (hintEl) {
-        hintEl.textContent = startedPlays.length > 0
-          ? `${startedPlays.length} Started →`
+        const hintParts = [];
+        if (startedPlays.length > 0) hintParts.push(`${startedPlays.length} Started`);
+        if (passedPlays.length > 0) hintParts.push(`${passedPlays.length} Passed`);
+        hintEl.textContent = hintParts.length > 0
+          ? `${hintParts.join(" • ")} →`
           : (allPlays.length > 0 ? "Full Slate →" : "");
       }
 
@@ -4565,6 +4586,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       if (allPlays.length === 0) {
         cList.innerHTML = `<div class="empty-msg">${esc((data && data.curated_raw) || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
+      } else if (upcomingPlays.length === 0 && passedPlays.length > 0) {
+        cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('all')">No playable curated bets left right now (${passedPlays.length} passed for low edge). Tap here to view Full Slate &rarr;</div>`;
       } else if (upcomingPlays.length === 0) {
         cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')">All ${startedPlays.length} curated game${startedPlays.length === 1 ? "" : "s"} for today have already started. Tap here or the title above to view them &rarr;</div>`;
       } else if (filteredUpcoming.length === 0) {
@@ -4615,7 +4638,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function openCuratedArchiveModal(tab) {
-      renderCuratedArchiveModal(tab || "started");
+      let targetTab = tab || "started";
+      if (targetTab === "started" && (window.__startedCuratedPlays || []).length === 0 && (window.__curatedPlays || []).length > 0) {
+        targetTab = "all";
+      }
+      renderCuratedArchiveModal(targetTab);
       openModal("curated-archive-modal");
     }
 

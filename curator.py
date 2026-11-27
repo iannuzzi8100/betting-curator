@@ -406,7 +406,7 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
                         print(msg)
                         model_errors.append(msg)
                         continue
-                    return txt
+                    return _filter_and_size_gemini_slate(txt, ledger_meta)
             except Exception as exc:
                 err_s = f"{model_id}: {type(exc).__name__}: {str(exc)[:140]}"
                 print(f"Model {err_s}")
@@ -424,6 +424,135 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
         est_now=est_now,
         dow=dow,
     )
+
+
+def _filter_and_size_gemini_slate(txt, ledger_meta):
+    """
+    Post-processes Gemini's curated slate with our exact Half-Kelly engine so that:
+    - Any explicit PASS or low-edge play whose Half-Kelly stake rounds below $2.00 is dropped
+      before reaching Telegram or Curator Feed.
+    - Surviving plays have exact $0.50-rounded Half-Kelly $XX.XX (X.XU) wagers and clean 1..N numbering.
+    """
+    settled_br = float((ledger_meta or {}).get("settled", 0.0) or 0.0)
+    if settled_br <= 0 or not txt or not re.search(r"^\s*1\.\s+", txt, flags=re.M):
+        return txt
+
+    peak_br = float((ledger_meta or {}).get("peak") or max(100.0, settled_br))
+    is_dd = bool((ledger_meta or {}).get("is_drawdown")) or (settled_br < 75.0) or (peak_br > 0 and ((peak_br - settled_br) / peak_br) > 0.20)
+    unit_val = max(0.01, settled_br * 0.05)
+
+    lines = txt.splitlines()
+    header_lines = []
+    blocks = []
+    cur_block = None
+    in_plays = False
+
+    for ln in lines:
+        m_num = re.match(r"^\s*\d+\.\s+(.+)$", ln)
+        if m_num:
+            in_plays = True
+            if cur_block:
+                blocks.append(cur_block)
+            cur_block = {"headline": m_num.group(1).strip(), "sublines": []}
+        elif not in_plays:
+            header_lines.append(ln)
+        elif cur_block is not None:
+            if ln.strip() or (cur_block["sublines"] and ln.strip()):
+                cur_block["sublines"].append(ln)
+    if cur_block:
+        blocks.append(cur_block)
+
+    if not blocks:
+        return txt
+
+    kept_blocks = []
+    dropped_cnt = 0
+    for blk in blocks:
+        hl = blk["headline"]
+        clean_hl = hl.replace("*", "").strip()
+        if "⛔" in clean_hl or "NO GOOD PLAY" in clean_hl.upper() or re.search(r"\bPASS\b", clean_hl.upper()):
+            dropped_cnt += 1
+            continue
+
+        # Extract sport
+        sport = ""
+        m_sp = re.search(r"[\(\[•]\s*(CFB|NCAAF|NFL|NBA|NCAAM|NCAAB|CBB|NHL|MLB|EPL|UCL|LALIGA|LA LIGA|SOCCER)\s*[\)\]]", clean_hl, flags=re.I)
+        if m_sp:
+            sport = m_sp.group(1).strip().upper()
+            if sport in ("CBB", "NCAAB"):
+                sport = "NCAAM"
+
+        # Extract pick segment
+        pick_seg = clean_hl
+        if "—" in clean_hl:
+            parts = [p.strip() for p in clean_hl.split("—") if p.strip()]
+            if len(parts) >= 2:
+                pick_seg = parts[1]
+
+        # Extract American odds
+        m_odds = re.search(r"\(([+-]\d{3,4})\)", pick_seg) or re.search(r"\(([+-]\d{3,4})\)", clean_hl)
+        odds_i = int(m_odds.group(1)) if m_odds else -110
+
+        # Extract confidence %
+        conf_pct = None
+        m_tail_c = re.search(r"[—-]\s*\[?(\d{2,3})%\s*([^\]]*)\]?$", clean_hl)
+        if m_tail_c:
+            ctx = (m_tail_c.group(2) or "").upper()
+            if "BR" not in ctx and "BANKROLL" not in ctx:
+                conf_pct = int(m_tail_c.group(1))
+        for sl in blk["sublines"]:
+            low_sl = sl.lower()
+            if "confidence math:" in low_sl or "confidence:" in low_sl:
+                pm = re.search(r"=\s*(\d{2,3})\s*%", sl) or re.search(r"(\d{2,3})\s*%", sl)
+                if pm:
+                    conf_pct = int(pm.group(1))
+                    break
+
+        if conf_pct is not None and conf_pct < 68:
+            dropped_cnt += 1
+            continue
+
+        kp = _calc_half_kelly_target(pick_seg, sport, conf_pct, odds_i, settled_br, is_dd)
+        if kp["raw_st"] < 2.0:
+            dropped_cnt += 1
+            continue
+
+        stake = round(kp["raw_st"] * 2.0) / 2.0
+        units = round(stake / unit_val, 1)
+        wager_str = f"${stake:.2f} ({units:.1f}U)"
+
+        # Replace existing "$XX.XX (X.XU)" or "$XX.XX" in headline with exact Half-Kelly wager
+        new_hl = re.sub(
+            r"\$\d+(?:\.\d{1,2})?(?:\s*\(\d+(?:\.\d+)?U\))?",
+            lambda _m: wager_str,
+            hl,
+            count=1,
+        )
+        kept_blocks.append({"headline": new_hl, "sublines": blk["sublines"]})
+
+    if dropped_cnt:
+        print(
+            f"Half-Kelly Slate Filter: Kept {len(kept_blocks)} actionable play(s), dropped {dropped_cnt} PASS / low-edge (<$2 min) play(s).",
+            flush=True,
+        )
+
+    out_lines = list(header_lines)
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+
+    if not kept_blocks:
+        out_lines.append("")
+        out_lines.append("• Holding — no remaining plays cleared the Half-Kelly $2.00 minimum edge floor after vig.")
+        return "\n".join(out_lines)
+
+    for idx, blk in enumerate(kept_blocks, start=1):
+        out_lines.append("")
+        out_lines.append(f"{idx}. {blk['headline']}")
+        for sl in blk["sublines"]:
+            if sl.strip():
+                out_lines.append(sl)
+
+    return "\n".join(out_lines)
 
 
 def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, ledger_meta, est_now, dow):
