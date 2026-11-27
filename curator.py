@@ -87,12 +87,13 @@ def _parse_dollar(val):
 
 def _calc_half_kelly_target(pick_txt, sport_txt, conf_pct, odds_i, eff_br, is_drawdown):
     """
-    Phase 1 Calibrated Half-Kelly Wager Sizing:
+    Calibrated Variance-Adjusted Half-Kelly Wager Sizing:
     - Maps Confidence Meter 68-99% -> calibrated win prob 54.5%-65.5%
-    - Applies market-type Kelly multiplier:
-        * Straight Moneyline (core Era 2 edge): 0.55x Kelly
+    - Applies sport & market-type Kelly multiplier:
+        * Straight Moneyline (core proven high-ROI edge): 0.55x Kelly
+        * NHL (high single-game variance dampener): 0.30x Kelly + max 8% single cap
         * New leagues (UCL / LALIGA): 0.30x Kelly + max 10% single cap
-        * Spreads / Totals / Player Props: 0.40x Kelly
+        * Spreads / Totals / Player Props: 0.35x Kelly
     - Hard caps: 18% single / 58% concurrent (Growth) | 12% single / 40% concurrent (Drawdown Brake)
     - $1,000 Goal-Lock Brake: never risk more than needed to cross $1,000.00
     """
@@ -101,16 +102,19 @@ def _calc_half_kelly_target(pick_txt, sport_txt, conf_pct, odds_i, eff_br, is_dr
     is_ml = bool(re.search(r"\b(ml|moneyline|to\s+win)\b", pk_u, flags=re.I)) and not bool(
         re.search(r"\b(over|under)\s+\d", pk_u, flags=re.I)
     )
+    is_nhl = sp_u == "NHL"
     is_new_league = sp_u in ("UCL", "LALIGA")
-    if is_new_league:
+    if is_nhl or is_new_league:
         k_mult = 0.30
     elif is_ml:
         k_mult = 0.55
     else:
-        k_mult = 0.40
+        k_mult = 0.35
 
     max_single_pct = 0.12 if is_drawdown else 0.18
-    if is_new_league:
+    if is_nhl:
+        max_single_pct = min(max_single_pct, 0.08)
+    elif is_new_league:
         max_single_pct = min(max_single_pct, 0.10)
 
     b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / max(1, abs(odds_i)))
@@ -360,7 +364,7 @@ Recent Bets:
 3. **CALIBRATED HALF-KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
    - **NO ARTIFICIAL PER-WINDOW PLAY CAP (GOVERNED BY TIER 1/2 & EXPOSURE CAP):** Include **all** qualifying Tier 1 (`88%+`) & Tier 2 (`78%+`) plays that fit within your concurrent exposure cap (1 bet per game). Every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50` (min `$2.00`).
    - **HARD CONCURRENT OVERLAP CAP ({max_conc_pct}% BR = ${max_conc_amt:.2f}) & SINGLE-BET CAP ({max_single_pct}% BR = ${max_single_amt:.2f}):** Never let overlapping games exceed {max_conc_pct}% of bankroll at risk simultaneously.
-   - **ODDS-ADJUSTED HALF-KELLY GUIDELINES (0.55x ML | 0.40x Spread/Prop | 0.30x UCL/La Liga):**
+   - **ODDS-ADJUSTED HALF-KELLY GUIDELINES (0.55x ML | 0.35x Spread/Prop | 0.30x NHL 8% Cap & UCL/La Liga 10% Cap):**
      * **🔥 TIER 1 (`88%–99%`):** Up to ~{max_single_pct}% BR (~${stake_t1_solo:.2f}, trimmed slightly on heavier `-130` to `-150` juice or spreads).
      * **💎 TIER 2 (`78%–87%`):** ~7%–12% BR (~${stake_t2_solo:.2f}), scaled down on heavier juice (`-130+`) or overlapping windows.
      * **🎯 $1,000 GOAL-LOCK BRAKE:** Never wager more than needed to reach `$1,000.00` total bankroll.

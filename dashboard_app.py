@@ -1595,6 +1595,67 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       font-weight: 700;
       letter-spacing: 0.02em;
     }
+    .milestone-card {
+      background: linear-gradient(135deg, rgba(16,185,129,0.09), rgba(59,130,246,0.07));
+      border: 1px solid rgba(16,185,129,0.22);
+      border-radius: 12px;
+      padding: 12px 13px;
+      margin-bottom: 12px;
+    }
+    .milestone-steps {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 9px;
+    }
+    .milestone-chip {
+      font-size: 0.71rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(148,163,184,0.2);
+      color: var(--muted);
+      background: rgba(15,23,42,0.6);
+    }
+    .milestone-chip.done {
+      border-color: rgba(16,185,129,0.4);
+      color: #34d399;
+      background: rgba(16,185,129,0.14);
+    }
+    .milestone-chip.next {
+      border-color: rgba(59,130,246,0.55);
+      color: #93c5fd;
+      background: rgba(59,130,246,0.18);
+    }
+    .velocity-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 0 0 10px 0;
+      padding: 9px 11px;
+      border-radius: 11px;
+      background: rgba(15,23,42,0.58);
+      border: 1px solid rgba(59,130,246,0.22);
+      font-size: 0.76rem;
+    }
+    .velocity-waves {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .velocity-wave {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 8px;
+      background: rgba(59,130,246,0.12);
+      border: 1px solid rgba(59,130,246,0.28);
+      color: #e2e8f0;
+      font-weight: 600;
+      font-size: 0.73rem;
+    }
     .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
     .btn-primary {
       background: linear-gradient(135deg, var(--green), #059669);
@@ -1923,6 +1984,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <button type="button" class="filter-chip" id="cfilt-open" onclick="setCuratedFilter('open')">Open Only</button>
           <button type="button" class="filter-chip" id="cfilt-placed" onclick="setCuratedFilter('placed')">Placed</button>
         </div>
+        <div class="velocity-bar" id="curated-velocity-bar" style="display:none;"></div>
         <div class="bet-list" id="curated-list"></div>
       </div>
 
@@ -2840,9 +2902,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const fullKelly = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
       const spU = normalizeSport(sportText || "").toUpperCase();
       const isMl = /\b(ml|moneyline|to\s+win)\b/i.test(String(selText || "")) && !/\b(over|under)\s+\d/i.test(String(selText || ""));
+      const isNhl = (spU === "NHL");
       const isNewLeague = (spU === "UCL" || spU === "LALIGA");
-      const kMult = isNewLeague ? 0.30 : (isMl ? 0.55 : 0.40);
-      const singlePct = isNewLeague ? Math.min(baseSinglePct, 0.10) : baseSinglePct;
+      const kMult = (isNhl || isNewLeague) ? 0.30 : (isMl ? 0.55 : 0.35);
+      const singlePct = isNhl ? Math.min(baseSinglePct, 0.08) : (isNewLeague ? Math.min(baseSinglePct, 0.10) : baseSinglePct);
       const kellyF = fullKelly * kMult;
       let rawStake = Math.min(settledBr * singlePct, settledBr * kellyF, availCash);
       if (settledBr < 1000 && b > 0) {
@@ -3180,10 +3243,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const spU = normalizeSport(p.sport || fb.sport || "").toUpperCase();
         const selTxt = String(p.selection || fb.selection || title);
         const isMl = /\b(ml|moneyline|to\s+win)\b/i.test(selTxt) && !/\b(over|under)\s+\d/i.test(selTxt);
+        const isNhl = (spU === "NHL");
         const isNewLeague = (spU === "UCL" || spU === "LALIGA");
-        const kMult = isNewLeague ? 0.30 : (isMl ? 0.55 : 0.40);
-        const mktTag = isNewLeague ? "New League 0.30x" : (isMl ? "ML 0.55x" : "Spread/Prop 0.40x");
-        const singlePct = isNewLeague ? Math.min(baseSinglePct, 0.10) : baseSinglePct;
+        const kMult = (isNhl || isNewLeague) ? 0.30 : (isMl ? 0.55 : 0.35);
+        const mktTag = isNhl ? "NHL 0.30x" : (isNewLeague ? "New League 0.30x" : (isMl ? "ML 0.55x" : "Spread/Prop 0.35x"));
+        const singlePct = isNhl ? Math.min(baseSinglePct, 0.08) : (isNewLeague ? Math.min(baseSinglePct, 0.10) : baseSinglePct);
         const kellyF = fullKellyF * kMult;
         const sMs = estimateCuratedStartMs(p, dateStr);
         const eMs = sMs + getSportDurationMinutes(p.sport || fb.sport, selTxt) * 60000;
@@ -4502,7 +4566,49 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         `;
       }
 
+      function buildRoadmapHtml() {
+        const curBr = Math.max(0, Number((currentData && currentData.bankroll) || 0));
+        const milestones = [
+          { amt: 75, label: "$75 Growth Mode" },
+          { amt: 100, label: "$100 Even" },
+          { amt: 250, label: "$250" },
+          { amt: 500, label: "$500" },
+          { amt: 1000, label: "$1,000 Goal" },
+        ];
+        const nextM = milestones.find(m => curBr < m.amt) || milestones[milestones.length - 1];
+        const pctGoal = Math.max(2, Math.min(100, Math.round((curBr / 1000) * 1000) / 10));
+        const needed = Math.max(0, nextM.amt - curBr);
+        // Compounding estimate: avg Tier 1/2 Half-Kelly win adds ~7.5% of bankroll (Drawdown) or ~11% (Growth)
+        const stepRate = curBr < 75 ? 0.075 : 0.11;
+        const estNetWins = (curBr > 0 && needed > 0)
+          ? Math.max(1, Math.ceil(Math.log(nextM.amt / curBr) / Math.log(1 + stepRate)))
+          : 0;
+        const chipsHtml = milestones.map(m => {
+          const isDone = curBr >= m.amt;
+          const isNext = !isDone && m.amt === nextM.amt;
+          const cls = isDone ? "done" : (isNext ? "next" : "");
+          return `<span class="milestone-chip ${cls}">${esc(m.label)}</span>`;
+        }).join("");
+        const subTxt = curBr >= 1000
+          ? "Goal achieved! Bankroll has crossed $1,000.00."
+          : `Next target: ${esc(nextM.label)} (+${fmtMoney(needed)} needed • ~${estNetWins} net Tier 1/2 win${estNetWins === 1 ? "" : "s"} at Half-Kelly pace)`;
+        return `
+          <div class="milestone-card">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:0.84rem;font-weight:800;color:#e2e8f0;">Road to $1,000</span>
+              <span style="font-size:0.82rem;font-weight:800;color:#34d399;">${fmtMoney(curBr)} / $1,000 <span style="color:var(--muted);font-weight:600;">(${pctGoal.toFixed(1)}%)</span></span>
+            </div>
+            <div class="cal-prog-bar" style="margin-top:8px;">
+              <div class="cal-prog-fill" style="width:${pctGoal}%;background:linear-gradient(90deg,#10b981,#3b82f6);"></div>
+            </div>
+            <div style="font-size:0.74rem;color:var(--muted);margin-top:6px;">${subTxt}</div>
+            <div class="milestone-steps">${chipsHtml}</div>
+          </div>
+        `;
+      }
+
       bodyEl.innerHTML = `
+        ${buildRoadmapHtml()}
         <div class="analytics-grid">
           <div class="analytics-card">
             <div class="analytics-card-lbl">Record &amp; Win Rate</div>
@@ -6195,6 +6301,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           ? `${openUpcomingCount} Open • ${placedUpcomingCount} Placed`
           : `${upcomingPlays.length} Playable`;
       }
+      const velBar = document.getElementById("curated-velocity-bar");
+      if (velBar) {
+        const playableWithTime = upcomingPlays
+          .filter(p => Number(p.stake || 0) >= 2.0)
+          .map(p => {
+            const sMs = estimateCuratedStartMs(p, dateStr);
+            const durMs = getSportDurationMinutes(p.sport || parseTitleFallback(p.title).sport, p.selection || p.title) * 60000;
+            const dP = parseCuratedDisplayParts(p);
+            return { p, sMs, eMs: sMs + durMs, timeLbl: dP.startTime || "TBD", stake: Number(p.stake || 0) };
+          })
+          .sort((a, b) => a.sMs - b.sMs);
+
+        // Group into sequential non-overlapping cash-rollover waves
+        const waves = [];
+        playableWithTime.forEach(item => {
+          const lastW = waves.length > 0 ? waves[waves.length - 1] : null;
+          if (!lastW || item.sMs >= lastW.endMs - 15 * 60000) {
+            waves.push({ startLabel: item.timeLbl.replace(/\s*EST$/i, ""), endMs: item.eMs, totalStake: item.stake, count: 1 });
+          } else {
+            lastW.endMs = Math.max(lastW.endMs, item.eMs);
+            lastW.totalStake += item.stake;
+            lastW.count += 1;
+          }
+        });
+
+        if (waves.length >= 2) {
+          const totalDeployed = waves.reduce((acc, w) => acc + w.totalStake, 0);
+          const waveHtml = waves.map((w, idx) =>
+            `<span class="velocity-wave">Wave ${idx + 1} (${esc(w.startLabel)}) • ${fmtMoney(w.totalStake)} (${w.count})</span>`
+          ).join(`<span style="color:var(--muted);font-weight:700;">→</span>`);
+          velBar.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span style="font-weight:700;color:#93c5fd;">Cash-Rollover Velocity (${waves.length} Sequential Waves)</span>
+              <span style="color:var(--muted);">Total Action: ${fmtMoney(totalDeployed)} • Recycles settled cash between waves</span>
+            </div>
+            <div class="velocity-waves">${waveHtml}</div>
+          `;
+          velBar.style.display = "flex";
+        } else {
+          velBar.style.display = "none";
+          velBar.innerHTML = "";
+        }
+      }
+
       const filtBar = document.getElementById("curated-filter-bar");
       if (filtBar) {
         filtBar.style.display = (upcomingPlays.length > 0 && placedUpcomingCount > 0) ? "flex" : "none";
