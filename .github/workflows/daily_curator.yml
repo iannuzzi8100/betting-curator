@@ -31,6 +31,11 @@ on:
         required: false
         default: ''
         type: string
+      ignore_cap:
+        description: 'Ignore active pending exposure cap to preview full Tier 1/2 + Marquee slate'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   run-betting-pipeline:
@@ -39,6 +44,7 @@ jobs:
       contents: write
     env:
       REGRADE_BET_ID: ${{ inputs.regrade_bet_id || '' }}
+      IGNORE_EXPOSURE_CAP: ${{ inputs.ignore_cap || false }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
