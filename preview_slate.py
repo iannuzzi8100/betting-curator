@@ -421,7 +421,7 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
         f"- **Data Sources:** ESPN Free Quantitative Engine (FPI + L5 Form + Line Steam) | {odds_api_note}",
         f"- **Sizing Base:** ${settled_br:.2f} bankroll (Drawdown Brake 12% single / 40% concurrent)",
         "",
-        "## 1. Mock-Up Curated Slate (Strict Tier 1 & Tier 2 >= 78%, Max 2 Per Window)",
+        "## 1. Mock-Up Curated Slate (Strict Tier 1 & Tier 2 >= 78%, Governed by Half-Kelly & Exposure Cap)",
         "```",
         mock_slate,
         "```",

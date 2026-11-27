@@ -317,7 +317,7 @@ Recent Bets:
    - For every `[MARQUEE BEST BET]` (`>= 78%`) in an allowed league today, include that exact highest-confidence bet (whether it is ML, Spread, Total, 1H, or a Player Prop) and tag it with `[MARQUEE]` right after the league tag: e.g. `8:20 PM EST • Away @ Home (NFL) [MARQUEE] — Pick (-115) — $XX.XX (X.XU) — 84% 💎`.
    - If a marquee game is marked `[MARQUEE SKIP]` (no market cleared `78%`), **OMIT IT COMPLETELY** — never force a weak bet on a primetime game.
 3. **CALIBRATED HALF-KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
-   - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the highest-confidence Tier 1/2 play(s) (at most 2 per time-slot window). Every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50` (min `$2.00`).
+   - **NO ARTIFICIAL PER-WINDOW PLAY CAP (GOVERNED BY TIER 1/2 & EXPOSURE CAP):** Include **all** qualifying Tier 1 (`88%+`) & Tier 2 (`78%+`) plays that fit within your concurrent exposure cap (1 bet per game). Every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50` (min `$2.00`).
    - **HARD CONCURRENT OVERLAP CAP ({max_conc_pct}% BR = ${max_conc_amt:.2f}) & SINGLE-BET CAP ({max_single_pct}% BR = ${max_single_amt:.2f}):** Never let overlapping games exceed {max_conc_pct}% of bankroll at risk simultaneously.
    - **ODDS-ADJUSTED HALF-KELLY GUIDELINES (0.55x ML | 0.40x Spread/Prop | 0.30x UCL/La Liga):**
      * **🔥 TIER 1 (`88%–99%`):** Up to ~{max_single_pct}% BR (~${stake_t1_solo:.2f}, trimmed slightly on heavier `-130` to `-150` juice or spreads).
@@ -767,20 +767,9 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
             "is_marquee": "[MARQUEE:" in rest_body,
         })
 
-    # Group by window and keep up to top 2 highest-confidence Tier 1/2 plays per window
-    # (prioritizing >= 78% Marquee Best Bets so every qualifying marquee game surfaces cleanly)
-    by_win = {}
-    for c in candidates:
-        by_win.setdefault(c["win_num"], []).append(c)
-
-    selected = []
-    for w_num in sorted(by_win.keys()):
-        w_plays = sorted(by_win[w_num], key=lambda x: (-x["conf_pct"], 0 if x.get("is_marquee") else 1, x["t_min"]))
-        if w_plays and w_plays[0]["conf_pct"] >= 88:
-            chosen = w_plays[:2] if (len(w_plays) >= 2 and (w_plays[1]["conf_pct"] >= 82 or w_plays[1].get("is_marquee"))) else w_plays[:1]
-        else:
-            chosen = w_plays[:2]
-        selected.extend(chosen)
+    # Keep ALL qualifying Tier 1/2 (>= 78%) plays — no artificial per-window count cap.
+    # Allocation below prioritizes highest Half-Kelly edge & marquee plays within the concurrent exposure cap.
+    selected = sorted(candidates, key=lambda x: (-x["conf_pct"], 0 if x.get("is_marquee") else 1, x["t_min"]))
 
     # Smart Wager Engine: Calibrated Fractional Kelly + 1U=5% BR + 35% single / 80% concurrent overlap cap + Drawdown & $1,000 Goal-Lock Brakes
     def _sport_dur_min(sp_lbl):
