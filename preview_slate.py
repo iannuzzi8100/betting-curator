@@ -6,6 +6,7 @@ import requests
 
 import scraper
 import curator
+import quant_signals
 
 
 LEAGUE_ESPN_MAP = {
@@ -56,8 +57,23 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
     all_scored_games = []
     seen_event_ids = set()
 
+    sim_target_dt = datetime.datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=est_tz)
+    pillar_weights, cal_note = quant_signals.load_shadow_pillar_weights()
+    quant_games.append(f"- [CALIBRATION] {cal_note}")
+    torvik_ratings = quant_signals.fetch_barttorvik_ratings(sim_target_dt) if lbl_u == "NCAAM" else {}
+    moneypuck_data = quant_signals.fetch_moneypuck_nhl(sim_target_dt) if lbl_u == "NHL" else {"teams": {}, "goalies": {}}
+
     for label, sport, league, groups in configs:
         base_sb = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+        b2b_teams = set()
+        games_in_3d = {}
+        if label in ("NBA", "NHL", "NCAAM"):
+            try:
+                b2b_teams, games_in_3d = quant_signals.fetch_recent_schedule_density(
+                    base_sb, sim_target_dt, groups=groups, lookback_days=3
+                )
+            except Exception:
+                pass
         params = {"dates": target_ymd, "limit": 200}
         if groups:
             params["groups"] = groups
@@ -129,13 +145,44 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
             rec_str = f"({a_abbr} {a_rec} @ {h_abbr} {h_rec})" if (h_rec or a_rec) else ""
 
             tags = []
-            odds_list = comp.get("odds", [])
             odds_summary = []
+
+            # Home vs. Away Splits
+            split_info = quant_signals.extract_home_away_splits(home, away, h_abbr, a_abbr)
+            if split_info.get("summary_str"):
+                odds_summary.append(split_info["summary_str"])
+            if split_info.get("tag"):
+                tags.append(split_info["tag"])
+
+            # Back-to-Back & 3-in-4 Density Fatigue
+            a_b2b = a_name in b2b_teams
+            h_b2b = h_name in b2b_teams
+            density_info = {}
+            if a_b2b and not h_b2b:
+                tags.append(f"[⚠️ FATIGUE EDGE: {a_abbr} on Road Back-to-Back (0d rest) vs Rested {h_abbr}]")
+            elif h_b2b and not a_b2b:
+                tags.append(f"[⚠️ FATIGUE EDGE: {h_abbr} on Back-to-Back (0d rest) vs Rested {a_abbr}]")
+            elif label in ("NBA", "NHL", "NCAAM") and games_in_3d:
+                a_3in4 = games_in_3d.get(a_name, 0) >= 2
+                h_3in4 = games_in_3d.get(h_name, 0) >= 2
+                density_info = {a_abbr: a_3in4, h_abbr: h_3in4}
+                if a_3in4 and not h_3in4:
+                    tags.append(f"[⚠️ 3-IN-4 FATIGUE: {a_abbr} playing 3rd game in 4 nights vs Rested {h_abbr}]")
+                elif h_3in4 and not a_3in4:
+                    tags.append(f"[⚠️ 3-IN-4 FATIGUE: {h_abbr} playing 3rd game in 4 nights vs Rested {a_abbr}]")
+
+            odds_list = comp.get("odds", [])
             h_ml_close = a_ml_close = None
             h_sp_close = None
             h_sp_odds = a_sp_odds = None
+            t_close = t_under_odds = None
             h_bpi = a_bpi = None
             l5_parsed = {}
+            injury_info = {}
+            weather_info = {}
+            net_diff_info = {}
+            torvik_probs = (None, None)
+            moneypuck_info = {}
 
             if odds_list:
                 od = odds_list[0]
@@ -179,6 +226,7 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
                 tot = od.get("total", {})
                 t_close = scraper._safe_float_line(tot.get("over", {}).get("close", {}).get("line"))
                 t_open = scraper._safe_float_line(tot.get("over", {}).get("open", {}).get("line"))
+                t_under_odds = scraper._safe_int_odds(tot.get("under", {}).get("close", {}).get("odds"))
                 if t_open is not None and t_close is not None and abs(t_close - t_open) >= 1.0:
                     dir_lbl = "OVER" if t_close > t_open else "UNDER"
                     delta_t = abs(t_close - t_open)
@@ -193,10 +241,40 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
             if not odds_list and groups == "81":
                 continue
 
-            # Fetch ESPN Summary (FPI WinProb + L5 Form)
+            # Bart Torvik NCAAM Adjusted Efficiency Win Probabilities
+            if label == "NCAAM" and torvik_ratings:
+                a_tr = quant_signals.lookup_torvik_team(torvik_ratings, a_name, away.get("team", {}).get("location", ""))
+                h_tr = quant_signals.lookup_torvik_team(torvik_ratings, h_name, home.get("team", {}).get("location", ""))
+                a_tp, h_tp = quant_signals.compute_torvik_matchup_probs(
+                    a_tr, h_tr, is_neutral=bool(comp.get("neutralSite", False))
+                )
+                if a_tp is not None and h_tp is not None:
+                    torvik_probs = (a_tp, h_tp)
+                    odds_summary.append(
+                        f"Torvik AdjEff: {a_abbr} {a_tp:.1f}% vs {h_abbr} {h_tp:.1f}%"
+                    )
+
+            # Fetch ESPN Summary (FPI WinProb, Injuries, Weather, NetDiff, L5 Form, MoneyPuck NHL)
             try:
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=10).json()
+
+                injury_info = quant_signals.extract_game_injury_impact(sum_data, label, a_abbr, h_abbr, a_name, h_name)
+                for itag in injury_info.get("tags") or []:
+                    tags.append(itag)
+
+                weather_info = quant_signals.extract_game_weather(sum_data, label)
+                if weather_info.get("tag"):
+                    tags.append(weather_info["tag"])
+
+                net_diff_info = quant_signals.extract_season_net_differential(
+                    sum_data, home, away, label, a_abbr, h_abbr, a_rec, h_rec
+                )
+                if net_diff_info.get("summary_str"):
+                    odds_summary.append(net_diff_info["summary_str"])
+                for ntag in net_diff_info.get("tags") or []:
+                    tags.append(ntag)
+
                 pred = sum_data.get("predictor", {})
                 h_proj = pred.get("homeTeam", {}).get("gameProjection")
                 a_proj = pred.get("awayTeam", {}).get("gameProjection")
@@ -251,9 +329,41 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
                         tags.append(f"[📈 FORM EDGE: {h_abbr} L5 {hw}-{hl} ({hm:+.1f} avg margin) vs {a_abbr} L5 {aw}-{al} ({am:+.1f})]")
                     elif (aw - hw) >= 2 and (am - hm) >= 4.5:
                         tags.append(f"[📈 FORM EDGE: {a_abbr} L5 {aw}-{al} ({am:+.1f} avg margin) vs {h_abbr} L5 {hw}-{hl} ({hm:+.1f})]")
+
+                if label == "NHL" and moneypuck_data:
+                    mp_teams = moneypuck_data.get("teams") or {}
+                    mp_goalies = moneypuck_data.get("goalies") or {}
+                    xgf_pair = {}
+                    gsax_pair = {}
+                    a_mp_t = mp_teams.get(str(a_abbr).upper())
+                    h_mp_t = mp_teams.get(str(h_abbr).upper())
+                    if a_mp_t and h_mp_t:
+                        xgf_pair[a_abbr] = a_mp_t["xgf_pct"]
+                        xgf_pair[h_abbr] = h_mp_t["xgf_pct"]
+                        odds_summary.append(f"MoneyPuck 5v5 xGF%: {a_abbr} {a_mp_t['xgf_pct']:.1f}% vs {h_abbr} {h_mp_t['xgf_pct']:.1f}%")
+                    a_prob = (away.get("probables") or [{}])[0].get("athlete", {}).get("displayName", "")
+                    h_prob = (home.get("probables") or [{}])[0].get("athlete", {}).get("displayName", "")
+                    if a_prob and h_prob:
+                        a_mg = mp_goalies.get(quant_signals._norm_exact(a_prob))
+                        h_mg = mp_goalies.get(quant_signals._norm_exact(h_prob))
+                        if a_mg and h_mg:
+                            gsax_pair[a_abbr] = a_mg["gsax"]
+                            gsax_pair[h_abbr] = h_mg["gsax"]
+                            odds_summary.append(f"Goalie GSAx: {a_abbr} {a_mg['gsax']:+.1f} vs {h_abbr} {h_mg['gsax']:+.1f}")
+                    if xgf_pair or gsax_pair:
+                        moneypuck_info = {"xgf": xgf_pair, "gsax": gsax_pair}
             except Exception:
                 pass
 
+            extra_signals = {
+                "split_info": split_info,
+                "injury_info": injury_info,
+                "weather_info": weather_info,
+                "net_diff_info": net_diff_info,
+                "torvik_probs": torvik_probs,
+                "moneypuck_info": moneypuck_info,
+                "density_info": density_info,
+            }
             conf_tag = ""
             try:
                 conf_tag = scraper._compute_matchup_confidence(
@@ -261,6 +371,7 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
                     a_ml=a_ml_close, h_ml=h_ml_close, h_sp=h_sp_close,
                     a_sp_odds=a_sp_odds, h_sp_odds=h_sp_odds,
                     a_bpi=a_bpi, h_bpi=h_bpi, l5_parsed=l5_parsed, tags=tags,
+                    extra_signals=extra_signals, pillar_weights=pillar_weights,
                 )
                 tags.append(conf_tag)
             except Exception:
@@ -291,15 +402,49 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
                     "label": label, "matchup": matchup, "a_name": a_name, "h_name": h_name,
                     "a_abbr": a_abbr, "h_abbr": h_abbr, "slot_tag": slot_tag, "time_est": time_est_str,
                     "reason": mq_reason, "rec_str": rec_str, "odds_summary": " | ".join(odds_summary),
-                    "candidates": [],
+                    "weather": weather_info, "candidates": [],
                 }
-                if conf_tag and "DO NOT CHASE LATE" not in " ".join(tags):
+                tags_blob = " ".join(tags)
+                if conf_tag and "DO NOT CHASE LATE" not in tags_blob:
                     m_fo = re.search(r"\(([+-]\d{3,4})\)", fg_pick)
                     fg_odds = int(m_fo.group(1)) if m_fo else None
                     if fg_odds is not None and -155 <= fg_odds <= 130 and "EXCEEDS" not in fg_pick:
                         mq_entry["candidates"].append({
                             "score": fg_score, "pick": fg_pick, "market": "Full Game", "reasons": fg_reasons,
                         })
+                if (
+                    label in ("NFL", "CFB")
+                    and weather_info.get("severe")
+                    and t_close is not None
+                    and t_under_odds is not None
+                    and -155 <= t_under_odds <= 130
+                    and "TOTAL ALREADY STEAMED" not in tags_blob
+                ):
+                    w_score = 54
+                    w_reasons = []
+                    w_mph = float(weather_info.get("wind_mph") or 0.0)
+                    if w_mph >= 18.0:
+                        w_score += 14
+                        w_reasons.append(f"Severe Wind {int(round(w_mph))}mph (+14)")
+                    elif w_mph >= 15.0:
+                        w_score += 10
+                        w_reasons.append(f"High Wind {int(round(w_mph))}mph (+10)")
+                    else:
+                        w_score += 8
+                        w_reasons.append("Severe Outdoor Weather (+8)")
+                    if weather_info.get("is_precip"):
+                        w_score += 6
+                        w_reasons.append("Rain/Snow Precip (+6)")
+                    if "TOTAL STEAM: Moved" in tags_blob and "toward UNDER" in tags_blob:
+                        w_score += 10
+                        w_reasons.append("Sharp Under Steam (+10)")
+                    w_score += 6 if (-145 <= t_under_odds <= 110) else 3
+                    mq_entry["candidates"].append({
+                        "score": min(96, w_score),
+                        "pick": f"Under {t_close} ({t_under_odds:+d})",
+                        "market": "Weather Total",
+                        "reasons": ", ".join(w_reasons),
+                    })
                 marquee_meta[f"{label}:{matchup}"] = mq_entry
 
             all_scored_games.append({
@@ -307,6 +452,8 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
                 "marquee": mq_reason if is_marquee else "", "score": fg_score, "pick": fg_pick,
                 "reasons": fg_reasons, "chased": "DO NOT CHASE LATE" in " ".join(tags),
                 "odds_summary": " | ".join(odds_summary),
+                "weather_tag": weather_info.get("tag", ""),
+                "injury_tags": injury_info.get("tags") or [],
             })
 
             if odds_summary or tags:
