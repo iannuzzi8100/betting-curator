@@ -8,6 +8,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from youtube_transcript_api import YouTubeTranscriptApi
 import yt_dlp
+import quant_signals
 
 load_dotenv()
 
@@ -622,6 +623,20 @@ def fetch_hardrock_odds_and_props():
                                             n_sharp_books=max(len(p_fps), len(stale_books)),
                                             hr_price=hr_price,
                                         )
+                                        # Severe outdoor NFL weather adjustment for Passing Props
+                                        if (
+                                            c_score > 0
+                                            and sport_key == "americanfootball_nfl"
+                                            and m_key in ("player_pass_yds", "player_pass_tds")
+                                            and mq_entry is not None
+                                            and (mq_entry.get("weather") or {}).get("severe")
+                                        ):
+                                            if side == "Over":
+                                                c_score = max(25, c_score - 8)
+                                                c_reasons.append("Severe Weather Wind/Precip (-8)")
+                                            elif side == "Under":
+                                                c_score = min(96, c_score + 6)
+                                                c_reasons.append("Severe Weather Wind/Precip (+6)")
                                         cm_str = ""
                                         if c_score >= 78:
                                             sc_v, sc_b, sc_t = _format_confidence_meter(c_score)
@@ -922,19 +937,34 @@ def _compute_matchup_confidence(
     h_bpi,
     l5_parsed,
     tags,
+    extra_signals=None,
+    pillar_weights=None,
 ):
     """
-    Deterministic 0-99 Confidence Meter across 6 Pillars:
-    1. TrueWin Probability & Odds Sweet-Spot (+14 Moderate Fav, +8 Light Fav/Even, -10 Dog without 2+ signals, -25 Big Fav Spread Cap)
-    2. Model & Market +EV% Edge (+15 for >=5% EV, +9 for 2.5-4.9% EV, -12 if model disagrees)
-    3. Last-5-Games Form & Scoring Margin (+12 Major Form Edge, +6 Moderate Form Edge, -10 Cold 0-5/1-4 team)
+    Deterministic 0-99 Confidence Meter across Core + Multi-Model Quantitative Pillars:
+    1. TrueWin Probability & Odds Sweet-Spot (+14 Moderate Fav, +8 Light Fav/Even, -10 Dog without 2+ signals, -25 Cap)
+    2. Model & Market +EV% Edge (ESPN BPI/FPI for NBA/NFL/CFB; Bart Torvik AdjEff Log5+HCA for NCAAM)
+    3. Last-5-Games Form & Scoring Margin + Season Net Differential & Regression Guard
     4. Sharp Line Movement & Timing (+10 Early Sharp Steam, -30 Late Chased Steam Auto-Kill, -15 Reverse Steam)
-    5. Situational & Matchup Mismatch (+12 Rested vs B2B or NHL Goalie >=.025 SV% Edge, +4 Home winning record)
+    5. Situational & Matchup Mismatch (0d-Rest B2B, 3-in-4 Fatigue, Home/Road Splits, Key Injuries, NHL Goalie SV%/GSAx & MoneyPuck 5v5 xGF%)
     6. Multi-Signal Confluence Bonus (+8 for 3+ aligned pillars, +4 for 2 aligned pillars)
+    Optional `pillar_weights` applies bounded [0.65, 1.25] self-calibrated multipliers from `Shadow Grading Log`.
     """
     tags_joined = " ".join(tags)
     max_fav_cap = -7.5 if label == "CFB" else -6.5
     a_sp = (-h_sp) if h_sp is not None else None
+    ex = extra_signals or {}
+    pw = pillar_weights or {}
+
+    def _w(pts, key):
+        return int(round(pts * float(pw.get(key, 1.0))))
+
+    split_info = ex.get("split_info") or {}
+    injury_info = ex.get("injury_info") or {}
+    net_diff_info = ex.get("net_diff_info") or {}
+    torvik_probs = ex.get("torvik_probs") or (None, None)
+    moneypuck_info = ex.get("moneypuck_info") or {}
+    density_info = ex.get("density_info") or {}
 
     mkt_a = mkt_h = None
     if a_ml is not None and h_ml is not None:
@@ -949,11 +979,11 @@ def _compute_matchup_confidence(
     best_reasons = []
 
     sides = [
-        (False, a_abbr, h_abbr, a_rec, h_rec, a_ml, a_sp, a_sp_odds, a_bpi, mkt_a),
-        (True, h_abbr, a_abbr, h_rec, a_rec, h_ml, h_sp, h_sp_odds, h_bpi, mkt_h),
+        (False, a_abbr, h_abbr, a_rec, h_rec, a_ml, a_sp, a_sp_odds, a_bpi, mkt_a, torvik_probs[0]),
+        (True, h_abbr, a_abbr, h_rec, a_rec, h_ml, h_sp, h_sp_odds, h_bpi, mkt_h, torvik_probs[1]),
     ]
 
-    for is_home, s_abbr, o_abbr, s_rec, o_rec, s_ml, s_sp, s_sp_odds, s_bpi, s_mkt in sides:
+    for is_home, s_abbr, o_abbr, s_rec, o_rec, s_ml, s_sp, s_sp_odds, s_bpi, s_mkt, s_torv in sides:
         score = 50
         pillars = 0
         indep_edges = 0
@@ -999,9 +1029,10 @@ def _compute_matchup_confidence(
 
         # Pillar 1: Market & Odds Sweet-Spot (ML prioritized over -4.0..-6.5 spreads)
         if mkt_tier == "mod_ml":
-            score += 14
+            pts = _w(14, "mod_ml")
+            score += pts
             pillars += 1
-            reasons.append("ModFav ML Sweet-Spot (+14)")
+            reasons.append(f"ModFav ML Sweet-Spot (+{pts})")
         elif mkt_tier == "even_ml":
             score += 8
             pillars += 1
@@ -1017,79 +1048,196 @@ def _compute_matchup_confidence(
             score -= 25
             reasons.append("Outside Odds/Spread Cap (-25)")
 
-        # Pillar 2: Model & Market +EV% Edge (strictly high-information NBA/NFL/CFB; no free CBB WinProb inflation)
+        # Pillar 2A: ESPN BPI/FPI Model & Market +EV% Edge (NBA/NFL/CFB)
         if s_bpi is not None and s_mkt is not None and s_ml is not None and label in ("NBA", "NFL", "CFB"):
             dec_o = american_to_decimal(s_ml)
             ev_pct = ((s_bpi / 100.0) * dec_o - 1.0) * 100.0
             if ev_pct >= 5.0 and (s_bpi - s_mkt) >= 3.5:
-                score += 15
+                pts = _w(15, "bpi_ev")
+                score += pts
                 pillars += 1
                 indep_edges += 1
-                reasons.append(f"BPI/FPI +{ev_pct:.1f}% EV (+15)")
+                reasons.append(f"BPI/FPI +{ev_pct:.1f}% EV (+{pts})")
             elif ev_pct >= 2.5 and (s_bpi - s_mkt) >= 2.0:
-                score += 9
+                pts = _w(9, "bpi_ev")
+                score += pts
                 pillars += 1
                 indep_edges += 1
-                reasons.append(f"BPI/FPI +{ev_pct:.1f}% EV (+9)")
+                reasons.append(f"BPI/FPI +{ev_pct:.1f}% EV (+{pts})")
             elif (s_bpi - s_mkt) <= -4.0:
                 score -= 12
                 reasons.append("Model Disagrees (-12)")
 
+        # Pillar 2B: Bart Torvik NCAAM Adjusted Efficiency (Barthag Log5 + HCA) vs Market
+        if label == "NCAAM" and s_torv is not None and s_mkt is not None and s_ml is not None:
+            dec_o = american_to_decimal(s_ml)
+            t_ev = ((s_torv / 100.0) * dec_o - 1.0) * 100.0
+            if t_ev >= 5.0 and (s_torv - s_mkt) >= 4.0:
+                pts = _w(13, "torvik_ev")
+                score += pts
+                pillars += 1
+                indep_edges += 1
+                reasons.append(f"Torvik AdjEff +{t_ev:.1f}% EV (+{pts})")
+            elif t_ev >= 2.5 and (s_torv - s_mkt) >= 2.5:
+                pts = _w(8, "torvik_ev")
+                score += pts
+                pillars += 1
+                indep_edges += 1
+                reasons.append(f"Torvik AdjEff +{t_ev:.1f}% EV (+{pts})")
+            elif (s_torv - s_mkt) <= -5.0:
+                score -= 10
+                reasons.append("Torvik Disagrees (-10)")
+
         # Pillar 3: Last-5-Games Form & Scoring Margin (historically highest-ROI independent pillar)
         if f"FORM EDGE: {s_abbr}" in tags_joined:
-            score += 12
+            pts = _w(12, "l5_form")
+            score += pts
             pillars += 1
             indep_edges += 1
-            reasons.append("Major L5 Form Edge (+12)")
+            reasons.append(f"Major L5 Form Edge (+{pts})")
         elif s_abbr in l5_parsed and o_abbr in l5_parsed:
             sw, sl, sm = l5_parsed[s_abbr]
             ow, ol, om = l5_parsed[o_abbr]
             if sw > ow and sm > om:
-                score += 6
+                pts = _w(6, "l5_form")
+                score += pts
                 pillars += 1
                 indep_edges += 1
-                reasons.append(f"L5 Edge {sw}-{sl} ({sm:+.1f}) (+6)")
+                reasons.append(f"L5 Edge {sw}-{sl} ({sm:+.1f}) (+{pts})")
             elif sw <= 1 and sl >= 4:
                 score -= 10
                 reasons.append(f"Cold L5 {sw}-{sl} (-10)")
             elif sw >= 4 and sm >= 3.0:
-                score += 5
+                pts = _w(5, "l5_form")
+                score += pts
                 indep_edges += 1
-                reasons.append(f"Hot L5 {sw}-{sl} (+5)")
+                reasons.append(f"Hot L5 {sw}-{sl} (+{pts})")
+
+        # Pillar 3B: Season Scoring / Net Differential & Lucky-Record Regression Guard
+        if net_diff_info.get("edge_side") == s_abbr and net_diff_info.get("edge_pts", 0) > 0:
+            pts = _w(net_diff_info["edge_pts"], "net_diff")
+            score += pts
+            pillars += 1
+            indep_edges += 1
+            reasons.append(f"Season Net-Diff Edge (+{pts})")
+        if s_abbr in (net_diff_info.get("regression_sides") or set()):
+            score -= 6
+            reasons.append("Regression Risk Neg NetDiff (-6)")
 
         # Pillar 4: Sharp Line Movement & Timing (hard auto-kill on Late Chased Steam)
-        if f"ALREADY STEAMED" in tags_joined and f"toward {s_abbr}" in tags_joined:
+        if "ALREADY STEAMED" in tags_joined and f"toward {s_abbr}" in tags_joined:
             score -= 30
             is_chased_steam = True
             reasons.append("Late Chased Steam Auto-Kill (-30)")
-        elif (f"SPREAD STEAM: Moved" in tags_joined and f"toward {s_abbr}" in tags_joined) or (
+        elif ("SPREAD STEAM: Moved" in tags_joined and f"toward {s_abbr}" in tags_joined) or (
             f"ML STEAM: Sharp action steamed {s_abbr}" in tags_joined
         ):
-            score += 10
+            pts = _w(10, "sharp_steam")
+            score += pts
             pillars += 1
             indep_edges += 1
-            reasons.append("Sharp Steam (+10)")
-        elif (f"SPREAD STEAM: Moved" in tags_joined and f"toward {o_abbr}" in tags_joined) or (
+            reasons.append(f"Sharp Steam (+{pts})")
+        elif ("SPREAD STEAM: Moved" in tags_joined and f"toward {o_abbr}" in tags_joined) or (
             f"ML STEAM: Sharp action steamed {o_abbr}" in tags_joined
         ):
             score -= 15
             reasons.append("Fighting Reverse Steam (-15)")
 
-        # Pillar 5: Situational & Matchup Mismatch (B2B Fatigue, NHL Goalies, Home Winning Record)
+        # Pillar 5A: Schedule Fatigue (0d-Rest B2B + 3-in-4 Nights Density)
+        has_b2b_signal = False
         if f"FATIGUE EDGE: {o_abbr} on" in tags_joined:
-            score += 12
+            pts = _w(12, "b2b_fatigue")
+            score += pts
             pillars += 1
             indep_edges += 1
-            reasons.append(f"Vs {o_abbr} 0d-Rest B2B (+12)")
+            has_b2b_signal = True
+            reasons.append(f"Vs {o_abbr} 0d-Rest B2B (+{pts})")
         elif f"FATIGUE EDGE: {s_abbr} on" in tags_joined:
             score -= 15
+            has_b2b_signal = True
             reasons.append("On 0d-Rest B2B (-15)")
 
+        if not has_b2b_signal and density_info:
+            s_3in4 = bool(density_info.get(s_abbr))
+            o_3in4 = bool(density_info.get(o_abbr))
+            if o_3in4 and not s_3in4:
+                pts = _w(7, "b2b_fatigue")
+                score += pts
+                pillars += 1
+                indep_edges += 1
+                reasons.append(f"Vs {o_abbr} 3-in-4 Fatigue (+{pts})")
+            elif s_3in4 and not o_3in4:
+                score -= 8
+                reasons.append("On 3-in-4 Fatigue (-8)")
+
+        # Pillar 5B: NHL Goalie SV% Mismatch + MoneyPuck 5v5 xGF% & Goalie GSAx
+        goalie_pts_added = 0
         if f"GOALIE MISMATCH EDGE: {s_abbr}" in tags_joined:
-            score += 12
+            pts = _w(12, "goalie_edge")
+            score += pts
+            goalie_pts_added += pts
             pillars += 1
             indep_edges += 1
-            reasons.append("NHL Goalie Mismatch (+12)")
+            reasons.append(f"NHL Goalie Mismatch (+{pts})")
+
+        if label == "NHL" and moneypuck_info:
+            xgf_map = moneypuck_info.get("xgf") or {}
+            s_xgf = xgf_map.get(s_abbr)
+            o_xgf = xgf_map.get(o_abbr)
+            if s_xgf is not None and o_xgf is not None:
+                if (s_xgf - o_xgf) >= 4.5:
+                    pts = _w(9, "moneypuck_xgf")
+                    score += pts
+                    pillars += 1
+                    indep_edges += 1
+                    reasons.append(f"MoneyPuck xGF% Edge ({s_xgf:.1f}% vs {o_xgf:.1f}%) (+{pts})")
+                elif (s_xgf - o_xgf) <= -4.5:
+                    score -= 7
+                    reasons.append(f"MoneyPuck xGF% Deficit ({s_xgf:.1f}% vs {o_xgf:.1f}%) (-7)")
+
+            gsax_map = moneypuck_info.get("gsax") or {}
+            s_gsax = gsax_map.get(s_abbr)
+            o_gsax = gsax_map.get(o_abbr)
+            if s_gsax is not None and o_gsax is not None:
+                if (s_gsax - o_gsax) >= 5.0:
+                    raw_g = _w(8, "goalie_edge")
+                    g_pts = max(0, min(raw_g, 16 - goalie_pts_added))
+                    if g_pts > 0:
+                        score += g_pts
+                        if goalie_pts_added == 0:
+                            pillars += 1
+                            indep_edges += 1
+                        goalie_pts_added += g_pts
+                        reasons.append(f"Goalie GSAx Edge ({s_gsax:+.1f} vs {o_gsax:+.1f}) (+{g_pts})")
+                elif (s_gsax - o_gsax) <= -5.0:
+                    score -= 7
+                    reasons.append(f"Goalie GSAx Deficit ({s_gsax:+.1f} vs {o_gsax:+.1f}) (-7)")
+
+        # Pillar 5C: Home vs. Away Split Profile Edge
+        if split_info.get("edge_side") == s_abbr and split_info.get("edge_pts", 0) > 0:
+            pts = _w(split_info["edge_pts"], "home_road_split")
+            split_lbl = "Home/Road Split" if is_home else "Road Warrior Split"
+            score += pts
+            pillars += 1
+            indep_edges += 1
+            reasons.append(f"{split_lbl} (+{pts})")
+        elif split_info.get("edge_side") == o_abbr and split_info.get("opp_penalty", 0) < 0:
+            pen = int(split_info["opp_penalty"])
+            score += pen
+            reasons.append(f"Poor Split Profile ({pen})")
+
+        # Pillar 5D: Per-Game Key Injury Auto-Adjustment
+        inj_pen = int((injury_info.get("penalties") or {}).get(s_abbr, 0))
+        inj_bst = int((injury_info.get("boosts") or {}).get(s_abbr, 0))
+        if inj_pen < 0:
+            score += inj_pen
+            reasons.append(f"Key Injury Penalty ({inj_pen})")
+        if inj_bst > 0:
+            score += inj_bst
+            if inj_bst >= 4:
+                pillars += 1
+                indep_edges += 1
+            reasons.append(f"Opp Key Injury Edge (+{inj_bst})")
 
         sw_rec, sl_rec = _parse_rec_wins_losses(s_rec)
         ow_rec, ol_rec = _parse_rec_wins_losses(o_rec)
@@ -1190,22 +1338,25 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
 
     athlete_cache = {}
 
+    # Load self-calibrated pillar weights from Shadow Grading Log (gracefully neutral 1.00x if <25 plays)
+    pillar_weights, cal_note = quant_signals.load_shadow_pillar_weights()
+    quant_games.append(f"- [CALIBRATION] {cal_note}")
+
+    # Pre-fetch free external efficiency models once per scrape (fail safely to empty dicts if unreachable)
+    active_labels = {c[0] for c in league_configs}
+    torvik_ratings = quant_signals.fetch_barttorvik_ratings(now_est) if "NCAAM" in active_labels else {}
+    moneypuck_data = quant_signals.fetch_moneypuck_nhl(now_est) if "NHL" in active_labels else {"teams": {}, "goalies": {}}
+
     for label, sport, league, groups in league_configs:
         base_sb = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        # 1. Identify teams that played yesterday (Back-to-Back 0-days rest detector for NBA/NHL/NCAAM)
+        # 1. Identify Back-to-Back (0d rest) & 3-in-4 Nights schedule density for NBA/NHL/NCAAM
         b2b_teams = set()
+        games_in_3d = {}
         if label in ("NBA", "NHL", "NCAAM"):
             try:
-                y_params = {"dates": yesterday_ymd}
-                if groups:
-                    y_params["groups"] = groups
-                y_evts = requests.get(base_sb, params=y_params, timeout=10).json().get("events", [])
-                for ye in y_evts:
-                    for comp in ye.get("competitions", []):
-                        for c in comp.get("competitors", []):
-                            t_name = c.get("team", {}).get("displayName", "")
-                            if t_name:
-                                b2b_teams.add(t_name)
+                b2b_teams, games_in_3d = quant_signals.fetch_recent_schedule_density(
+                    base_sb, now_est, groups=groups, lookback_days=3
+                )
             except Exception:
                 pass
 
@@ -1278,6 +1429,15 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
             rec_str = f"({a_abbr} {a_rec} @ {h_abbr} {h_rec})" if (h_rec or a_rec) else ""
 
             tags = []
+            odds_summary = []
+
+            # Home vs. Away Split Profile (Zero extra requests — directly inside scoreboard records)
+            split_info = quant_signals.extract_home_away_splits(home, away, h_abbr, a_abbr)
+            if split_info.get("summary_str"):
+                odds_summary.append(split_info["summary_str"])
+            if split_info.get("tag"):
+                tags.append(split_info["tag"])
+
             # European Soccer (EPL / UCL / La Liga) 5-match form string directly from scoreboard (e.g. "WWDLW")
             if label in soccer_labels:
                 a_form = str(away.get("form", "") or "").upper()
@@ -1293,20 +1453,36 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                     elif (a_pts - h_pts) >= 5:
                         tags.append(f"[📈 FORM EDGE: {a_abbr} L5 {a_form} ({a_pts}pts) vs {h_abbr} L5 {h_form} ({h_pts}pts)]")
 
-            # Back-to-Back Fatigue Flags
-            if a_name in b2b_teams and h_name not in b2b_teams:
+            # Back-to-Back (0d rest) & 3-in-4 Nights Schedule Density Fatigue Flags
+            a_b2b = a_name in b2b_teams
+            h_b2b = h_name in b2b_teams
+            density_info = {}
+            if a_b2b and not h_b2b:
                 tags.append(f"[⚠️ FATIGUE EDGE: {a_abbr} on Road Back-to-Back (0d rest) vs Rested {h_abbr}]")
-            elif h_name in b2b_teams and a_name not in b2b_teams:
+            elif h_b2b and not a_b2b:
                 tags.append(f"[⚠️ FATIGUE EDGE: {h_abbr} on Back-to-Back (0d rest) vs Rested {a_abbr}]")
+            elif label in ("NBA", "NHL", "NCAAM") and games_in_3d:
+                a_3in4 = games_in_3d.get(a_name, 0) >= 2
+                h_3in4 = games_in_3d.get(h_name, 0) >= 2
+                density_info = {a_abbr: a_3in4, h_abbr: h_3in4}
+                if a_3in4 and not h_3in4:
+                    tags.append(f"[⚠️ 3-IN-4 FATIGUE: {a_abbr} playing 3rd game in 4 nights vs Rested {h_abbr}]")
+                elif h_3in4 and not a_3in4:
+                    tags.append(f"[⚠️ 3-IN-4 FATIGUE: {h_abbr} playing 3rd game in 4 nights vs Rested {a_abbr}]")
 
             # Extract Odds & Opening-to-Current Steam Movement from Scoreboard
             odds_list = comp.get("odds", [])
-            odds_summary = []
             h_ml_close = a_ml_close = None
             h_sp_close = None
             h_sp_odds = a_sp_odds = None
+            t_close = t_under_odds = None
             h_bpi = a_bpi = None
             l5_parsed = {}
+            injury_info = {}
+            weather_info = {}
+            net_diff_info = {}
+            torvik_probs = (None, None)
+            moneypuck_info = {}
             if odds_list:
                 od = odds_list[0]
                 details = od.get("details", "")
@@ -1369,10 +1545,58 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                     else:
                         tags.append(f"[🔥 TOTAL STEAM: Moved {delta_t:.1f} pts toward {dir_lbl} (Open {t_open} -> Now {t_close})]")
 
-            # Fetch Event Summary for ESPN BPI/FPI Predictor & NHL Starting Goalie Stats
+            # Bart Torvik NCAAM Adjusted Efficiency Win Probabilities (Zero per-game network calls!)
+            if label == "NCAAM" and torvik_ratings:
+                a_loc = away.get("team", {}).get("location", "")
+                h_loc = home.get("team", {}).get("location", "")
+                a_tr = quant_signals.lookup_torvik_team(torvik_ratings, a_name, a_loc)
+                h_tr = quant_signals.lookup_torvik_team(torvik_ratings, h_name, h_loc)
+                a_tp, h_tp = quant_signals.compute_torvik_matchup_probs(
+                    a_tr, h_tr, is_neutral=bool(comp.get("neutralSite", False))
+                )
+                if a_tp is not None and h_tp is not None:
+                    torvik_probs = (a_tp, h_tp)
+                    odds_summary.append(
+                        f"Torvik AdjEff: {a_abbr} {a_tp:.1f}% (OE {a_tr['adjoe']:.1f}/DE {a_tr['adjde']:.1f}) vs {h_abbr} {h_tp:.1f}% (OE {h_tr['adjoe']:.1f}/DE {h_tr['adjde']:.1f})"
+                    )
+                    if h_ml_close is not None and a_ml_close is not None:
+                        imp_h = american_to_implied(h_ml_close)
+                        imp_a = american_to_implied(a_ml_close)
+                        if (imp_h + imp_a) > 0:
+                            mkt_h = power_devig_prob(imp_h, imp_a) * 100.0
+                            mkt_a = power_devig_prob(imp_a, imp_h) * 100.0
+                            if (h_tp - mkt_h) >= 3.5 and -155 <= h_ml_close <= 120:
+                                ev_h = round(((h_tp / 100.0) * american_to_decimal(h_ml_close) - 1.0) * 100.0, 2)
+                                if ev_h >= 2.5:
+                                    tags.append(f"[📊 TORVIK +EV: {h_abbr} ML ({h_ml_close:+d}) | Torvik {h_tp:.1f}% vs Mkt {mkt_h:.1f}% | EV +{ev_h}%]")
+                            elif (a_tp - mkt_a) >= 3.5 and -155 <= a_ml_close <= 120:
+                                ev_a = round(((a_tp / 100.0) * american_to_decimal(a_ml_close) - 1.0) * 100.0, 2)
+                                if ev_a >= 2.5:
+                                    tags.append(f"[📊 TORVIK +EV: {a_abbr} ML ({a_ml_close:+d}) | Torvik {a_tp:.1f}% vs Mkt {mkt_a:.1f}% | EV +{ev_a}%]")
+
+            # Fetch Event Summary for ESPN BPI/FPI Predictor, Injuries, Weather, Season NetDiff, L5 Form & NHL Goalies
             try:
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=10).json()
+
+                # Per-Game Key Injury Auto-Adjustment (Zero extra calls)
+                injury_info = quant_signals.extract_game_injury_impact(sum_data, label, a_abbr, h_abbr, a_name, h_name)
+                for itag in injury_info.get("tags") or []:
+                    tags.append(itag)
+
+                # Outdoor Weather Impact for NFL & CFB (Zero extra calls)
+                weather_info = quant_signals.extract_game_weather(sum_data, label)
+                if weather_info.get("tag"):
+                    tags.append(weather_info["tag"])
+
+                # Season Scoring / Net Differential & Lucky-Record Regression Guard (Zero extra calls)
+                net_diff_info = quant_signals.extract_season_net_differential(
+                    sum_data, home, away, label, a_abbr, h_abbr, a_rec, h_rec
+                )
+                if net_diff_info.get("summary_str"):
+                    odds_summary.append(net_diff_info["summary_str"])
+                for ntag in net_diff_info.get("tags") or []:
+                    tags.append(ntag)
 
                 # ESPN BPI / FPI Model Win Probability vs Power-Devigged Market Implied Probability
                 # Restrict BPI/FPI +EV tags to high-information leagues (NBA, NFL, CFB — exclude noisy early-season mid-major CBB)
@@ -1454,7 +1678,7 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                     elif (aw - hw) >= 2 and (am - hm) >= margin_thresh:
                         tags.append(f"[📈 FORM EDGE: {a_abbr} L5 {aw}-{al} ({am:+.1f} avg margin) vs {h_abbr} L5 {hw}-{hl} ({hm:+.1f})]")
 
-                # NHL Probable / Confirmed Starting Goalies + Season SV% & GAA + Goalie Mismatch Edge Detector
+                # NHL Probable / Confirmed Starting Goalies + Season SV% & GAA + MoneyPuck 5v5 xGF% & Goalie GSAx
                 if label == "NHL":
                     goalie_stats_lookup = {}
                     g_block = sum_data.get("goalies", {})
@@ -1470,6 +1694,7 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
 
                     goalie_notes = []
                     parsed_goalies = {}
+                    probable_goalie_names = {}
                     for side_comp, side_abbr, side_ml in ((away, a_abbr, a_ml_close), (home, h_abbr, h_ml_close)):
                         probs = side_comp.get("probables", [])
                         if probs:
@@ -1477,6 +1702,7 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                             pid = str(p0.get("playerId", ""))
                             p_name = p0.get("athlete", {}).get("displayName", "Unknown")
                             p_status = p0.get("status", {}).get("name", "Probable")
+                            probable_goalie_names[side_abbr] = p_name
                             _, sv_pct, gaa = goalie_stats_lookup.get(pid, (p_name, "N/A", "N/A"))
                             goalie_notes.append(f"{side_abbr}: {p_name} ({p_status}, {sv_pct} SV%, {gaa} GAA)")
                             try:
@@ -1500,14 +1726,74 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                                     f"[🎯 GOALIE MISMATCH EDGE: {h_abbr} ML ({h_g[3]:+d}) — {h_g[0]} ({h_g[1]:.3f} SV%, {h_g[2]:.2f} GAA) vs {a_g[0]} ({a_g[1]:.3f} SV%, {a_g[2]:.2f} GAA)]"
                                 )
 
+                    # MoneyPuck 5v5 xGF% + Goalie GSAx overlay
+                    mp_teams = moneypuck_data.get("teams") or {}
+                    mp_goalies = moneypuck_data.get("goalies") or {}
+                    xgf_pair = {}
+                    gsax_pair = {}
+                    a_mp_t = mp_teams.get(str(a_abbr).upper())
+                    h_mp_t = mp_teams.get(str(h_abbr).upper())
+                    if a_mp_t and h_mp_t:
+                        xgf_pair[a_abbr] = a_mp_t["xgf_pct"]
+                        xgf_pair[h_abbr] = h_mp_t["xgf_pct"]
+                        odds_summary.append(f"MoneyPuck 5v5 xGF%: {a_abbr} {a_mp_t['xgf_pct']:.1f}% vs {h_abbr} {h_mp_t['xgf_pct']:.1f}%")
+                        if (h_mp_t["xgf_pct"] - a_mp_t["xgf_pct"]) >= 4.5:
+                            tags.append(f"[🏒 MONEYPUCK xGF% EDGE: {h_abbr} {h_mp_t['xgf_pct']:.1f}% vs {a_abbr} {a_mp_t['xgf_pct']:.1f}%]")
+                        elif (a_mp_t["xgf_pct"] - h_mp_t["xgf_pct"]) >= 4.5:
+                            tags.append(f"[🏒 MONEYPUCK xGF% EDGE: {a_abbr} {a_mp_t['xgf_pct']:.1f}% vs {h_abbr} {h_mp_t['xgf_pct']:.1f}%]")
+                    if a_abbr in probable_goalie_names and h_abbr in probable_goalie_names:
+                        a_mg = mp_goalies.get(quant_signals._norm_exact(probable_goalie_names[a_abbr]))
+                        h_mg = mp_goalies.get(quant_signals._norm_exact(probable_goalie_names[h_abbr]))
+                        if a_mg and h_mg:
+                            gsax_pair[a_abbr] = a_mg["gsax"]
+                            gsax_pair[h_abbr] = h_mg["gsax"]
+                            odds_summary.append(f"Goalie GSAx: {a_abbr} {a_mg['gsax']:+.1f} vs {h_abbr} {h_mg['gsax']:+.1f}")
+                            if (h_mg["gsax"] - a_mg["gsax"]) >= 5.0:
+                                tags.append(f"[🥅 GOALIE GSAx EDGE: {h_abbr} {h_mg['name']} ({h_mg['gsax']:+.1f}) vs {a_abbr} {a_mg['name']} ({a_mg['gsax']:+.1f})]")
+                            elif (a_mg["gsax"] - h_mg["gsax"]) >= 5.0:
+                                tags.append(f"[🥅 GOALIE GSAx EDGE: {a_abbr} {a_mg['name']} ({a_mg['gsax']:+.1f}) vs {h_abbr} {h_mg['name']} ({h_mg['gsax']:+.1f})]")
+                    if xgf_pair or gsax_pair:
+                        moneypuck_info = {"xgf": xgf_pair, "gsax": gsax_pair}
+
                 # Multi-Signal Confluence Detector (2+ independent signals on the same game, excluding DO NOT CHASE warnings)
-                edge_signals = [t for t in tags if any(k in t for k in ("FATIGUE EDGE", "FORM EDGE", "🔥 SPREAD STEAM", "🔥 ML STEAM", "BPI/FPI +EV", "GOALIE MISMATCH"))]
+                edge_signals = [
+                    t
+                    for t in tags
+                    if any(
+                        k in t
+                        for k in (
+                            "FATIGUE EDGE",
+                            "3-IN-4 FATIGUE",
+                            "FORM EDGE",
+                            "🔥 SPREAD STEAM",
+                            "🔥 ML STEAM",
+                            "BPI/FPI +EV",
+                            "TORVIK +EV",
+                            "GOALIE MISMATCH",
+                            "GOALIE GSAx",
+                            "MONEYPUCK xGF%",
+                            "HOME/ROAD SPLIT",
+                            "ROAD WARRIOR",
+                            "INJURY IMPACT",
+                            "NET-DIFF EDGE",
+                        )
+                    )
+                ]
                 if len(edge_signals) >= 2:
                     tags.append(f"[🏆 A+ CONFLUENCE ({len(edge_signals)} Signals Aligned)]")
             except Exception:
                 pass
 
-            # Compute Deterministic 0-99 Confidence Meter across the 6 Pillars
+            # Compute Deterministic 0-99 Confidence Meter across Core + Multi-Model Quantitative Pillars
+            extra_signals = {
+                "split_info": split_info,
+                "injury_info": injury_info,
+                "weather_info": weather_info,
+                "net_diff_info": net_diff_info,
+                "torvik_probs": torvik_probs,
+                "moneypuck_info": moneypuck_info,
+                "density_info": density_info,
+            }
             conf_tag = ""
             try:
                 conf_tag = _compute_matchup_confidence(
@@ -1525,6 +1811,8 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                     h_bpi=h_bpi,
                     l5_parsed=l5_parsed,
                     tags=tags,
+                    extra_signals=extra_signals,
+                    pillar_weights=pillar_weights,
                 )
                 tags.append(conf_tag)
             except Exception:
@@ -1545,9 +1833,11 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                     "reason": mq_reason,
                     "rec_str": rec_str,
                     "odds_summary": " | ".join(odds_summary),
+                    "weather": weather_info,
                     "candidates": [],
                 }
-                if conf_tag and "DO NOT CHASE LATE" not in " ".join(tags):
+                tags_blob = " ".join(tags)
+                if conf_tag and "DO NOT CHASE LATE" not in tags_blob:
                     m_fg = re.search(
                         r"\[CONFIDENCE METER:\s*(\d{2,3})%\s*\|[^|]+\|\s*([^->]+?)\s*->\s*Top Play:\s*([^\]]+)\]",
                         conf_tag,
@@ -1575,6 +1865,47 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                                 "market": "Full Game",
                                 "reasons": fg_reasons,
                             })
+
+                # Severe Outdoor Weather + Non-Chased UNDER Candidate for Marquee NFL/CFB
+                if (
+                    label in ("NFL", "CFB")
+                    and weather_info.get("severe")
+                    and t_close is not None
+                    and t_under_odds is not None
+                    and -155 <= t_under_odds <= 130
+                    and "TOTAL ALREADY STEAMED" not in tags_blob
+                ):
+                    w_score = 54
+                    w_reasons = []
+                    w_mph = float(weather_info.get("wind_mph") or 0.0)
+                    if w_mph >= 18.0:
+                        w_score += 14
+                        w_reasons.append(f"Severe Wind {int(round(w_mph))}mph (+14)")
+                    elif w_mph >= 15.0:
+                        w_score += 10
+                        w_reasons.append(f"High Wind {int(round(w_mph))}mph (+10)")
+                    else:
+                        w_score += 8
+                        w_reasons.append("Severe Outdoor Weather (+8)")
+                    if weather_info.get("is_precip"):
+                        w_score += 6
+                        w_reasons.append("Rain/Snow Precip (+6)")
+                    if "TOTAL STEAM: Moved" in tags_blob and "toward UNDER" in tags_blob:
+                        w_score += 10
+                        w_reasons.append("Sharp Under Steam (+10)")
+                    if -145 <= t_under_odds <= 110:
+                        w_score += 6
+                        w_reasons.append(f"Odds Sweet-Spot {t_under_odds:+d} (+6)")
+                    else:
+                        w_score += 3
+                        w_reasons.append(f"Playable Odds {t_under_odds:+d} (+3)")
+                    mq_entry["candidates"].append({
+                        "score": min(96, w_score),
+                        "pick": f"Under {t_close} ({t_under_odds:+d})",
+                        "market": "Weather Total",
+                        "reasons": ", ".join(w_reasons),
+                    })
+
                 marquee_meta[mq_key] = mq_entry
 
             if odds_summary or tags:
@@ -1652,6 +1983,17 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
                         )
                         if p_score <= 0:
                             continue
+                        if (
+                            label == "NFL"
+                            and weather_info.get("severe")
+                            and prop_name in ("Total Passing Yards", "Total Passing Touchdowns")
+                        ):
+                            if dir_side == "Over":
+                                p_score = max(25, p_score - 8)
+                                p_reasons.append("Severe Weather Wind/Precip (-8)")
+                            elif dir_side == "Under":
+                                p_score = min(96, p_score + 6)
+                                p_reasons.append("Severe Weather Wind/Precip (+6)")
                         ps_val, ps_bar, ps_tier = _format_confidence_meter(p_score)
                         quant_props.append(
                             f"- [{label} PROP STEAM] {slot_tag} ({time_est_str}) {p_name} ({a_abbr} @ {h_abbr}) {prop_name} {dir_side} {cur_line} ({cur_odds:+d}) "
