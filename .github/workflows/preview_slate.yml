@@ -1,0 +1,59 @@
+name: Dry-Run Slate Preview (No Sheet/Telegram Writes)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Target date YYYY-MM-DD (e.g. 2026-11-28)'
+        required: true
+        default: '2026-11-28'
+        type: string
+      league:
+        description: 'League to preview'
+        required: true
+        default: 'CFB'
+        type: choice
+        options:
+          - CFB
+          - NFL
+          - NBA
+          - NHL
+          - NCAAM
+          - EPL
+          - UCL
+          - LALIGA
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PREVIEW_DATE: ${{ inputs.target_date }}
+      PREVIEW_LEAGUE: ${{ inputs.league }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Dry-Run Preview
+        run: python preview_slate.py
+
+      - name: Publish preview_output.md to isolated preview-output branch
+        run: |
+          cp preview_output.md /tmp/preview_output.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan preview-output
+          git rm -rf . >/dev/null 2>&1 || true
+          cp /tmp/preview_output.md preview_output.md
+          git add preview_output.md
+          git commit -m "Dry-run preview: ${{ inputs.target_date }} ${{ inputs.league }}"
+          git push --force origin preview-output
