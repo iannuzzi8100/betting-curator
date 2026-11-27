@@ -1387,16 +1387,27 @@ Respond ONLY with valid JSON:
 def main():
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
     today_str = est_now.strftime("%Y-%m-%d")
+    ignore_cap = str(os.environ.get("IGNORE_EXPOSURE_CAP", "")).strip().lower() in ("1", "true", "yes")
     gc, docs_service = get_google_clients()
     summary_block, recent_bets, rules_text, audit_text, ledger_meta = read_tracker_context(gc)
     intel_text = read_google_doc_text(docs_service, INTEL_DOC_ID, today_str=today_str) if INTEL_DOC_ID else "No Intel Doc ID set."
-    if ledger_meta.get("pending_lines"):
+    if ledger_meta.get("pending_lines") and not ignore_cap:
         record_pretipoff_clv(gc, intel_text)
+    curation_meta = dict(ledger_meta)
+    if ignore_cap:
+        print("IGNORE_EXPOSURE_CAP enabled: curating full Tier 1/2 + Marquee slate ignoring active pending exposure cap.", flush=True)
+        curation_meta["remaining_cap"] = curation_meta.get("max_cap", curation_meta.get("settled", 0.0))
+        curation_meta["available"] = curation_meta.get("settled", 0.0)
+        curation_meta["pending_lines"] = []
+        summary_block = (
+            summary_block
+            + "\n\n[MANUAL OVERRIDE: IGNORE EXISTING PENDING BETS & EXPOSURE CAP FOR THIS RUN — CURATE ALL QUALIFYING TIER 1 (88%+) & TIER 2 (78%+) & MARQUEE PLAYS FOR TODAY'S REMAINING SLATE.]"
+        )
     curated_message = run_argon_curation(
-        today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=ledger_meta
+        today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=curation_meta
     )
     append_to_curator_feed(gc, today_str, curated_message)
-    tg_html = format_telegram_slate(curated_message, ledger_meta=ledger_meta, today_str=today_str)
+    tg_html = format_telegram_slate(curated_message, ledger_meta=curation_meta if ignore_cap else ledger_meta, today_str=today_str)
     send_telegram_alert(tg_html, raw_message=tg_html)
 
 
