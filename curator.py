@@ -216,6 +216,47 @@ def read_tracker_context(gc):
     return summary_block, recent_bets, rules_text, audit_text, ledger_meta
 
 
+def _get_gemini_flash_models(client, max_models=4):
+    """
+    Fast, resilient Gemini Flash model selector:
+    Discovers live generateContent Flash models (including 2.5 & newer 3.x),
+    prioritizes proven fast models first, and caps attempts to avoid multi-minute hangs.
+    """
+    preferred = [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.0-flash",
+        "gemini-2.0-flash",
+    ]
+    skip_kw = (
+        "embedding", "image", "audio", "tts", "pro", "thinking",
+        "deep-research", "robotics", "computer-use", "veo", "imagen",
+        "learnlm", "1.5", "1.0",
+    )
+    try:
+        live = [
+            m.name.replace("models/", "")
+            for m in client.models.list()
+            if "generateContent" in (m.supported_actions or [])
+            and "gemini" in m.name.lower()
+            and "flash" in m.name.lower()
+            and not any(k in m.name.lower() for k in skip_kw)
+        ]
+        ordered = []
+        for m in preferred:
+            if m in live and m not in ordered:
+                ordered.append(m)
+        for m in live:
+            if m not in ordered:
+                ordered.append(m)
+        if ordered:
+            return ordered[:max_models]
+    except Exception as list_exc:
+        print(f"Model listing warning: {list_exc}")
+    return preferred[:max_models]
+
+
 def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_text, intel_text, ledger_meta=None):
     ledger_meta = ledger_meta or {"settled": 20.0, "peak": 100.0, "is_drawdown": True, "pending_total": 0.0, "available": 20.0, "max_cap": 8.0, "remaining_cap": 8.0, "pending_lines": []}
     remaining_cap = ledger_meta["remaining_cap"]
@@ -235,7 +276,7 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
 
     client = genai.Client(
         api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1beta", timeout=45_000),
+        http_options=types.HttpOptions(api_version="v1beta", timeout=30_000),
     )
     # Phase 1 Half-Kelly Smart Wager Engine (1U = 5% BR, 18% single / 58% concurrent; Drawdown Brake -> 12% / 40%)
     settled_bankroll = ledger_meta["settled"]
@@ -362,42 +403,14 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
    - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
 (Continue in chronological order for all qualifying Tier 1 & Tier 2 78%+ plays; if ZERO plays clear 78% all day, output `• Holding — no plays cleared the Tier 1/2 (78%+ confidence) floor today.`)
 """
-    candidate_models = [
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-    ]
-    skip_kw = ("embedding", "image", "audio", "tts", "pro", "thinking", "deep-research", "robotics", "computer-use", "veo", "imagen", "learnlm", "2.5", "2.0", "1.5")
-    try:
-        live_models = [
-            m.name.replace("models/", "")
-            for m in client.models.list()
-            if "generateContent" in (m.supported_actions or [])
-            and "gemini" in m.name.lower()
-            and "flash" in m.name.lower()
-            and not any(k in m.name.lower() for k in skip_kw)
-        ]
-        ordered = []
-        for m in candidate_models:
-            if m in live_models and m not in ordered:
-                ordered.append(m)
-        for m in live_models:
-            if m not in ordered:
-                ordered.append(m)
-        if ordered:
-            candidate_models = ordered[:8]
-    except Exception as list_exc:
-        print(f"Model listing warning: {list_exc}")
-
+    candidate_models = _get_gemini_flash_models(client, max_models=4)
     model_errors = []
     for round_idx in range(2):
+        round_models = candidate_models if round_idx == 0 else candidate_models[:2]
         if round_idx == 1:
-            print("Retrying Gemini models after brief 4s backoff for transient 503/504 spikes...", flush=True)
-            time.sleep(4)
-        for model_id in candidate_models:
+            print("Retrying top Gemini Flash models after brief 3s backoff...", flush=True)
+            time.sleep(3)
+        for model_id in round_models:
             try:
                 response = client.models.generate_content(
                     model=model_id,
@@ -877,7 +890,7 @@ def run_active_ticket_audit(today_str, summary_block, intel_text, ledger_meta):
     """
     client = genai.Client(
         api_key=GEMINI_API_KEY,
-        http_options=types.HttpOptions(api_version="v1beta", timeout=45_000),
+        http_options=types.HttpOptions(api_version="v1beta", timeout=30_000),
     )
     prompt = f"""
 You are the Argon Pre-Tipoff Risk & Lineup Auditor.
@@ -916,15 +929,7 @@ Bankroll: ${ledger_meta['settled']:.2f} | Pending: ${ledger_meta['pending_total'
 *Action Plan:*
 • [Either "All Clear — Hold all active tickets." OR "If Hard Rock offers full refund on BET-XXX, pivot to: [1 single best replacement play + edge]"]
 """
-    for model_id in [
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-    ]:
+    for model_id in _get_gemini_flash_models(client, max_models=3):
         try:
             resp = client.models.generate_content(model=model_id, contents=prompt)
             if resp and resp.text:
@@ -1322,7 +1327,10 @@ def record_pretipoff_clv(gc, intel_text):
         if not targets:
             return
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        client = genai.Client(
+            api_key=GEMINI_API_KEY,
+            http_options=types.HttpOptions(api_version="v1beta", timeout=25_000),
+        )
         clv_prompt = f"""
 For each pending bet below, find the current pre-tipoff market odds in the Fresh Slate Intel.
 Compute CLV% = ((implied_prob(current_odds) / implied_prob(locked_odds)) - 1) * 100 (approximate implied probability edge gained or lost from line movement).
@@ -1346,7 +1354,7 @@ Respond ONLY with valid JSON:
   ]
 }}
 """
-        for model_id in ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+        for model_id in _get_gemini_flash_models(client, max_models=3):
             try:
                 resp = client.models.generate_content(
                     model=model_id,
