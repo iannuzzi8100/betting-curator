@@ -5,8 +5,8 @@ on:
     - cron: '7,37 12-23,0-4 * * *' # Every 30 min off-peak (:07/:37, 07:07 AM–11:37 PM EST) — Fallback Telegram sync & live settlement
     - cron: '12 8 * * *'           # 03:12 AM EST — Stage 1: Settle yesterday's pending bets
     - cron: '45 11 * * 6,0'        # 06:45 AM EST (Sat & Sun) — Early Weekend EPL + CFB/NFL Time-Slot Scrape & Curate
-    - cron: '15 15 * * 1-5'        # 10:15 AM EST (Mon–Fri) — Weekday Morning Scrape & Pre-Scrape Settler
-    - cron: '30 15 * * 1-5'        # 10:30 AM EST (Mon–Fri) — Weekday Morning Curate & Telegram Slip
+    - cron: '15 13 * * 1-5'        # 08:15 AM EST (Mon–Fri) — Early Weekday Morning Scrape & Pre-Scrape Settler (Captures Opening ML CLV)
+    - cron: '30 13 * * 1-5'        # 08:30 AM EST (Mon–Fri) — Early Weekday Morning Curate & Telegram Slip
     - cron: '15 16 * * 6'          # 11:15 AM EST (Sat) — Settle Morning EPL + CFB Noon/Afternoon/Primetime Refresh
     - cron: '45 19 * * 6'          # 02:45 PM EST (Sat) — Settle Noon CFB + CFB 3:30 PM/Primetime Refresh
     - cron: '35 16 * * 0'          # 11:35 AM EST (Sun) — Settle Morning EPL + NFL 1PM Inactives Refresh
@@ -95,21 +95,21 @@ jobs:
       - name: Step 2 - Run Scraper (On Time-Slot Schedules OR Immediately After a Bet Settles)
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'scraper' || inputs.stage == ''))
         run: |
-          if [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "15 15 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "30 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "15 13 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "30 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python scraper.py
           fi
 
       - name: Step 3 - Run Curator (On Time-Slot Schedules OR Immediately After a Bet Settles)
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'curator' || inputs.stage == ''))
         run: |
-          if [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "30 15 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "30 13 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python curator.py
           fi
 
       - name: Step 4 - Rebuild & Publish Mobile Web App (Whenever Bet Logged, Settled, or Slate Updated)
         continue-on-error: true
         run: |
-          if [ -f ".tg_changed" ] || [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "12 8 * * *" ] || [ "${{ github.event.schedule }}" = "30 3 * * 1" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "30 15 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ -f ".tg_changed" ] || [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "12 8 * * *" ] || [ "${{ github.event.schedule }}" = "30 3 * * 1" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "30 13 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python dashboard_app.py --build-static
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
