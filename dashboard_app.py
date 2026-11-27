@@ -360,16 +360,43 @@ def fetch_dashboard_data():
             total_staked_settled += e["stake"]
             total_net_pl += e["net_pl"]
             settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
-            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
+            equity_curve.append({
+                "label": e["bet_id"],
+                "bankroll": round(settled_bankroll, 2),
+                "date": e["b_date"],
+                "sport": e["sport"],
+                "selection": e["sel"],
+                "result": "Won",
+                "net_pl": round(e["net_pl"], 2),
+                "stake": round(e["stake"], 2),
+            })
         elif res_l == "lost":
             overall_losses += 1
             total_staked_settled += e["stake"]
             total_net_pl += e["net_pl"]
             settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
-            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
+            equity_curve.append({
+                "label": e["bet_id"],
+                "bankroll": round(settled_bankroll, 2),
+                "date": e["b_date"],
+                "sport": e["sport"],
+                "selection": e["sel"],
+                "result": "Lost",
+                "net_pl": round(e["net_pl"], 2),
+                "stake": round(e["stake"], 2),
+            })
         elif res_l == "push":
             overall_pushes += 1
-            equity_curve.append({"label": e["bet_id"], "bankroll": round(settled_bankroll, 2)})
+            equity_curve.append({
+                "label": e["bet_id"],
+                "bankroll": round(settled_bankroll, 2),
+                "date": e["b_date"],
+                "sport": e["sport"],
+                "selection": e["sel"],
+                "result": "Push",
+                "net_pl": 0.0,
+                "stake": round(e["stake"], 2),
+            })
 
     def _classify_market(b_type, sel):
         bt = str(b_type or "").lower()
@@ -1212,7 +1239,75 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .bet-title { font-weight: 700; font-size: 0.96rem; }
     .bet-meta { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
     .bet-actions { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
-    .chart-wrap { height: 210px; position: relative; margin-top: 6px; }
+    .chart-wrap { height: 255px; position: relative; margin-top: 10px; }
+    .chart-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .chart-title-block { display: flex; flex-direction: column; gap: 2px; }
+    .chart-title-main { font-size: 0.95rem; font-weight: 700; color: var(--text); letter-spacing: 0.01em; }
+    .chart-title-sub { font-size: 0.74rem; color: var(--muted); }
+    .chart-range-tabs {
+      display: inline-flex;
+      gap: 4px;
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      border-radius: 10px;
+      padding: 3px;
+    }
+    .chart-range-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .chart-range-btn:hover { color: var(--text); }
+    .chart-range-btn.active {
+      background: rgba(59, 130, 246, 0.22);
+      color: #93c5fd;
+      box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+    }
+    .chart-kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .chart-kpi {
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-width: 0;
+    }
+    .chart-kpi-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+    .chart-kpi-val {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    @media (max-width: 560px) {
+      .chart-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .chart-wrap { height: 235px; }
+    }
     .stack { display: flex; flex-direction: column; gap: 16px; }
     .empty-msg { color: var(--muted); font-size: 0.9rem; padding: 8px 0; }
 
@@ -1659,8 +1754,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       <!-- 5. BANKROLL EQUITY CURVE GRAPH -->
       <div class="card">
-        <div class="section-title">
-          <span>Bankroll Equity Curve ($100 Start)</span>
+        <div class="chart-header-row">
+          <div class="chart-title-block">
+            <span class="chart-title-main">Bankroll Equity Curve</span>
+            <span class="chart-title-sub" id="eq-range-subtitle">$100.00 Start &bull; Tap or drag to inspect any bet</span>
+          </div>
+          <div class="chart-range-tabs" role="tablist" aria-label="Equity chart timeframe">
+            <button type="button" class="chart-range-btn active" id="eq-tab-all" onclick="setEquityRange('all')">All</button>
+            <button type="button" class="chart-range-btn" id="eq-tab-30b" onclick="setEquityRange('30b')">30B</button>
+            <button type="button" class="chart-range-btn" id="eq-tab-15b" onclick="setEquityRange('15b')">15B</button>
+            <button type="button" class="chart-range-btn" id="eq-tab-7d" onclick="setEquityRange('7d')">7D</button>
+          </div>
+        </div>
+        <div class="chart-kpi-strip">
+          <div class="chart-kpi">
+            <div class="chart-kpi-label">Range P&amp;L</div>
+            <div class="chart-kpi-val" id="eq-kpi-pnl">--</div>
+          </div>
+          <div class="chart-kpi">
+            <div class="chart-kpi-label">Peak</div>
+            <div class="chart-kpi-val" id="eq-kpi-peak">--</div>
+          </div>
+          <div class="chart-kpi">
+            <div class="chart-kpi-label">Low</div>
+            <div class="chart-kpi-val" id="eq-kpi-low">--</div>
+          </div>
+          <div class="chart-kpi">
+            <div class="chart-kpi-label">From Peak</div>
+            <div class="chart-kpi-val" id="eq-kpi-dd">--</div>
+          </div>
         </div>
         <div class="chart-wrap">
           <canvas id="equityChart"></canvas>
@@ -3454,35 +3576,318 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderGradedModal(window.__activeGradedTab);
       }
 
-      // 7. Equity Curve Chart
-      const ctx = document.getElementById("equityChart").getContext("2d");
-      const labels = (data.equity_curve || []).map(p => p.label);
-      const values = (data.equity_curve || []).map(p => p.bankroll);
+      // 7. Equity Curve Chart (Interactive Range Tabs + KPI Strip + Rich Bet Tooltips)
+      renderEquityChart(data);
+    }
+
+    let equityChartRange = "all";
+    function setEquityRange(rangeKey) {
+      equityChartRange = rangeKey || "all";
+      ["all", "30b", "15b", "7d"].forEach(k => {
+        const btn = document.getElementById(`eq-tab-${k}`);
+        if (btn) btn.classList.toggle("active", k === equityChartRange);
+      });
+      if (currentData) renderEquityChart(currentData);
+    }
+
+    function renderEquityChart(data) {
+      const canvas = document.getElementById("equityChart");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const rawCurve = (data && data.equity_curve) || [];
+      if (!rawCurve.length) return;
+
+      // Cross-reference settled ticket metadata by bet_id so older snapshots also get rich tooltips & 7D dates
+      const ticketLookup = {};
+      const ticketSources = [
+        (data && data.settled_tickets) || [],
+        (data && data.week_stats && data.week_stats.tickets) || [],
+        (data && data.yesterday_stats && data.yesterday_stats.tickets) || [],
+        (data && data.today_stats && data.today_stats.tickets) || [],
+      ];
+      ticketSources.forEach(list => {
+        list.forEach(t => {
+          const bid = String(t && t.bet_id || "").trim();
+          if (bid && !ticketLookup[bid]) ticketLookup[bid] = t;
+        });
+      });
+
+      const enriched = rawCurve.map((pt, idx) => {
+        const lbl = String(pt.label || "");
+        const br = Number(pt.bankroll || 0);
+        const prevBr = idx > 0 ? Number(rawCurve[idx - 1].bankroll || br) : br;
+        const t = ticketLookup[lbl] || null;
+        const netPl = pt.net_pl != null ? Number(pt.net_pl) : (t && t.net_pl != null ? Number(t.net_pl) : (idx > 0 ? Math.round((br - prevBr) * 100) / 100 : 0));
+        return {
+          label: lbl,
+          bankroll: br,
+          date: pt.date || (t && t.date) || "",
+          sport: pt.sport || (t && t.sport) || "",
+          selection: pt.selection || (t && (t.selections || t.selection)) || "",
+          result: pt.result || (t && t.result) || (idx === 0 ? "Start" : (netPl > 0.005 ? "Won" : (netPl < -0.005 ? "Lost" : "Push"))),
+          net_pl: netPl,
+        };
+      });
+
+      // Slice by selected timeframe (preserving the immediately preceding point as range anchor so Range P&L is exact)
+      let sliced = enriched;
+      let rangeSubtitle = "$100.00 Start • Tap or drag to inspect any bet";
+      if (equityChartRange === "30b" && enriched.length > 31) {
+        sliced = enriched.slice(enriched.length - 31);
+        rangeSubtitle = `Last 30 settled bets (${sliced[1].label} to ${sliced[sliced.length - 1].label})`;
+      } else if (equityChartRange === "15b" && enriched.length > 16) {
+        sliced = enriched.slice(enriched.length - 16);
+        rangeSubtitle = `Last 15 settled bets (${sliced[1].label} to ${sliced[sliced.length - 1].label})`;
+      } else if (equityChartRange === "7d") {
+        const todayStr = String((data && data.today) || "").trim();
+        let cutoffStr = "";
+        if (/^\d{4}-\d{2}-\d{2}$/.test(todayStr)) {
+          const d0 = new Date(`${todayStr}T12:00:00Z`);
+          d0.setUTCDate(d0.getUTCDate() - 6);
+          cutoffStr = d0.toISOString().slice(0, 10);
+        }
+        const firstIdx = cutoffStr ? enriched.findIndex((p, i) => i > 0 && p.date && p.date >= cutoffStr) : -1;
+        if (firstIdx > 0) {
+          sliced = enriched.slice(Math.max(0, firstIdx - 1));
+          const betCnt = Math.max(0, sliced.length - 1);
+          rangeSubtitle = `Last 7 days (${betCnt} settled bet${betCnt === 1 ? "" : "s"})`;
+        } else {
+          sliced = enriched.slice(Math.max(0, enriched.length - 11));
+          rangeSubtitle = `Recent 7-day window (${Math.max(0, sliced.length - 1)} settled bets)`;
+        }
+      } else {
+        const totalBets = Math.max(0, enriched.length - 1);
+        rangeSubtitle = `$100.00 Start • ${totalBets} settled bet${totalBets === 1 ? "" : "s"}`;
+      }
+
+      const values = sliced.map(p => p.bankroll);
+      const labels = sliced.map(p => p.label);
+      const startVal = values[0];
+      const endVal = values[values.length - 1];
+      const peakVal = Math.max(...values);
+      const lowVal = Math.min(...values);
+      const deltaVal = endVal - startVal;
+      const deltaPct = startVal > 0 ? (deltaVal / startVal) * 100 : 0;
+      const ddPct = peakVal > 0 ? ((endVal - peakVal) / peakVal) * 100 : 0;
+      const isUp = deltaVal >= -0.005;
+
+      // Update header subtitle & 4-chip KPI strip
+      const subEl = document.getElementById("eq-range-subtitle");
+      if (subEl) subEl.textContent = rangeSubtitle;
+      const pnlEl = document.getElementById("eq-kpi-pnl");
+      if (pnlEl) {
+        const sign = deltaVal >= 0 ? "+" : "-";
+        pnlEl.textContent = `${sign}${fmtMoney(Math.abs(deltaVal))} (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%)`;
+        pnlEl.style.color = isUp ? "#34d399" : "#fb7185";
+      }
+      const peakEl = document.getElementById("eq-kpi-peak");
+      if (peakEl) peakEl.textContent = fmtMoney(peakVal);
+      const lowEl = document.getElementById("eq-kpi-low");
+      if (lowEl) lowEl.textContent = fmtMoney(lowVal);
+      const ddEl = document.getElementById("eq-kpi-dd");
+      if (ddEl) {
+        if (Math.abs(ddPct) < 0.05) {
+          ddEl.textContent = "At Peak";
+          ddEl.style.color = "#34d399";
+        } else {
+          ddEl.textContent = `${ddPct.toFixed(1)}%`;
+          ddEl.style.color = ddPct <= -20 ? "#fb7185" : "#fbbf24";
+        }
+      }
+
+      const strokeColor = isUp ? "#10b981" : "#f43f5e";
+      const glowColor = isUp ? "rgba(16, 185, 129, 0.32)" : "rgba(244, 63, 94, 0.30)";
+      const baselineVal = equityChartRange === "all" ? 100.0 : startVal;
+      const baselineLabel = equityChartRange === "all" ? "$100 Start" : `Start ${fmtMoney(startVal)}`;
+
+      // Smart Y-axis breathing room
+      const span = Math.max(4, peakVal - lowVal);
+      const pad = Math.max(2.5, span * 0.14);
+      const yMin = Math.max(0, Math.floor((lowVal - pad) / 5) * 5);
+      const yMax = Math.ceil((Math.max(peakVal, equityChartRange === "all" ? 100 : peakVal) + pad) / 5) * 5;
+
+      const equityOverlayPlugin = {
+        id: "equityOverlayPlugin",
+        afterDatasetsDraw(chart) {
+          const { ctx: c, chartArea, scales } = chart;
+          if (!chartArea || !scales || !scales.y) return;
+          c.save();
+
+          // 1. Dashed Baseline Reference Line + Subtle Pill Label
+          const yBase = scales.y.getPixelForValue(baselineVal);
+          if (yBase >= chartArea.top + 4 && yBase <= chartArea.bottom - 4) {
+            c.beginPath();
+            c.setLineDash([5, 5]);
+            c.strokeStyle = "rgba(148, 163, 184, 0.38)";
+            c.lineWidth = 1.15;
+            c.moveTo(chartArea.left, yBase);
+            c.lineTo(chartArea.right, yBase);
+            c.stroke();
+            c.setLineDash([]);
+
+            c.font = "600 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+            const txtW = c.measureText(baselineLabel).width;
+            const pillW = txtW + 10;
+            const pillH = 16;
+            const pillX = chartArea.right - pillW - 2;
+            const pillY = Math.max(chartArea.top + 2, yBase - pillH - 3);
+            c.fillStyle = "rgba(15, 23, 42, 0.88)";
+            c.strokeStyle = "rgba(148, 163, 184, 0.28)";
+            c.lineWidth = 1;
+            c.beginPath();
+            if (typeof c.roundRect === "function") c.roundRect(pillX, pillY, pillW, pillH, 4);
+            else c.rect(pillX, pillY, pillW, pillH);
+            c.fill();
+            c.stroke();
+            c.fillStyle = "#cbd5e1";
+            c.textBaseline = "middle";
+            c.fillText(baselineLabel, pillX + 5, pillY + pillH / 2);
+          }
+
+          // 2. Vertical Scrub / Hover Crosshair Guide
+          const activeEls = chart.tooltip && chart.tooltip._active;
+          if (activeEls && activeEls.length > 0 && activeEls[0].element) {
+            const xPos = activeEls[0].element.x;
+            c.beginPath();
+            c.setLineDash([3, 3]);
+            c.strokeStyle = "rgba(148, 163, 184, 0.45)";
+            c.lineWidth = 1;
+            c.moveTo(xPos, chartArea.top);
+            c.lineTo(xPos, chartArea.bottom);
+            c.stroke();
+            c.setLineDash([]);
+          }
+
+          // 3. Glowing Endpoint Dot on Latest Bankroll Point
+          const meta = chart.getDatasetMeta(0);
+          if (meta && meta.data && meta.data.length > 0) {
+            const lastPt = meta.data[meta.data.length - 1];
+            if (lastPt && isFinite(lastPt.x) && isFinite(lastPt.y)) {
+              c.beginPath();
+              c.arc(lastPt.x, lastPt.y, 7.5, 0, Math.PI * 2);
+              c.fillStyle = glowColor;
+              c.fill();
+              c.beginPath();
+              c.arc(lastPt.x, lastPt.y, 3.8, 0, Math.PI * 2);
+              c.fillStyle = strokeColor;
+              c.fill();
+              c.lineWidth = 1.6;
+              c.strokeStyle = "#0b1220";
+              c.stroke();
+            }
+          }
+          c.restore();
+        }
+      };
+
       if (chartInstance) chartInstance.destroy();
       chartInstance = new Chart(ctx, {
         type: "line",
         data: {
           labels,
           datasets: [{
-            label: "Bankroll ($)",
+            label: "Bankroll",
             data: values,
-            borderColor: "#10b981",
-            backgroundColor: "rgba(16, 185, 129, 0.14)",
-            borderWidth: 2.5,
-            pointRadius: 2,
+            borderColor: strokeColor,
+            backgroundColor: (context) => {
+              const ch = context.chart;
+              const area = ch && ch.chartArea;
+              if (!area) return isUp ? "rgba(16, 185, 129, 0.14)" : "rgba(244, 63, 94, 0.14)";
+              const grad = ch.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+              if (isUp) {
+                grad.addColorStop(0, "rgba(16, 185, 129, 0.30)");
+                grad.addColorStop(0.75, "rgba(16, 185, 129, 0.06)");
+                grad.addColorStop(1, "rgba(16, 185, 129, 0.0)");
+              } else {
+                grad.addColorStop(0, "rgba(244, 63, 94, 0.26)");
+                grad.addColorStop(0.75, "rgba(244, 63, 94, 0.05)");
+                grad.addColorStop(1, "rgba(244, 63, 94, 0.0)");
+              }
+              return grad;
+            },
+            borderWidth: 2.4,
+            pointRadius: sliced.length <= 20 ? 2.5 : 0,
+            pointHoverRadius: 5,
+            pointBackgroundColor: strokeColor,
+            pointHoverBackgroundColor: strokeColor,
+            pointHoverBorderColor: "#0b1220",
+            pointHoverBorderWidth: 2,
             fill: true,
-            tension: 0.25
+            tension: 0.28,
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
+          interaction: { mode: "index", intersect: false },
+          animation: { duration: 280 },
+          layout: { padding: { top: 8, right: 8, left: 0, bottom: 0 } },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: "rgba(15, 23, 42, 0.96)",
+              titleColor: "#f8fafc",
+              bodyColor: "#cbd5e1",
+              borderColor: "rgba(148, 163, 184, 0.28)",
+              borderWidth: 1,
+              padding: 10,
+              cornerRadius: 10,
+              displayColors: false,
+              callbacks: {
+                title: (items) => {
+                  if (!items || !items.length) return "";
+                  const pt = sliced[items[0].dataIndex];
+                  if (!pt) return "";
+                  const parts = [pt.label];
+                  if (pt.date) parts.push(pt.date);
+                  if (pt.sport) parts.push(pt.sport);
+                  return parts.join(" • ");
+                },
+                label: (item) => {
+                  const pt = sliced[item.dataIndex];
+                  if (!pt) return "";
+                  const lines = [`Bankroll: ${fmtMoney(pt.bankroll)}`];
+                  if (pt.label !== "START") {
+                    const pl = Number(pt.net_pl || 0);
+                    const sgn = pl >= 0 ? "+" : "-";
+                    lines.push(`Result: ${pt.result} (${sgn}${fmtMoney(Math.abs(pl))})`);
+                  }
+                  if (pt.selection) {
+                    const cleanSel = stripEmojis(String(pt.selection)).trim();
+                    lines.push(cleanSel.length > 44 ? cleanSel.slice(0, 41) + "..." : cleanSel);
+                  }
+                  return lines;
+                }
+              }
+            }
+          },
           scales: {
-            x: { ticks: { color: "#94a3b8", maxTicksLimit: 10 }, grid: { color: "rgba(148,163,184,0.08)" } },
-            y: { ticks: { color: "#94a3b8", callback: v => "$" + v }, grid: { color: "rgba(148,163,184,0.08)" } }
+            x: {
+              border: { display: false },
+              grid: { display: false },
+              ticks: {
+                color: "#64748b",
+                font: { size: 10, weight: "600" },
+                maxTicksLimit: 6,
+                maxRotation: 0,
+                autoSkipPadding: 14,
+              }
+            },
+            y: {
+              min: yMin,
+              max: yMax,
+              border: { display: false },
+              grid: { color: "rgba(148, 163, 184, 0.08)" },
+              ticks: {
+                color: "#64748b",
+                font: { size: 10, weight: "600" },
+                maxTicksLimit: 5,
+                callback: v => "$" + Number(v).toFixed(0),
+              }
+            }
           }
-        }
+        },
+        plugins: [equityOverlayPlugin],
       });
     }
 
