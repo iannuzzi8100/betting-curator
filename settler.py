@@ -125,7 +125,7 @@ def get_tracker_sheet(workbook=None):
 
 # --- 2. FETCH FINAL SCORES & PLAYER BOX SCORES FROM ESPN ---
 def fetch_boxscore_players(path, event_id, league_name):
-    """Fetches player box-score stats for completed games to grade player props (NHL G/A/PTS/SOG, NBA PTS/REB/AST/PRA)."""
+    """Fetches player box-score stats for completed games to grade player props (NHL G/A/PTS/SOG, NBA PTS/REB/AST/PRA, NFL/CFB passing/rushing/receiving)."""
     url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/summary?event={event_id}"
     players_out = {}
     try:
@@ -135,6 +135,7 @@ def fetch_boxscore_players(path, event_id, league_name):
         box = res.json().get("boxscore", {})
         for team_block in box.get("players", []):
             for stat_group in team_block.get("statistics", []):
+                group_name = str(stat_group.get("name", "") or "").strip().lower()
                 labels = [lbl.upper() for lbl in stat_group.get("labels", [])]
                 for ath_entry in stat_group.get("athletes", []):
                     ath_name = ath_entry.get("athlete", {}).get("displayName", "")
@@ -163,9 +164,30 @@ def fetch_boxscore_players(path, event_id, league_name):
                             }
                         except Exception:
                             pass
+                    elif league_name in ("NFL", "CFB"):
+                        p_dict = players_out.setdefault(ath_name, {})
+                        try:
+                            if group_name == "passing" and "YDS" in stat_map:
+                                p_dict["PASS_YDS"] = int(float(stat_map.get("YDS", 0) or 0))
+                                p_dict["PASS_TD"] = int(float(stat_map.get("TD", 0) or 0))
+                                c_att = str(stat_map.get("C/ATT", "") or "")
+                                if "/" in c_att:
+                                    cp_s, att_s = c_att.split("/", 1)
+                                    p_dict["COMP"] = int(float(cp_s or 0))
+                                    p_dict["ATT"] = int(float(att_s or 0))
+                            elif group_name == "rushing" and "YDS" in stat_map:
+                                p_dict["RUSH_YDS"] = int(float(stat_map.get("YDS", 0) or 0))
+                                p_dict["CAR"] = int(float(stat_map.get("CAR", 0) or 0))
+                                p_dict["RUSH_TD"] = int(float(stat_map.get("TD", 0) or 0))
+                            elif group_name == "receiving" and "YDS" in stat_map:
+                                p_dict["REC_YDS"] = int(float(stat_map.get("YDS", 0) or 0))
+                                p_dict["REC"] = int(float(stat_map.get("REC", 0) or 0))
+                                p_dict["REC_TD"] = int(float(stat_map.get("TD", 0) or 0))
+                        except Exception:
+                            pass
     except Exception:
         pass
-    return players_out
+    return {k: v for k, v in players_out.items() if v}
 
 
 def fetch_final_scores(target_dates, pending_bets=None):
@@ -182,11 +204,16 @@ def fetch_final_scores(target_dates, pending_bets=None):
     for b in (pending_bets or []):
         sp_c = _canonical_sport(b.get("sport", ""))
         b_txt = f"{b.get('selections', '')} {b.get('notes', '')}".lower()
-        is_prop = bool(re.search(r"\b(?:rebounds?|assists?|points?|shots?|sog|goals?|pra|pts|reb|ast)\b", b_txt))
+        is_prop = bool(
+            re.search(
+                r"\b(?:rebounds?|assists?|points?|shots?|sog|goals?|pra|pts|reb|ast|yards?|passing|rushing|receiving|receptions?|carries|completions?|attempts?|touchdowns?)\b",
+                b_txt,
+            )
+        )
         if not sp_c or sp_c in ("MULTI-SPORT", "SOCCER", "OTHER"):
             has_unscoped_sport = True
             if is_prop:
-                prop_leagues.update(("NHL", "NBA"))
+                prop_leagues.update(("NHL", "NBA", "NFL"))
         else:
             needed_leagues.add(sp_c)
             if is_prop:
@@ -260,8 +287,8 @@ def fetch_final_scores(target_dates, pending_bets=None):
                             for abbr in (home_abbr, away_abbr)
                         )
                     )
-                    # Keep completed NHL/NBA games when there is a prop bet in that league (player props may omit team name)
-                    is_relevant = team_matched or (is_completed and league_name in ("NHL", "NBA") and league_name in prop_leagues)
+                    # Keep completed NHL/NBA/NFL games when there is a prop bet in that league (player props may omit team name)
+                    is_relevant = team_matched or (is_completed and league_name in ("NHL", "NBA", "NFL") and league_name in prop_leagues)
                     if not is_relevant:
                         continue
 
@@ -280,13 +307,13 @@ def fetch_final_scores(target_dates, pending_bets=None):
                     "status": status_type.get("description", state)
                 }
 
-                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM games with a matching prop bet
+                # Attach player box-score stats ONLY for completed NBA/NHL/NCAAM/NFL/CFB games with a matching prop bet
                 if (
                     is_completed
                     and event_id
-                    and league_name in ("NHL", "NBA", "NCAAM")
+                    and league_name in ("NHL", "NBA", "NCAAM", "NFL", "CFB")
                     and league_name in prop_leagues
-                    and (team_matched or league_name in ("NHL", "NBA"))
+                    and (team_matched or league_name in ("NHL", "NBA", "NFL"))
                 ):
                     player_stats = fetch_boxscore_players(path, event_id, league_name)
                     if player_stats:
@@ -497,6 +524,12 @@ def _grade_player_prop_deterministic(bet, final_games):
 
     # Identify stat category
     stat_patterns = [
+        ("PASS_YDS", r"\b(?:passing\s+yards?|pass\s+yards?|pass\s+yds)\b"),
+        ("RUSH_YDS", r"\b(?:rushing\s+yards?|rush\s+yards?|rush\s+yds)\b"),
+        ("REC_YDS", r"\b(?:receiving\s+yards?|rec\s+yards?|rec\s+yds)\b"),
+        ("CAR", r"\b(?:rushing\s+attempts?|rush\s+attempts?|carries)\b"),
+        ("REC", r"\b(?:receptions?|catches)\b"),
+        ("COMP", r"\b(?:completions?|pass\s+completions?)\b"),
         ("PRA", r"\b(?:pts\s*\+\s*reb\s*\+\s*ast|points\s*\+\s*rebounds\s*\+\s*assists|pra)\b"),
         ("SOG", r"\b(?:total\s+)?(?:shots\s+on\s+goal|shots|sog)\b"),
         ("REB", r"\b(?:total\s+)?(?:rebounds?|rebs?)\b"),
@@ -515,16 +548,62 @@ def _grade_player_prop_deterministic(bet, final_games):
     if not stat_key:
         return None
 
+    sp = _canonical_sport(bet.get("sport", ""))
+    full_sel_norm = _normalize_ascii_text(sel)
+
     # Candidate player name is text before whichever comes first: stat keyword or Over/Under
     cut_pos = min(stat_pos, m_ou.start())
     cand_raw = re.sub(r"\btotal\b\s*$", "", pick[:cut_pos], flags=re.I).strip(" -:|")
     cand_norm = _normalize_ascii_text(cand_raw)
     cand_tokens = [t for t in cand_norm.split() if len(t) >= 2]
-    if not cand_norm or len(cand_norm) < 3 or cand_norm[0].isdigit():
+
+    # Nameless QB Passing Yards fallback (e.g. "Under 201.5 Passing Yards (Eagles @ Cowboys)"):
+    # If the matchup is unambiguous and ALL primary QBs (>= 10 pass attempts) in that game land on the SAME side of the line, grade deterministically!
+    if (not cand_norm or len(cand_norm) < 3 or cand_norm[0].isdigit()) and stat_key == "PASS_YDS":
+        for g in final_games:
+            if not g.get("completed"):
+                continue
+            pbox = g.get("player_boxscore") or {}
+            if not pbox:
+                continue
+            g_league = _canonical_sport(g.get("league", ""))
+            if sp and sp != "MULTI-SPORT" and g_league and g_league != sp:
+                continue
+            h_toks = [_normalize_ascii_text(g.get("home_team", "")), _normalize_ascii_text(g.get("home_short", ""))]
+            a_toks = [_normalize_ascii_text(g.get("away_team", "")), _normalize_ascii_text(g.get("away_short", ""))]
+            h_hit = any(t and len(t) >= 3 and t in full_sel_norm for t in h_toks)
+            a_hit = any(t and len(t) >= 3 and t in full_sel_norm for t in a_toks)
+            if not (h_hit and a_hit):
+                continue
+            qbs = [(nm, st) for nm, st in pbox.items() if "PASS_YDS" in st and int(st.get("ATT", 0) or 0) >= 10]
+            if not qbs:
+                continue
+            outcomes = set()
+            qb_notes = []
+            for nm, st in qbs:
+                val = float(st["PASS_YDS"])
+                if abs(val - line) < 1e-9:
+                    outcomes.add("Push")
+                elif (side == "over" and val > line) or (side == "under" and val < line):
+                    outcomes.add("Won")
+                else:
+                    outcomes.add("Lost")
+                qb_notes.append(f"{nm}: {int(val)} PASS_YDS")
+            if len(outcomes) == 1:
+                res = next(iter(outcomes))
+                tag = "WIN: Disciplined Straight / Floor Play" if res == "Won" else ("FAIL: Hook / Half-Point Variance" if res == "Lost" else "")
+                score_str = f"{g['away_team']} {int(g['away_score'])} - {g['home_team']} {int(g['home_score'])}"
+                return {
+                    "row_index": bet.get("row_index"),
+                    "bet_id": bet.get("bet_id", ""),
+                    "result": res,
+                    "edge_tag": tag,
+                    "verification_note": f"{score_str} ({', '.join(qb_notes)} vs {side.title()} {line:g}).",
+                }
         return None
 
-    sp = _canonical_sport(bet.get("sport", ""))
-    full_sel_norm = _normalize_ascii_text(sel)
+    if not cand_norm or len(cand_norm) < 3 or cand_norm[0].isdigit():
+        return None
 
     best_match = None
     best_score = 0
