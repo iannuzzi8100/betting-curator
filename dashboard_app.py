@@ -1160,6 +1160,45 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     .bet-item.curated-settled:hover {
       opacity: 0.88;
     }
+    .bet-item.bet-minimized {
+      padding: 9px 12px;
+      cursor: pointer;
+    }
+    .bet-min-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .bet-min-left {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .bet-min-title {
+      font-weight: 700;
+      font-size: 0.87rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bet-min-sub {
+      font-size: 0.74rem;
+      color: var(--muted);
+    }
+    .bet-min-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .bet-min-caret {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
     .bet-top {
       display: flex;
       justify-content: space-between;
@@ -3855,14 +3894,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         : { anticipated: false, reason: "" };
     }
 
+    const openPendingCards = new Set();
+    function togglePendingCard(betKey) {
+      if (openPendingCards.has(betKey)) openPendingCards.delete(betKey);
+      else openPendingCards.add(betKey);
+      renderPendingList(window.__pendingTickets || []);
+    }
+
     function renderPendingList(pend) {
       const pList = document.getElementById("pending-list");
-      window.__pendingTickets = pend;
-      if (!pend || pend.length === 0) {
+      const list = Array.isArray(pend) ? pend.slice() : [];
+      // Show live/final games first, then upcoming minimized tickets
+      list.sort((a, b) => {
+        const ra = (a.__espnState === "in" || a.__espnState === "post") ? 0 : 1;
+        const rb = (b.__espnState === "in" || b.__espnState === "post") ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        return (a.__estFinishMs || 0) - (b.__estFinishMs || 0);
+      });
+      window.__pendingTickets = list;
+      if (list.length === 0) {
         pList.innerHTML = `<div class="empty-msg">No active pending bets right now.</div>`;
         return;
       }
-      pList.innerHTML = pend.map((t, idx) => {
+      pList.innerHTML = list.map((t, idx) => {
+        const betKey = String(t.bet_id || idx);
+        const safeKey = esc(betKey).replace(/'/g, "\\'");
+        const isLiveOrFinal = (t.__espnState === "in" || t.__espnState === "post");
+        const isExpanded = isLiveOrFinal || openPendingCards.has(betKey);
+
+        if (!isExpanded) {
+          const spLbl = normalizeSport(t.sport);
+          const timeNote = t.__liveText || `Placed ${t.date}`;
+          return `
+          <div class="bet-item bet-minimized" onclick="togglePendingCard('${safeKey}')">
+            <div class="bet-min-row">
+              <div class="bet-min-left">
+                <div class="bet-min-title">${esc(t.bet_id)} &bull; ${esc(t.selections)}</div>
+                <div class="bet-min-sub">${esc(spLbl)} &bull; ${esc(t.odds)} &bull; <span id="live-score-${idx}">${esc(timeNote)}</span></div>
+              </div>
+              <div class="bet-min-right">
+                <span class="pill pill-amber">${fmtMoney(t.stake)} &rarr; ${fmtMoney(t.payout)}</span>
+                <span class="bet-min-caret">&#9662;</span>
+              </div>
+            </div>
+          </div>
+          `;
+        }
+
         const clvBadge = (t.clv !== null && t.clv !== undefined)
           ? ` <span class="pill ${t.clv >= 0 ? "pill-green" : "pill-red"}">CLV ${t.clv >= 0 ? "+" : ""}${t.clv}%</span>`
           : "";
@@ -3870,6 +3948,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           ? " trend-win"
           : (t.__trend === "loss" ? " trend-loss" : (t.__trend === "push" ? " trend-push" : ""));
         const liveStyle = `font-weight:700;color:${t.__liveColor || "#60a5fa"};`;
+        const minBtn = !isLiveOrFinal
+          ? `<button class="btn-mini" onclick="event.stopPropagation(); togglePendingCard('${safeKey}')">Minimize &#9652;</button>`
+          : "";
         return `
         <div class="bet-item${trendCls}">
           <div class="bet-top">
@@ -3882,6 +3963,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </div>
           <div class="bet-actions">
             <button class="btn-mini" onclick="openEditModal(window.__pendingTickets[${idx}])">Edit / Cash Out</button>
+            ${minBtn}
           </div>
         </div>
       `;
@@ -4454,6 +4536,43 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         const safeKeyAttr = esc(drawerKey).replace(/'/g, "\\'");
+        const isLoggedCard = Boolean(existingPend || existingSettled);
+        const isPlacedExpanded = isLoggedCard && openPlacedCuratedCards.has(drawerKey);
+
+        if (isLoggedCard && !isPlacedExpanded) {
+          const statusCardClsMin = existingPend ? " curated-placed" : " curated-settled";
+          const subBits = [];
+          if (dParts.startTime) subBits.push(esc(dParts.startTime));
+          if (dParts.sport) subBits.push(esc(dParts.sport));
+          if (existingPend) subBits.push(esc(existingPend.bet_id));
+          else if (existingSettled) subBits.push(esc(existingSettled.bet_id));
+          if (p.__liveText) subBits.push(`<span style="color:${p.__liveColor || "#94a3b8"};font-weight:700;">${esc(p.__liveText)}</span>`);
+
+          let rightPill = "";
+          if (existingPend) {
+            rightPill = `<span class="pill pill-green">PLACED &bull; ${fmtMoney(existingPend.stake)}</span>`;
+          } else if (existingSettled) {
+            const resU = String(existingSettled.result || "").toUpperCase();
+            const resCls = resU === "WON" ? "pill-green" : (resU === "PUSH" ? "pill-amber" : "pill-red");
+            const plSign = Number(existingSettled.net_pl || 0) >= 0 ? "+" : "";
+            rightPill = `<span class="pill ${resCls}">${esc(resU)} ${plSign}${fmtMoney(existingSettled.net_pl)}</span>`;
+          }
+          return `
+          <div class="bet-item${statusCardClsMin} bet-minimized" onclick="togglePlacedCuratedCard('${safeKeyAttr}')">
+            <div class="bet-min-row">
+              <div class="bet-min-left">
+                <div class="bet-min-title">${esc(stripEmojis(dParts.betText))}</div>
+                <div class="bet-min-sub">${subBits.join(" &bull; ")}</div>
+              </div>
+              <div class="bet-min-right">
+                ${rightPill}
+                <span class="bet-min-caret">&#9662;</span>
+              </div>
+            </div>
+          </div>
+          `;
+        }
+
         const clickAttr = isPass ? "" : ` style="cursor:pointer;transition:background 0.15s;" onclick="toggleCuratedDetail('${domId}', '${safeKeyAttr}')"`;
         const liveScoreBadge = p.__liveText
           ? `<span style="font-size:0.74rem;font-weight:700;color:${p.__liveColor || "#94a3b8"};">${esc(p.__liveText)}</span>`
@@ -4479,6 +4598,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const placedTopPill = existingPend
           ? `<span class="pill pill-green" style="flex-shrink:0;">PLACED</span>`
           : "";
+        const minPlacedBtn = isLoggedCard
+          ? `<button class="btn-mini" onclick="event.stopPropagation(); togglePlacedCuratedCard('${safeKeyAttr}')">Minimize &#9652;</button>`
+          : "";
+        const finalActionHtml = (isLoggedCard && actionHtml)
+          ? actionHtml.replace(/<\/div>\s*$/, `${minPlacedBtn}</div>`)
+          : actionHtml;
 
         return `
         <div class="bet-item${statusCardCls}"${clickAttr}>
@@ -4495,10 +4620,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </div>
           ${meterHtml}
           ${drawerHtml}
-          ${actionHtml}
+          ${finalActionHtml}
         </div>
       `;
       }).join("");
+    }
+
+    const openPlacedCuratedCards = new Set();
+    function togglePlacedCuratedCard(key) {
+      if (openPlacedCuratedCards.has(key)) openPlacedCuratedCards.delete(key);
+      else openPlacedCuratedCards.add(key);
+      renderCuratedList(window.__curatedPlays || [], currentData || {});
     }
 
     let curatedFilterMode = "all";
@@ -4527,7 +4659,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function renderCuratedList(plays, data) {
       const cList = document.getElementById("curated-list");
       const allPlays = plays || [];
-      allPlays.forEach((p, idx) => { p.__allIdx = idx; });
+      allPlays.forEach((p, idx) => {
+        p.__allIdx = idx;
+        if (!p.__key) p.__key = String(p.selection || p.title || idx);
+      });
       window.__curatedPlays = allPlays;
       const dateStr = (data && (data.curated_date || data.today)) || "";
       const pendList = (data && data.pending_tickets) || [];
