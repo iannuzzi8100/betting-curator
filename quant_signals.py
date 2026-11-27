@@ -176,10 +176,36 @@ def extract_game_injury_impact(sum_data, label, a_abbr, h_abbr, a_name, h_name):
 # ---------------------------------------------------------------------------
 # 3. Outdoor Weather Impact for NFL & CFB (Zero extra API calls — inside ESPN summary)
 # ---------------------------------------------------------------------------
+INDOOR_VENUE_KEYWORDS = (
+    "dome",
+    "jma wireless",
+    "carrier dome",
+    "allegiant stadium",
+    "sofi stadium",
+    "lucas oil stadium",
+    "at&t stadium",
+    "mercedes-benz stadium",
+    "u.s. bank stadium",
+    "ford field",
+    "state farm stadium",
+    "nrg stadium",
+    "alamodome",
+    "kibbie",
+    "fargodome",
+    "dakotadome",
+    "holt arena",
+    "skydome",
+    "uni-dome",
+    "alerus",
+    "superdome",
+)
+
+
 def extract_game_weather(sum_data, label):
     """
     Reads `gameInfo.weather` and `gameInfo.venue.indoor` from ESPN summary?event={id}.
     Flags severe outdoor wind (>=15 mph), freezing temp (<=28 F), or rain/snow storms.
+    Guards against known NFL/CFB domes & indoor stadiums even when ESPN omits `venue.indoor=True`.
     """
     lbl = str(label or "").upper()
     if lbl not in ("NFL", "CFB"):
@@ -187,7 +213,8 @@ def extract_game_weather(sum_data, label):
 
     gi = (sum_data or {}).get("gameInfo") or {}
     venue = gi.get("venue") or {}
-    if venue.get("indoor") is True:
+    v_name = f"{venue.get('fullName', '')} {venue.get('shortName', '')}".lower()
+    if venue.get("indoor") is True or any(k in v_name for k in INDOOR_VENUE_KEYWORDS):
         return {"severe": False, "wind_mph": 0.0, "temp_f": None, "cond": "Indoor", "is_precip": False, "tag": ""}
 
     w = gi.get("weather") or {}
