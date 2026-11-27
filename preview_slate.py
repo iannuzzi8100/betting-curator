@@ -84,6 +84,18 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
             continue
 
         div_tag = "FBS" if groups == "80" else ("FCS" if groups == "81" else label)
+        pre_ids = []
+        for e in events:
+            eid = str(e.get("id", ""))
+            if not eid or eid in seen_event_ids:
+                continue
+            if e.get("status", {}).get("type", {}).get("state", "") in ("in", "post"):
+                continue
+            if groups == "81" and not ((e.get("competitions") or [{}])[0].get("odds")):
+                continue
+            pre_ids.append(eid)
+        summary_cache = quant_signals.prefetch_espn_summaries(sport, league, pre_ids, max_workers=8, timeout=10)
+
         for ev in events:
             ev_id = str(ev.get("id", ""))
             if not ev_id or ev_id in seen_event_ids:
@@ -256,8 +268,10 @@ def run_dry_run_preview(target_date_str, league_label="CFB", out_path="preview_o
 
             # Fetch ESPN Summary (FPI WinProb, Injuries, Weather, NetDiff, L5 Form, MoneyPuck NHL)
             try:
-                sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
-                sum_data = requests.get(sum_url, timeout=10).json()
+                sum_data = summary_cache.get(ev_id)
+                if sum_data is None:
+                    sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
+                    sum_data = requests.get(sum_url, timeout=10).json()
 
                 injury_info = quant_signals.extract_game_injury_impact(sum_data, label, a_abbr, h_abbr, a_name, h_name)
                 for itag in injury_info.get("tags") or []:

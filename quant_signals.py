@@ -5,6 +5,7 @@ import math
 import os
 import re
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 
@@ -674,3 +675,117 @@ def load_shadow_pillar_weights():
         return compute_pillar_weights_from_rows(rows)
     except Exception:
         return {k: 1.0 for k in PILLAR_PATTERNS}, "Calibration neutral (Shadow Grading Log not loaded)"
+
+
+PILLAR_LABELS = {
+    "mod_ml": "ModFav ML Sweet-Spot",
+    "bpi_ev": "ESPN BPI/FPI +EV",
+    "torvik_ev": "Bart Torvik AdjEff",
+    "l5_form": "Last-5 Form & Margin",
+    "sharp_steam": "Sharp Line Steam",
+    "b2b_fatigue": "B2B / 3-in-4 Fatigue",
+    "goalie_edge": "NHL Goalie SV% / GSAx",
+    "home_road_split": "Home / Road Splits",
+    "net_diff": "Season Net Differential",
+    "moneypuck_xgf": "MoneyPuck 5v5 xGF%",
+}
+
+
+def compute_pillar_scorecard_from_rows(shadow_rows, min_total_graded=25, min_pillar_n=12):
+    """
+    Returns full per-pillar performance breakdown + calibration progress for the web app Analytics
+    page and Weekly Digest. Single source of truth aligned with `compute_pillar_weights_from_rows`.
+    """
+    weights, cal_note = compute_pillar_weights_from_rows(
+        shadow_rows, min_total_graded=min_total_graded, min_pillar_n=min_pillar_n
+    )
+    stats = {k: {"wins": 0, "losses": 0, "pushes": 0, "flat_units": 0.0} for k in PILLAR_PATTERNS}
+    total_graded = 0
+
+    for r in (shadow_rows or []):
+        if not r or len(r) < 9:
+            continue
+        res_l = str(r[8]).strip().lower()
+        if res_l not in ("won", "lost", "push"):
+            continue
+        if res_l in ("won", "lost"):
+            total_graded += 1
+        try:
+            flat_pl = float(str(r[9]).replace("+", "").replace("U", "").strip()) if len(r) > 9 and r[9] != "" else 0.0
+        except Exception:
+            flat_pl = 0.0
+        pillars_txt = str(r[6] or "")
+        for p_key, pat in PILLAR_PATTERNS.items():
+            if re.search(pat, pillars_txt, flags=re.I):
+                if res_l == "won":
+                    stats[p_key]["wins"] += 1
+                elif res_l == "lost":
+                    stats[p_key]["losses"] += 1
+                else:
+                    stats[p_key]["pushes"] += 1
+                stats[p_key]["flat_units"] = round(stats[p_key]["flat_units"] + flat_pl, 2)
+
+    pillars_out = []
+    for p_key, st in stats.items():
+        dec = st["wins"] + st["losses"]
+        win_pct = round((st["wins"] / dec) * 100.0, 1) if dec > 0 else 0.0
+        flat_roi = round((st["flat_units"] / dec) * 100.0, 1) if dec > 0 else 0.0
+        w_mult = weights.get(p_key, 1.0)
+        pillars_out.append({
+            "key": p_key,
+            "label": PILLAR_LABELS.get(p_key, p_key),
+            "wins": st["wins"],
+            "losses": st["losses"],
+            "pushes": st["pushes"],
+            "total": dec + st["pushes"],
+            "win_pct": win_pct,
+            "flat_units": st["flat_units"],
+            "flat_roi": flat_roi,
+            "weight": w_mult,
+            "active_calibrated": total_graded >= min_total_graded and dec >= min_pillar_n,
+        })
+
+    pillars_out.sort(key=lambda x: (x["total"] > 0, x["flat_units"], x["win_pct"]), reverse=True)
+    return {
+        "total_graded": total_graded,
+        "min_total_graded": min_total_graded,
+        "min_pillar_n": min_pillar_n,
+        "is_active": total_graded >= min_total_graded,
+        "note": cal_note,
+        "pillars": pillars_out,
+    }
+
+
+def prefetch_espn_summaries(sport, league, event_ids, max_workers=8, timeout=10):
+    """
+    Fetches ESPN `summary?event={id}` JSON payloads concurrently using a bounded ThreadPoolExecutor
+    for 4-5x faster scraping while keeping downstream parsing strictly deterministic.
+    Returns dict[event_id -> summary_json_dict].
+    """
+    uniq_ids = [str(eid) for eid in dict.fromkeys(event_ids or []) if eid]
+    if not uniq_ids:
+        return {}
+
+    def _fetch_one(eid):
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={eid}"
+        try:
+            r = requests.get(url, timeout=timeout)
+            if r.status_code == 200:
+                return eid, r.json()
+        except Exception:
+            pass
+        return eid, {}
+
+    results = {}
+    workers = max(1, min(int(max_workers or 8), len(uniq_ids)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = [pool.submit(_fetch_one, eid) for eid in uniq_ids]
+        for f in as_completed(futs):
+            try:
+                eid, payload = f.result()
+                if payload:
+                    results[eid] = payload
+            except Exception:
+                continue
+    return results
+

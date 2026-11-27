@@ -13,6 +13,7 @@ on:
     - cron: '35 20 * * 0'          # 03:35 PM EST (Sun) — Settle 1PM NFL + NFL 4PM/SNF Refresh
     - cron: '30 22 * * *'          # 05:30 PM EST (Daily) — Settle Afternoon + Primetime Scrape
     - cron: '45 22 * * *'          # 05:45 PM EST (Daily) — Primetime Curate / Pre-Tipoff Audit & Telegram Alert
+    - cron: '30 3 * * 1'           # 10:30 PM EST (Sunday) — Weekly Performance Recap Digest to Telegram
   workflow_dispatch:
     inputs:
       stage:
@@ -26,6 +27,8 @@ on:
           - settler
           - scraper
           - curator
+          - watchdog
+          - weekly_digest
       regrade_bet_id:
         description: 'Optional comma-separated Bet ID(s) to re-evaluate against ESPN (e.g. BET-063)'
         required: false
@@ -84,6 +87,11 @@ jobs:
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'settler' || inputs.stage == ''))
         run: python settler.py
 
+      - name: Step 1.5 - Pre-Tipoff Injury, Goalie & Reverse-Steam Watchdog (Free ESPN)
+        continue-on-error: true
+        if: github.event.schedule == '7,37 12-23,0-4 * * *' || (github.event_name == 'workflow_dispatch' && inputs.stage == 'watchdog')
+        run: python watchdog.py
+
       - name: Step 2 - Run Scraper (On Time-Slot Schedules OR Immediately After a Bet Settles)
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.stage == 'all' || inputs.stage == 'scraper' || inputs.stage == ''))
         run: |
@@ -101,7 +109,7 @@ jobs:
       - name: Step 4 - Rebuild & Publish Mobile Web App (Whenever Bet Logged, Settled, or Slate Updated)
         continue-on-error: true
         run: |
-          if [ -f ".tg_changed" ] || [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "12 8 * * *" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "30 15 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ -f ".tg_changed" ] || [ -f ".settled_changed" ] || [ "${{ github.event.schedule }}" = "12 8 * * *" ] || [ "${{ github.event.schedule }}" = "30 3 * * 1" ] || [ "${{ github.event.schedule }}" = "45 11 * * 6,0" ] || [ "${{ github.event.schedule }}" = "30 15 * * 1-5" ] || [ "${{ github.event.schedule }}" = "15 16 * * 6" ] || [ "${{ github.event.schedule }}" = "45 19 * * 6" ] || [ "${{ github.event.schedule }}" = "35 16 * * 0" ] || [ "${{ github.event.schedule }}" = "35 20 * * 0" ] || [ "${{ github.event.schedule }}" = "45 22 * * *" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             python dashboard_app.py --build-static
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -110,6 +118,11 @@ jobs:
           else
             echo "No Telegram or settlement changes detected; skipping dashboard rebuild."
           fi
+
+      - name: Step 5 - Sunday-Night Weekly Performance Recap Digest
+        continue-on-error: true
+        if: github.event.schedule == '30 3 * * 1' || (github.event_name == 'workflow_dispatch' && inputs.stage == 'weekly_digest')
+        run: python weekly_digest.py
 
       - name: Send Telegram alert on failure
         if: failure()

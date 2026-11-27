@@ -1370,8 +1370,16 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
             continue
 
         max_events = 65 if label == "CFB" else (25 if label in ("NFL", *soccer_labels) else 20)
-        for ev in events[:max_events]:
-            ev_id = ev.get("id", "")
+        sliced_events = events[:max_events]
+        pre_ids = [
+            str(e.get("id", ""))
+            for e in sliced_events
+            if e.get("id") and e.get("status", {}).get("type", {}).get("state", "") not in ("in", "post")
+        ]
+        summary_cache = quant_signals.prefetch_espn_summaries(sport, league, pre_ids, max_workers=8, timeout=10)
+
+        for ev in sliced_events:
+            ev_id = str(ev.get("id", ""))
             status_state = ev.get("status", {}).get("type", {}).get("state", "")
             # Skip already-finished OR already-live games so curator only picks upcoming playable slots
             if status_state in ("in", "post"):
@@ -1576,8 +1584,10 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
 
             # Fetch Event Summary for ESPN BPI/FPI Predictor, Injuries, Weather, Season NetDiff, L5 Form & NHL Goalies
             try:
-                sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
-                sum_data = requests.get(sum_url, timeout=10).json()
+                sum_data = summary_cache.get(ev_id)
+                if sum_data is None:
+                    sum_url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={ev_id}"
+                    sum_data = requests.get(sum_url, timeout=10).json()
 
                 # Per-Game Key Injury Auto-Adjustment (Zero extra calls)
                 injury_info = quant_signals.extract_game_injury_impact(sum_data, label, a_abbr, h_abbr, a_name, h_name)
