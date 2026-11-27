@@ -51,7 +51,9 @@ def _normalize_sport(sport):
 def _parse_curated_title_fields(title):
     sport = "CFB"
     game_time = ""
-    rest = title.strip()
+    raw_t = title.strip()
+    is_marquee = bool(re.search(r"\[MARQUEE\]", raw_t, flags=re.I))
+    rest = re.sub(r"\s*\[MARQUEE\]\s*", " ", raw_t, flags=re.I).strip()
     m_br = re.match(r"^\[([^\]]+)\]\s*(.*)$", rest)
     if m_br:
         inside = m_br.group(1)
@@ -109,6 +111,7 @@ def _parse_curated_title_fields(title):
         "odds": odds,
         "stake": stake,
         "game_time": game_time,
+        "is_marquee": is_marquee,
     }
 
 
@@ -508,7 +511,7 @@ def fetch_dashboard_data():
                 is_pass_row = (
                     "⛔" in clean_title
                     or "NO GOOD PLAY" in clean_title.upper()
-                    or bool(re.search(r"\bPASS\b", clean_title.upper()))
+                    or bool(re.search(r"\bPASS\b(?!\s+(?:YDS?|YARDS?|TDS?|ATT|COMP|INT))", clean_title.upper()))
                 )
                 # Check if confidence % is already on the trailing badge (e.g. "— [87% 💎]"), never matching "(35% Resulting BR)"
                 hm = re.search(r"[—-]\s*\[?(\d{2,3})%\s*([^\]]*)\]?$", clean_title)
@@ -4251,7 +4254,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function parseCuratedDisplayParts(play) {
       const rawTitle = String(play.title || "").trim();
-      const fb = parseTitleFallback(rawTitle);
+      const isMarquee = Boolean(play.is_marquee) || /\[MARQUEE\]/i.test(rawTitle);
+      const fb = parseTitleFallback(rawTitle.replace(/\s*\[MARQUEE\]\s*/gi, " ").trim());
 
       // 1. Clean Start Time (never show "Window X:")
       let startTime = play.__exactTime || "";
@@ -4269,6 +4273,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       // 3. Clean Team Names (Matchup) + Clean Bet
       let stripped = rawTitle
+        .replace(/\s*\[MARQUEE\]\s*/gi, " ")
         .replace(/^\[[^\]]*\]\s*/, "")
         .replace(/^\d{1,2}:\d{2}\s*[AP]M(?:\s*EST)?\s*/i, "")
         .replace(/^[•·]\s*/, "")
@@ -4308,6 +4313,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
       // Final cleanup on betText (remove any stray trailing wager, brackets, or Window tags)
       betText = betText
+        .replace(/\s*\[MARQUEE\]\s*/gi, " ")
         .replace(/\s*[—–]\s*\[?\$?\d[\d.,]*.*$/g, "")
         .replace(/\s*\(Window\s*\d+:[^)]*\)/gi, "")
         .trim();
@@ -4321,7 +4327,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         ? (unitsVal > 0 ? `${fmtMoney(wagerVal)} (${unitsVal.toFixed(1)}U)` : fmtMoney(wagerVal))
         : "";
 
-      return { startTime, sport, matchup, betText, wagerText, unitsVal };
+      return { startTime, sport, matchup, betText, wagerText, unitsVal, isMarquee };
     }
 
     function estimateCuratedStartMs(play, dateStr) {
@@ -4544,6 +4550,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           const subBits = [];
           if (dParts.startTime) subBits.push(esc(dParts.startTime));
           if (dParts.sport) subBits.push(esc(dParts.sport));
+          if (dParts.isMarquee) subBits.push(`<span style="color:#60a5fa;font-weight:700;">MARQUEE</span>`);
           if (existingPend) subBits.push(esc(existingPend.bet_id));
           else if (existingSettled) subBits.push(esc(existingSettled.bet_id));
           if (p.__liveText) subBits.push(`<span style="color:${p.__liveColor || "#94a3b8"};font-weight:700;">${esc(p.__liveText)}</span>`);
@@ -4577,10 +4584,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const liveScoreBadge = p.__liveText
           ? `<span style="font-size:0.74rem;font-weight:700;color:${p.__liveColor || "#94a3b8"};">${esc(p.__liveText)}</span>`
           : "";
+        const marqueeBadge = dParts.isMarquee
+          ? `<span class="pill pill-blue" style="font-size:0.68rem;padding:2px 7px;letter-spacing:0.04em;">MARQUEE</span>`
+          : "";
         const metaRow = `
           <div class="curated-meta">
             ${dParts.startTime ? `<span class="curated-time">${esc(dParts.startTime)}</span>` : ""}
             ${dParts.sport ? `<span class="curated-sport">${esc(dParts.sport)}</span>` : ""}
+            ${marqueeBadge}
             ${liveScoreBadge}
           </div>
         `;
@@ -4650,6 +4661,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (explicitPass) return true;
       // Never hide a play the user already placed or settled
       if (findMatchingTicketForPlay(pendList, p) || findMatchingTicketForPlay(todayList, p)) return false;
+      // Strict Tier 1 & Tier 2 gate (>= 78% confidence ONLY)
+      if (p.confidence_pct != null && Number(p.confidence_pct) < 78) return true;
       const wb = p.__wagerBreakdown || null;
       if (wb && wb.lowEdgePass) return true;
       if (p.status === "remaining" && Number(p.stake || 0) < 2.0 && !(wb && wb.cappedByOverlap)) return true;
@@ -4706,7 +4719,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (hintEl) {
         const hintParts = [];
         if (startedPlays.length > 0) hintParts.push(`${startedPlays.length} Started`);
-        if (passedPlays.length > 0) hintParts.push(`${passedPlays.length} Passed`);
+        if (passedPlays.length > 0) hintParts.push(`${passedPlays.length} Filtered`);
         hintEl.textContent = hintParts.length > 0
           ? `${hintParts.join(" • ")} →`
           : (allPlays.length > 0 ? "Full Slate →" : "");
@@ -4722,7 +4735,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       if (allPlays.length === 0) {
         cList.innerHTML = `<div class="empty-msg">${esc((data && data.curated_raw) || "No curated plays found yet.").replace(/\n/g, "<br>")}</div>`;
       } else if (upcomingPlays.length === 0 && passedPlays.length > 0) {
-        cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('all')">No playable curated bets left right now (${passedPlays.length} passed for low edge). Tap here to view Full Slate &rarr;</div>`;
+        cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('all')">No Tier 1 or Tier 2 (78%+) curated bets left right now (${passedPlays.length} filtered below 78% / low edge). Tap here to view Full Slate &rarr;</div>`;
       } else if (upcomingPlays.length === 0) {
         cList.innerHTML = `<div class="empty-msg" style="cursor:pointer;" onclick="openCuratedArchiveModal('started')">All ${startedPlays.length} curated game${startedPlays.length === 1 ? "" : "s"} for today have already started. Tap here or the title above to view them &rarr;</div>`;
       } else if (filteredUpcoming.length === 0) {

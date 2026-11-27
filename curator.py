@@ -303,43 +303,47 @@ Recent Bets:
 
 {audit_text}
 
-### 3. SCRAPED SLATE INTEL (INCLUDES DETERMINISTIC `[CONFIDENCE METER: XX% | ████████░░ | TIER ...]` TAGS)
+### 3. SCRAPED SLATE INTEL (INCLUDES `[MARQUEE BEST BET]` & `[CONFIDENCE METER: XX% ...]` TAGS)
 {intel_text[:95000]}
 
-### 4. CONFIDENCE METER & SEQUENTIAL TIME-SLOT COMPOUNDING RULES (9 HARD MANDATES):
-1. **USE THE PRE-COMPUTED `[CONFIDENCE METER: XX% ...]` SCORES FROM SECTION 3:**
-   - Every matchup in Section 3 has a deterministic Python-computed `[CONFIDENCE METER: XX% | ... | TIER ... -> Top Play: ...]` tag.
-   - Use those exact Confidence Meter scores and factor breakdowns to rank and select plays for **EVERY** remaining upcoming Time-Slot Window (strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}` — including Late Morning 10:00–11:45 AM, Early Afternoon 12:00–2:45 PM, Late Afternoon 3:00–6:00 PM, Primetime 6:30–9:00 PM, and Late Night 9:30 PM+).
+### 4. STRICT TIER 1 & TIER 2 ONLY + MARQUEE BEST-BET RULES (10 HARD MANDATES):
+1. **STRICT TIER 1 & TIER 2 ONLY (`>= 78%` CONFIDENCE FLOOR — ZERO LOW-CONFIDENCE OR PASS ROWS):**
+   - **ONLY** include plays scoring **Tier 1 (`88%–99%`)** or **Tier 2 (`78%–87%`)** from the pre-computed `[CONFIDENCE METER: XX% ...]` and `[MARQUEE BEST BET]` tags in Section 3.
+   - **NEVER** include any play below `78%` (no Tier 3, no leans, no `PASS` rows). If a window has no `78%+` play, simply omit that window.
+   - Cover remaining upcoming games strictly after `{est_now.strftime('%I:%M %p EST').lstrip('0')}` in chronological order.
    - {league_rule}
-2. **CALIBRATED HALF-KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
-   - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the single best play (or at most the top 2 highest-confidence plays) per time-slot window. NEVER stack 3–5 plays in one window and NEVER write `[Included in Hammer Slot]` — every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50`!
-   - **HARD CONCURRENT OVERLAP CAP ({max_conc_pct}% BR = ${max_conc_amt:.2f}) & SINGLE-BET CAP ({max_single_pct}% BR = ${max_single_amt:.2f}):** Never let overlapping games (across adjacent windows!) exceed {max_conc_pct}% of bankroll at risk simultaneously.
+2. **MARQUEE / PRIMETIME FULL-MARKET BEST-BET MANDATE:**
+   - Section 3 has already scanned ALL Hard Rock Bet markets (Full-Game ML, Spread, Total, 1H, and Player Props) for every major/primetime game and emitted `[MARQUEE BEST BET]` lines for the single highest-confidence bet (`>= 78%`) in each marquee game.
+   - For every `[MARQUEE BEST BET]` (`>= 78%`) in an allowed league today, include that exact highest-confidence bet (whether it is ML, Spread, Total, 1H, or a Player Prop) and tag it with `[MARQUEE]` right after the league tag: e.g. `8:20 PM EST • Away @ Home (NFL) [MARQUEE] — Pick (-115) — $XX.XX (X.XU) — 84% 💎`.
+   - If a marquee game is marked `[MARQUEE SKIP]` (no market cleared `78%`), **OMIT IT COMPLETELY** — never force a weak bet on a primetime game.
+3. **CALIBRATED HALF-KELLY & OVERLAP-SAFE WAGER SIZING (CURRENT BR = ${settled_bankroll:.2f} | 1U = ${unit_val:.2f} = 5% BR):**
+   - **STRICT MAX 2 PLAYS PER TIME-SLOT WINDOW:** Pick the highest-confidence Tier 1/2 play(s) (at most 2 per time-slot window). Every play MUST have an explicit `$XX.XX (X.XU)` wager rounded to the nearest `$0.50` (min `$2.00`).
+   - **HARD CONCURRENT OVERLAP CAP ({max_conc_pct}% BR = ${max_conc_amt:.2f}) & SINGLE-BET CAP ({max_single_pct}% BR = ${max_single_amt:.2f}):** Never let overlapping games exceed {max_conc_pct}% of bankroll at risk simultaneously.
    - **ODDS-ADJUSTED HALF-KELLY GUIDELINES (0.55x ML | 0.40x Spread/Prop | 0.30x UCL/La Liga):**
      * **🔥 TIER 1 (`88%–99%`):** Up to ~{max_single_pct}% BR (~${stake_t1_solo:.2f}, trimmed slightly on heavier `-130` to `-150` juice or spreads).
      * **💎 TIER 2 (`78%–87%`):** ~7%–12% BR (~${stake_t2_solo:.2f}), scaled down on heavier juice (`-130+`) or overlapping windows.
-     * **✅ TIER 3 (`68%–77%`):** ~4%–8% BR (~${stake_t3_solo:.2f}), min `$2.00`.
      * **🎯 $1,000 GOAL-LOCK BRAKE:** Never wager more than needed to reach `$1,000.00` total bankroll.
-     * **⛔ TIER 4 (`Below 68%`):** PASS (`$0.00`).
-3. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
+     * **⛔ BELOW 78%:** DO NOT OUTPUT (strictly omit).
+4. **100% STRAIGHT-BET COMPOUNDING ENGINE (ZERO SGPs / ZERO PARLAYS):**
    - Recommend **100% Straight Bets** (Moneyline, Spread, Total, 1st-Half, or Straight Player Prop). Never recommend SGPs or Parlays.
-4. **MONEYLINE SWEET-SPOT PRIORITY & "-155 TO +130" BAND:**
-   - **STRONGLY PRIORITIZE STRAIGHT MONEYLINES (`-110` to `-155`)** — our Era 2 ledger audit shows Moneylines at `8W-1L (88.9%, +62.1% ROI)` vs Spreads at `6W-9L (40.0%, -13.7% ROI)`. Whenever a strong favorite is available on the ML at `-155` or better, ALWAYS prefer the ML over laying `-4.5` to `-6.5`!
+5. **MONEYLINE SWEET-SPOT PRIORITY & "-155 TO +130" BAND:**
+   - **STRONGLY PRIORITIZE STRAIGHT MONEYLINES (`-110` to `-155`)** whenever a strong favorite is available on the ML at `-155` or better over laying `-4.5` to `-6.5`!
    - Restrict all plays to **`-155` to `+130`**. Never lay `-175+` heavy juice and never chase `+150+` longshots.
-5. **STRICT SPREAD DISCIPLINE (`-3.5` PREFERRED, `-6.5` HARD CAP / `-7.5` CFB):**
-   - Prefer small spreads (`-0.5` to `-3.5`). Only lay `-4.0` to `-6.5` when 2+ independent quantitative edges (BPI/FPI `+EV`, Major L5 Form, Sharp Steam, or B2B Fatigue) clearly align. Never lay steeper than `-6.5` (`-7.5` in CFB).
-6. **NEVER CHASE LATE STEAM:**
+6. **STRICT SPREAD DISCIPLINE (`-3.5` PREFERRED, `-6.5` HARD CAP / `-7.5` CFB):**
+   - Prefer small spreads (`-0.5` to `-3.5`). Only lay `-4.0` to `-6.5` when 2+ independent quantitative edges align. Never lay steeper than `-6.5` (`-7.5` in CFB).
+7. **NEVER CHASE LATE STEAM:**
    - Strictly ignore any side or total tagged `[⚠️ ... ALREADY STEAMED — DO NOT CHASE LATE]`.
-7. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
-   - Even when placing 2 dual bets in the same time window, they MUST come from **2 different games**.
-8. **STRICT FACTUAL GROUNDING (ZERO HALLUCINATIONS):**
-   - ONLY cite odds, records, L5 form, FPI/BPI numbers, and Confidence Meter scores that appear **verbatim** in Section 3 above.
-9. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
+8. **STRICT 1-BET-PER-GAME DIVERSIFICATION:**
+   - Never recommend 2 bets from the same game.
+9. **STRICT FACTUAL GROUNDING (ZERO HALLUCINATIONS):**
+   - ONLY cite odds, records, L5 form, FPI/BPI numbers, prop lines, and Confidence Meter scores that appear **verbatim** in Section 3 above.
+10. **LINEUP GUARDRAIL:** If any recommended play involves a key player listed as `Questionable` or `Day-To-Day`, append `[WAIT FOR LINEUP]`.
 
 ### STRICT FORMATTING RULES (STREAMLINED HEADLINE + EXPANDABLE DRAWER DATA):
-- Output ONLY the template below. NO extra paragraphs, NO UTC timestamps, NO square brackets around time/wager/confidence.
-- **EXACT GAME START TIME ONLY:** On every numbered play, use the game's **EXACT start time in EST** from the `(H:MM PM EST)` tag in Section 3 (e.g. `2:00 PM EST`, `7:00 PM EST`). **NEVER** use a generic window bucket label like `Window 3: 12:00 PM`.
-- On each numbered headline (`1.`, `2.`, etc.), show ONLY: `Exact Time EST • Away @ Home (League) — Bet (Odds) — $XX.XX (X.XU) — XX% Icon`. Do NOT write `Included in Hammer Slot` or `of Resulting BR`.
-- Underneath each numbered headline, include the two structured drawer lines (`- Game & Line:` and `- Confidence Math:`) so the web app can display them ONLY when the user clicks on the bet!
+- Output ONLY the template below. NO extra paragraphs, NO UTC timestamps, NO `PASS` rows.
+- **EXACT GAME START TIME ONLY:** On every numbered play, use the game's **EXACT start time in EST** from Section 3 (e.g. `3:00 PM EST`, `7:00 PM EST`).
+- On each numbered headline (`1.`, `2.`, etc.), show ONLY: `Exact Time EST • Away @ Home (League) — Bet (Odds) — $XX.XX (X.XU) — XX% Icon` (adding `[MARQUEE]` right after `(League)` for marquee/primetime games).
+- Underneath each numbered headline, include the two structured drawer lines (`- Game & Line:` and `- Confidence Math:`).
 
 🎯 *{today_str} {slate_header_tag}*
 Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
@@ -349,14 +353,14 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 *Today's Curated Plays:*
 
-1. 7:00 PM EST • Away Team @ Home Team (NBA) — Pick Name -3.5 (-110) — $XX.XX (X.XU) — 87% 💎
+1. 3:00 PM EST • Away Team @ Home Team (NFL) [MARQUEE] — Player Name Over 64.5 Rush Yds (-110) — $XX.XX (X.XU) — 84% 💎
+   - Game & Line: [Records, Full Spread / ML / Total O/U, Marquee reason, and sharp book comparison from Section 3]
+   - Confidence Math: [Base 50% + exact comma-separated Pillar/EV points from Section 3 = XX% (Tier Name)]
+
+2. 7:00 PM EST • Away Team @ Home Team (NBA) — Pick Name ML (-130) — $XX.XX (X.XU) — 89% 🔥
    - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, ESPN BPI/FPI Win Prob, and any line steam from Section 3]
    - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
-
-2. 8:00 PM EST • Away Team @ Home Team (NHL) — Pick Name (-120) — $XX.XX (X.XU) — 83% 💎
-   - Game & Line: [Records, Full Spread / ML / Total O/U, L5 Form & avg margin, Goalies/BPI, and any line steam from Section 3]
-   - Confidence Math: [Base 50% + exact comma-separated Pillar points from Section 3 = XX% (Tier Name)]
-(Continue in chronological order for every remaining time-slot window today; if a window has no 68%+ play, omit it or list `X. All Windows — ⛔ PASS (<68% Confidence)` only if zero plays qualify all day.)
+(Continue in chronological order for all qualifying Tier 1 & Tier 2 78%+ plays; if ZERO plays clear 78% all day, output `• Holding — no plays cleared the Tier 1/2 (78%+ confidence) floor today.`)
 """
     candidate_models = [
         "gemini-3.6-flash",
@@ -401,7 +405,7 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
                 )
                 if response and response.text:
                     txt = response.text.strip()
-                    if available_bankroll >= 2.0 and ("Holding —" in txt or "1." not in txt):
+                    if available_bankroll >= 2.0 and ("Holding —" in txt or "1." not in txt) and "no plays cleared" not in txt.lower():
                         msg = f"{model_id}: returned stub without numbered plays ({txt[:80]})"
                         print(msg)
                         model_errors.append(msg)
@@ -428,8 +432,8 @@ Bankroll: $XX.XX | Pending: $XX.XX | Available: $XX.XX
 
 def _filter_and_size_gemini_slate(txt, ledger_meta):
     """
-    Post-processes Gemini's curated slate with our exact Half-Kelly engine so that:
-    - Any explicit PASS or low-edge play whose Half-Kelly stake rounds below $2.00 is dropped
+    Post-processes Gemini's curated slate with our exact Tier 1/2 (>=78%) & Half-Kelly engine so that:
+    - Any explicit PASS, sub-78% (Tier 3/4), or low-edge play whose Half-Kelly stake rounds below $2.00 is dropped
       before reaching Telegram or Curator Feed.
     - Surviving plays have exact $0.50-rounded Half-Kelly $XX.XX (X.XU) wagers and clean 1..N numbering.
     """
@@ -470,7 +474,7 @@ def _filter_and_size_gemini_slate(txt, ledger_meta):
     for blk in blocks:
         hl = blk["headline"]
         clean_hl = hl.replace("*", "").strip()
-        if "⛔" in clean_hl or "NO GOOD PLAY" in clean_hl.upper() or re.search(r"\bPASS\b", clean_hl.upper()):
+        if "⛔" in clean_hl or "NO GOOD PLAY" in clean_hl.upper() or re.search(r"\bPASS\b(?!\s+(?:YDS?|YARDS?|TDS?|ATT|COMP|INT))", clean_hl.upper()):
             dropped_cnt += 1
             continue
 
@@ -508,7 +512,8 @@ def _filter_and_size_gemini_slate(txt, ledger_meta):
                     conf_pct = int(pm.group(1))
                     break
 
-        if conf_pct is not None and conf_pct < 68:
+        # Strict Tier 1 & Tier 2 gate (>= 78% confidence ONLY)
+        if conf_pct is not None and conf_pct < 78:
             dropped_cnt += 1
             continue
 
@@ -532,7 +537,7 @@ def _filter_and_size_gemini_slate(txt, ledger_meta):
 
     if dropped_cnt:
         print(
-            f"Half-Kelly Slate Filter: Kept {len(kept_blocks)} actionable play(s), dropped {dropped_cnt} PASS / low-edge (<$2 min) play(s).",
+            f"Tier 1/2 & Half-Kelly Slate Filter: Kept {len(kept_blocks)} Tier 1/2 (78%+) play(s), dropped {dropped_cnt} sub-78% / PASS / <$2 play(s).",
             flush=True,
         )
 
@@ -542,7 +547,7 @@ def _filter_and_size_gemini_slate(txt, ledger_meta):
 
     if not kept_blocks:
         out_lines.append("")
-        out_lines.append("• Holding — no remaining plays cleared the Half-Kelly $2.00 minimum edge floor after vig.")
+        out_lines.append("• Holding — no plays cleared the Tier 1/2 (78%+ confidence) & $2.00 Half-Kelly edge floor.")
         return "\n".join(out_lines)
 
     for idx, blk in enumerate(kept_blocks, start=1):
@@ -589,6 +594,80 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
     candidates = []
     seen_matchups = set()
 
+    # Pass 1: Parse [MARQUEE BEST BET] lines first so a marquee game's highest-confidence play
+    # across ALL markets (Full-Game ML/Spread/Total, 1H, or Player Props) takes precedence.
+    for ln in (intel_text or "").splitlines():
+        if "[MARQUEE BEST BET]" not in ln or "[CONFIDENCE METER:" not in ln or " -> " not in ln:
+            continue
+        hdr_part, rest_body = ln.strip().split(" -> ", 1)
+        m_mq = re.match(
+            r"^\s*-\s*\[MARQUEE BEST BET\]\s*\[([A-Z0-9]+)\]\s*\[WINDOW\s*(\d+):[^\]]*\]\s*\(([^)]+)\)\s*(.+?)\s*\((.+)\)$",
+            hdr_part.strip(),
+        )
+        if not m_mq:
+            continue
+        league = m_mq.group(1).strip().upper()
+        if league in ("CBB", "NCAAB"):
+            league = "NCAAM"
+        if allowed_leagues and league not in allowed_leagues:
+            continue
+        win_num = int(m_mq.group(2))
+        time_est = m_mq.group(3).strip()
+        matchup = m_mq.group(4).strip()
+        mq_reason = m_mq.group(5).strip()
+        rest_body = rest_body.strip()
+
+        m_cm = re.search(
+            r"\[CONFIDENCE METER:\s*(\d{2,3})%\s*\|[^|]+\|\s*([^->]+?)\s*->\s*Top Play:\s*([^\]]+)\]",
+            rest_body,
+        )
+        if not m_cm:
+            continue
+        conf_pct = int(m_cm.group(1))
+        if conf_pct < 78:
+            continue
+        tier_txt = m_cm.group(2).strip()
+        top_play_full = m_cm.group(3).strip()
+
+        pick_str = top_play_full
+        reasons_str = ""
+        m_pr = re.match(r"^(.+?\([+-]\d{3,4}\))\s*\((.+)\)$", top_play_full)
+        if m_pr:
+            pick_str = m_pr.group(1).strip()
+            reasons_str = m_pr.group(2).strip()
+
+        m_odds = re.search(r"\(([+-]\d{3,4})\)", pick_str)
+        if m_odds:
+            o_int = int(m_odds.group(1))
+            if o_int < -155 or o_int > 130:
+                continue
+
+        t_min = _time_to_min(time_est)
+        if t_min < now_min - 5:
+            continue
+
+        gl_m = re.search(r"\|\s*Game & Line:\s*(.+)$", rest_body)
+        game_line = f"{mq_reason} | {gl_m.group(1).strip()}" if gl_m else f"{mq_reason} | {matchup}"
+        mk_key = f"{league}:{matchup.lower()}"
+        if mk_key in seen_matchups:
+            continue
+        seen_matchups.add(mk_key)
+
+        candidates.append({
+            "win_num": win_num,
+            "t_min": t_min,
+            "time_est": time_est,
+            "league": league,
+            "matchup": matchup,
+            "pick": pick_str,
+            "conf_pct": conf_pct,
+            "tier": tier_txt,
+            "reasons": reasons_str,
+            "game_line": game_line,
+            "is_marquee": True,
+        })
+
+    # Pass 2: Parse standard [LEAGUE QUANT] lines (strictly Tier 1 & Tier 2 >= 78% only)
     for ln in (intel_text or "").splitlines():
         if "[CONFIDENCE METER:" not in ln or "QUANT]" not in ln:
             continue
@@ -617,7 +696,7 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
         if not m_cm:
             continue
         conf_pct = int(m_cm.group(1))
-        if conf_pct < 68:
+        if conf_pct < 78:
             continue
         tier_txt = m_cm.group(2).strip()
         top_play_full = m_cm.group(3).strip()
@@ -652,9 +731,10 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
         rec_m = re.search(r"\(([^()]*@[^()]*)\)\s*$", matchup_and_rec)
         matchup = matchup_and_rec[: rec_m.start()].strip() if rec_m else matchup_and_rec
         rec_raw = rec_m.group(1).strip() if rec_m else ""
-        if matchup in seen_matchups:
+        mk_key = f"{league}:{matchup.lower()}"
+        if mk_key in seen_matchups:
             continue
-        seen_matchups.add(matchup)
+        seen_matchups.add(mk_key)
 
         if "@" in matchup:
             a_full, h_full = [x.strip() for x in matchup.split("@", 1)]
@@ -684,18 +764,20 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
             "tier": tier_txt,
             "reasons": reasons_str,
             "game_line": game_line,
+            "is_marquee": "[MARQUEE:" in rest_body,
         })
 
-    # Group by window and keep up to top 2 highest-confidence plays per window
+    # Group by window and keep up to top 2 highest-confidence Tier 1/2 plays per window
+    # (prioritizing >= 78% Marquee Best Bets so every qualifying marquee game surfaces cleanly)
     by_win = {}
     for c in candidates:
         by_win.setdefault(c["win_num"], []).append(c)
 
     selected = []
     for w_num in sorted(by_win.keys()):
-        w_plays = sorted(by_win[w_num], key=lambda x: (-x["conf_pct"], x["t_min"]))
+        w_plays = sorted(by_win[w_num], key=lambda x: (-x["conf_pct"], 0 if x.get("is_marquee") else 1, x["t_min"]))
         if w_plays and w_plays[0]["conf_pct"] >= 88:
-            chosen = w_plays[:2] if (len(w_plays) >= 2 and w_plays[1]["conf_pct"] >= 82) else w_plays[:1]
+            chosen = w_plays[:2] if (len(w_plays) >= 2 and (w_plays[1]["conf_pct"] >= 82 or w_plays[1].get("is_marquee"))) else w_plays[:1]
         else:
             chosen = w_plays[:2]
         selected.extend(chosen)
@@ -783,13 +865,14 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
     ]
     if not selected:
         out.append("")
-        out.append("1. All Windows — ⛔ PASS (<68% Confidence — Hold bankroll for next window)")
+        out.append("• Holding — no plays cleared the Tier 1/2 (78%+ confidence) & $2.00 Half-Kelly edge floor.")
     else:
         for idx, p in enumerate(selected, start=1):
-            icon = "🔥" if p["conf_pct"] >= 88 else ("💎" if p["conf_pct"] >= 78 else "✅")
+            icon = "🔥" if p["conf_pct"] >= 88 else "💎"
+            mq_tag = " [MARQUEE]" if p.get("is_marquee") else ""
             out.append("")
             out.append(
-                f"{idx}. {p['time_est']} • {p['matchup']} ({p['league']}) — {p['pick']} — ${p['stake']:.2f} ({p['units']:.1f}U) — {p['conf_pct']}% {icon}"
+                f"{idx}. {p['time_est']} • {p['matchup']} ({p['league']}){mq_tag} — {p['pick']} — ${p['stake']:.2f} ({p['units']:.1f}U) — {p['conf_pct']}% {icon}"
             )
             out.append(f"   - Game & Line: {p['game_line']}")
             out.append(f"   - Confidence Math: {p['reasons'] or 'Deterministic 6-Pillar Score'} = {p['conf_pct']}% ({p['tier']})")
@@ -904,8 +987,9 @@ def _build_curated_inline_keyboard(message):
         if "⛔" in clean or re.search(r"\bPASS\b", clean):
             play_idx += 1
             continue
-        # Strip leading [Time — Sport] bracket or "7:00 PM EST • " prefix for a crisp iPhone button label
+        # Strip leading [Time — Sport] bracket or [MARQUEE] tag for a crisp iPhone button label
         short_label = re.sub(r"^\[[^\]]+\]\s*", "", clean).strip()
+        short_label = re.sub(r"\s*\[MARQUEE\]\s*", " ", short_label, flags=re.I).strip()
         parts = [p.strip() for p in re.split(r"\s+[—–]\s+", short_label) if p.strip()]
         if len(parts) >= 2:
             short_label = parts[1]
@@ -943,8 +1027,7 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
       1. 7:00 PM EST • Away @ Home (NBA) — Pick (-110) — $XX.XX (X.XU) — 87% 💎
 
       2. ...
-    Also enforces exact Smart Wager Engine stakes ($XX.XX (X.XU)) on every play so Telegram
-    matches the web dashboard and never displays broken Markdown, brackets, or stale sizing text.
+    Also enforces exact Smart Wager Engine stakes ($XX.XX (X.XU)) and strict Tier 1 & Tier 2 (>=78%) filtering.
     """
     raw = (curated_message or "").strip()
     if not raw:
@@ -1043,12 +1126,12 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
         body = m.group(1).replace("*", "").strip()
         is_pass = ("⛔" in body) or bool(re.search(r"\bPASS\b", body))
         if is_pass:
-            body_clean = re.sub(r"^\[([^\]]+)\]", r"\1", body)
-            parsed_plays.append({"is_pass": True, "raw_clean": body_clean})
             continue
 
         wait_lineup = bool(re.search(r"\[WAIT FOR LINEUP\]", body, flags=re.I))
-        body_no_flag = re.sub(r"\s*\[WAIT FOR LINEUP\]", "", body, flags=re.I).strip()
+        is_marquee = bool(re.search(r"\[MARQUEE\]", body, flags=re.I))
+        body_no_flag = re.sub(r"\s*\[WAIT FOR LINEUP\]", "", body, flags=re.I)
+        body_no_flag = re.sub(r"\s*\[MARQUEE\]", "", body_no_flag, flags=re.I).strip()
 
         # Split on em-dash / en-dash separators
         segs = [p.strip() for p in re.split(r"\s+[—–]\s+", body_no_flag) if p.strip()]
@@ -1065,8 +1148,12 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
             cm = re.search(r"\b(\d{2,3})%\s*(🔥|💎|✅)?", sg_unbr)
             if cm and not re.search(r"(BR|BANKROLL|RESULTING)", sg_unbr, flags=re.I):
                 conf_pct = int(cm.group(1))
-                conf_icon = cm.group(2) or ("🔥" if conf_pct >= 88 else ("💎" if conf_pct >= 78 else "✅"))
+                conf_icon = cm.group(2) or ("🔥" if conf_pct >= 88 else "💎")
                 break
+
+        # Strict Tier 1 & Tier 2 gate (>=78% only)
+        if conf_pct is not None and conf_pct < 78:
+            continue
 
         # Extract league, odds, and start time for exact Smart Wager Engine sizing
         sp_m = re.search(r"\((NCAAM|CBB|NCAAB|NBA|NHL|NFL|CFB|NCAAF|EPL|UCL|LALIGA|MLB|SOCCER)\)", header_seg, flags=re.I)
@@ -1081,6 +1168,7 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
 
         parsed_plays.append({
             "is_pass": False,
+            "is_marquee": is_marquee,
             "header_seg": header_seg,
             "pick_seg": pick_seg,
             "conf_pct": conf_pct,
@@ -1124,6 +1212,12 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
             if st > 0:
                 allocated.append({"start": p["t_min"], "end": p["e_min"], "stake": st})
 
+        # Drop any low-edge plays (<$2 min, not overlap-capped)
+        parsed_plays = [
+            p for p in parsed_plays
+            if not p.get("pick_seg") or p.get("stake", 0.0) >= 2.0 or p.get("capped_by_overlap")
+        ]
+
     # Assemble exact clean HTML message matching screenshot
     out = [
         f"🎯 <b>{html.escape(title_text)}</b>",
@@ -1142,24 +1236,20 @@ def format_telegram_slate(curated_message, ledger_meta=None, today_str=None):
     out.append("<b>Today's Curated Plays:</b>")
 
     if not parsed_plays:
-        # Fallback if message had no numbered lines
         out.append("")
-        out.append("1. All Windows — ⛔ PASS (&lt;68% Confidence)")
+        out.append("• Holding — no plays cleared the Tier 1/2 (78%+ confidence) &amp; $2.00 Half-Kelly edge floor.")
     else:
         for idx, p in enumerate(parsed_plays, start=1):
             out.append("")
-            if p["is_pass"]:
-                out.append(f"{idx}. {html.escape(p['raw_clean'])}")
-                continue
             if p.get("pick_seg"):
                 if p.get("stake", 0.0) >= 2.0:
                     wager_str = f"${p['stake']:.2f} ({p['units']:.1f}U)"
                 elif settled_br > 0:
-                    wager_str = f"Cap Full ({int(max_conc_pct * 100)}%)" if p.get("capped_by_overlap") else "Pass (Low Edge)"
+                    wager_str = f"Cap Full ({int(max_conc_pct * 100)}%)"
                 else:
-                    # Keep original wager segment cleaned of brackets if no bankroll
                     wager_str = p["orig_segs"][2].strip("[] ") if len(p["orig_segs"]) >= 3 else ""
-                pieces = [p["header_seg"], p["pick_seg"]]
+                hdr_out = f"{p['header_seg']} ⭐ MARQUEE" if p.get("is_marquee") else p["header_seg"]
+                pieces = [hdr_out, p["pick_seg"]]
                 if wager_str:
                     pieces.append(wager_str)
                 if p["conf_pct"] is not None:

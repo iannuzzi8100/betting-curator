@@ -49,8 +49,47 @@ PROP_MARKETS_BY_SPORT = {
     "basketball_nba": "spreads_h1,totals_h1,player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists",
     "basketball_ncaab": "spreads_h1,totals_h1",
     "americanfootball_ncaaf": "spreads_h1,totals_h1",
-    "americanfootball_nfl": "spreads_h1,totals_h1",
+    "americanfootball_nfl": "spreads_h1,totals_h1,player_pass_yds,player_rush_yds,player_reception_yds,player_receptions,player_rush_attempts,player_pass_tds",
     "icehockey_nhl": "player_points,player_assists,player_shots_on_goal",
+}
+
+SPORT_KEY_TO_LABEL = {
+    "basketball_nba": "NBA",
+    "icehockey_nhl": "NHL",
+    "basketball_ncaab": "NCAAM",
+    "americanfootball_ncaaf": "CFB",
+    "americanfootball_nfl": "NFL",
+    "soccer_epl": "EPL",
+    "soccer_uefa_champs_league": "UCL",
+    "soccer_spain_la_liga": "LALIGA",
+}
+
+PROP_MARKET_LABELS = {
+    "spreads_h1": "1H Spread",
+    "totals_h1": "1H Total",
+    "player_pass_yds": "Passing Yds",
+    "player_rush_yds": "Rush Yds",
+    "player_reception_yds": "Rec Yds",
+    "player_receptions": "Receptions",
+    "player_rush_attempts": "Rush Att",
+    "player_pass_tds": "Passing TDs",
+    "player_points": "Points",
+    "player_rebounds": "Rebounds",
+    "player_assists": "Assists",
+    "player_threes": "3PM",
+    "player_points_rebounds_assists": "PRA",
+    "player_shots_on_goal": "Shots on Goal",
+}
+
+MAJOR_TV_NETWORKS = {
+    "NBC", "CBS", "FOX", "ABC", "ESPN", "TNT", "TBS", "TRUTV",
+    "PRIME VIDEO", "PRIME", "AMAZON PRIME", "NETFLIX", "PEACOCK",
+}
+
+SOCCER_BIG_CLUBS = {
+    "arsenal", "liverpool", "manchester city", "manchester united",
+    "chelsea", "tottenham", "tottenham hotspur", "newcastle", "newcastle united",
+    "aston villa", "real madrid", "barcelona", "atletico madrid", "atlético madrid",
 }
 
 SHARP_BOOK_KEYS = ["pinnacle", "lowvig", "bookmaker", "fanduel", "draftkings", "betmgm", "caesars"]
@@ -173,11 +212,59 @@ def get_docs_service():
     return build("docs", "v1", credentials=creds)
 
 
+def _build_marquee_best_bet_lines(marquee_meta):
+    """
+    For every detected marquee/primetime game, pick the single highest-confidence bet across
+    ALL scanned markets (Full-Game ML/Spread/Total, 1H Spread/Total, Player Props, and Prop Steam).
+    - Emits [MARQUEE BEST BET] ONLY if the #1 candidate clears Tier 1 (>=88%) or Tier 2 (>=78%).
+    - Otherwise emits [MARQUEE SKIP] so the curator omits the game cleanly instead of forcing a weak bet.
+    """
+    best_lines = []
+    for entry in (marquee_meta or {}).values():
+        cands = entry.get("candidates") or []
+        label = entry.get("label", "")
+        slot_tag = entry.get("slot_tag", "[WINDOW 5: 6:30-9:00 PM PRIMETIME]")
+        time_est = entry.get("time_est", "TBD EST")
+        matchup = entry.get("matchup", "")
+        reason = entry.get("reason", "Marquee")
+        rec_str = entry.get("rec_str", "")
+        odds_summary = entry.get("odds_summary", "")
+
+        if not cands:
+            best_lines.append(
+                f"- [MARQUEE SKIP] [{label}] ({time_est}) {matchup} ({reason}) -> No playable market cleared Tier 2 (78%+) — SKIP"
+            )
+            continue
+
+        best = max(cands, key=lambda c: (c.get("score", 0), 1 if c.get("market") == "Full Game" else 0))
+        b_score = int(best.get("score", 0))
+        if b_score >= 78:
+            sc_val, sc_bar, sc_tier = _format_confidence_meter(b_score)
+            gl_parts = [p for p in (rec_str, odds_summary) if p]
+            gl_str = " | ".join(gl_parts) if gl_parts else matchup
+            best_lines.append(
+                f"- [MARQUEE BEST BET] [{label}] {slot_tag} ({time_est}) {matchup} ({reason}) -> "
+                f"{best['pick']} [{best.get('market', 'Best Market')}] "
+                f"[CONFIDENCE METER: {sc_val}% | {sc_bar} | {sc_tier} -> Top Play: {best['pick']} ({best.get('reasons', 'Top Marquee Market')})] "
+                f"| Game & Line: {gl_str}"
+            )
+        else:
+            best_lines.append(
+                f"- [MARQUEE SKIP] [{label}] ({time_est}) {matchup} ({reason}) -> "
+                f"Highest market ({best.get('pick', 'N/A')}) scored {b_score}% (<78% Tier 2 floor) — SKIP"
+            )
+    return best_lines
+
+
 def fetch_hardrock_odds_and_props():
     game_lines = []
     prop_lines = []
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     cutoff_utc = now_utc + datetime.timedelta(hours=36)
+
+    # 1. Run ESPN Quantitative & Marquee/Primetime Detector FIRST (100% Free & Unlimited)
+    #    so The Odds API always prioritizes every marquee/primetime game for full-market & player-prop deep scans.
+    espn_quant_games, espn_quant_props, marquee_meta = fetch_espn_quant_matchups_and_props(return_marquee_meta=True)
 
     if ODDS_API_KEY:
         for sport_key in SPORTS_ODDS_KEYS:
@@ -229,19 +316,21 @@ def fetch_hardrock_odds_and_props():
                     if not hr_book:
                         continue
 
+                    mq_entry = _find_marquee_entry(marquee_meta, sport_key, away, home)
                     is_today_slate = False
                     if commence and event_id:
                         try:
                             c_dt = datetime.datetime.fromisoformat(commence.replace("Z", "+00:00"))
                             if now_utc <= c_dt <= cutoff_utc:
                                 is_today_slate = True
-                                todays_event_ids.append((event_id, f"{away} @ {home}"))
+                                todays_event_ids.append((event_id, f"{away} @ {home}", mq_entry))
                         except Exception:
                             pass
 
                     # Multi-book sharp lookup for consensus No-Vig devigging & stale line outlier detection
                     hr_summary = []
                     ev_tags = []
+                    has_pinnacle_bulk = any(b["key"] == "pinnacle" for b in sharp_books)
                     for m in hr_book.get("markets", []):
                         m_key = m["key"]
                         outcomes_str = []
@@ -282,22 +371,52 @@ def fetch_hardrock_odds_and_props():
                                     ):
                                         stale_diffs.append(f"{sb['key']}:{s_pt}")
 
+                            ev_pct_val = 0.0
                             if fair_probs:
                                 avg_fp = sum(fair_probs) / len(fair_probs)
                                 hr_dec = american_to_decimal(o_price)
-                                ev_pct = round(((avg_fp * hr_dec) - 1.0) * 100.0, 2)
+                                ev_pct_val = round(((avg_fp * hr_dec) - 1.0) * 100.0, 2)
                                 b_dec = hr_dec - 1.0
                                 full_k = ((b_dec * avg_fp) - (1.0 - avg_fp)) / b_dec if b_dec > 0 else 0.0
                                 q_kelly = round(max(0.0, full_k * 0.25 * 100.0), 1)
-                                if ev_pct >= 1.5:
+                                if ev_pct_val >= 1.5:
                                     ev_tags.append(
                                         f"[+EV ({len(fair_probs)}B Consensus): {m_key.upper()} {o_name} {o_pt if o_pt is not None else ''} @ {o_price:+d} | "
-                                        f"FairWin: {round(avg_fp*100,1)}% | EV: +{ev_pct}% | 1/4-Kelly: {q_kelly}%]"
+                                        f"FairWin: {round(avg_fp*100,1)}% | EV: +{ev_pct_val}% | 1/4-Kelly: {q_kelly}%]"
                                     )
                             if len(stale_diffs) >= 2:
                                 ev_tags.append(
                                     f"[🔥 STALE LINE: {m_key.upper()} {o_name} {o_pt} ({o_price:+d}) on HRB vs Sharp ({', '.join(stale_diffs[:3])})]"
                                 )
+
+                            # Score every full-game market candidate for marquee games
+                            if mq_entry is not None and (ev_pct_val >= 1.5 or len(stale_diffs) >= 2):
+                                max_lay = -7.5 if sport_key == "americanfootball_ncaaf" else -6.5
+                                if not (m_key == "spreads" and o_pt is not None and o_pt < max_lay):
+                                    c_score, c_reasons = _score_market_candidate_confidence(
+                                        ev_pct=ev_pct_val,
+                                        has_line_edge=len(stale_diffs) >= 1,
+                                        stale_book_count=len(stale_diffs),
+                                        is_pinnacle=has_pinnacle_bulk,
+                                        n_sharp_books=max(len(fair_probs), len(stale_diffs)),
+                                        hr_price=o_price,
+                                    )
+                                    if c_score > 0:
+                                        if m_key == "h2h":
+                                            pick_lbl = f"{o_name} ML ({o_price:+d})"
+                                            mkt_lbl = "Sharp ML"
+                                        elif m_key == "spreads":
+                                            pick_lbl = f"{o_name} {o_pt:+.1f} ({o_price:+d})"
+                                            mkt_lbl = "Sharp Spread"
+                                        else:
+                                            pick_lbl = f"{o_name} {o_pt} ({o_price:+d})"
+                                            mkt_lbl = "Sharp Total"
+                                        mq_entry["candidates"].append({
+                                            "score": c_score,
+                                            "pick": pick_lbl,
+                                            "market": mkt_lbl,
+                                            "reasons": ", ".join(c_reasons),
+                                        })
 
                         hr_summary.append(f"{m_key.upper()}: [{', '.join(outcomes_str)}]")
 
@@ -306,13 +425,21 @@ def fetch_hardrock_odds_and_props():
 
                     ev_banner = (" -> " + " ".join(ev_tags)) if ev_tags else ""
                     sharp_label = sharp_book["key"] if sharp_book else "none"
+                    mq_prefix = f"[MARQUEE: {mq_entry['reason']}] " if mq_entry else ""
                     game_lines.append(
-                        f"- [{sport_key}] {away} @ {home} ({commence}) [SharpRef: {sharp_label}] -> {' ; '.join(hr_summary)}{ev_banner}"
+                        f"- [{sport_key}] {mq_prefix}{away} @ {home} ({commence}) [SharpRef: {sharp_label}] -> {' ; '.join(hr_summary)}{ev_banner}"
                     )
 
-                # Fetch Player Props & 1H lines for up to 4 today-slate games (only on morning run or when quota > 60)
-                if sport_key in PROP_MARKETS_BY_SPORT and todays_event_ids and rem_quota > 60:
-                    for ev_id, matchup in todays_event_ids[:4]:
+                # Prioritize MARQUEE / PRIMETIME games FIRST in per-event 1H & Player Prop deep scan
+                if sport_key in PROP_MARKETS_BY_SPORT and todays_event_ids and rem_quota > 40:
+                    marquee_evs = [x for x in todays_event_ids if x[2] is not None]
+                    other_evs = [x for x in todays_event_ids if x[2] is None]
+                    max_scan = 6 if marquee_evs else 4
+                    scan_queue = marquee_evs[:6]
+                    if rem_quota > 60 and len(scan_queue) < max_scan:
+                        scan_queue.extend(other_evs[: max_scan - len(scan_queue)])
+
+                    for ev_id, matchup, mq_entry in scan_queue:
                         ev_url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{ev_id}/odds"
                         ev_params = {
                             "apiKey": ODDS_API_KEY,
@@ -325,46 +452,103 @@ def fetch_hardrock_odds_and_props():
                             if p_resp.status_code != 200:
                                 continue
                             p_data = p_resp.json()
-                            hr_p = next((b for b in p_data.get("bookmakers", []) if b["key"] == "hardrockbet"), None)
+                            ev_books = p_data.get("bookmakers", [])
+                            hr_p = next((b for b in ev_books if b["key"] == "hardrockbet"), None)
+                            ref_books = [b for b in ev_books if b["key"] in ("pinnacle", "fanduel", "draftkings")]
                             ref_p = (
-                                next((b for b in p_data.get("bookmakers", []) if b["key"] == "pinnacle"), None)
-                                or next((b for b in p_data.get("bookmakers", []) if b["key"] == "fanduel"), None)
-                                or next((b for b in p_data.get("bookmakers", []) if b["key"] == "draftkings"), None)
+                                next((b for b in ref_books if b["key"] == "pinnacle"), None)
+                                or next((b for b in ref_books if b["key"] == "fanduel"), None)
+                                or next((b for b in ref_books if b["key"] == "draftkings"), None)
                             )
                             if not hr_p or not ref_p:
                                 continue
 
-                            ref_lookup = {}
-                            for m in ref_p.get("markets", []):
-                                for o in m.get("outcomes", []):
-                                    key = (m["key"], o.get("description", ""), o.get("name", ""))
-                                    ref_lookup[key] = (o.get("point"), o.get("price"))
+                            # Build per-book lookup so we can compute multi-book sharp consensus + Pinnacle priority
+                            ref_lookups = {}
+                            for rb in ref_books:
+                                lk = {}
+                                for rm in rb.get("markets", []):
+                                    for ro in rm.get("outcomes", []):
+                                        lk[(rm["key"], ro.get("description", ""), ro.get("name", ""))] = (
+                                            ro.get("point"),
+                                            ro.get("price"),
+                                        )
+                                ref_lookups[rb["key"]] = lk
 
                             for m in hr_p.get("markets", []):
                                 m_key = m["key"]
+                                m_disp = PROP_MARKET_LABELS.get(m_key, m_key)
                                 if m_key in ("spreads_h1", "totals_h1"):
-                                    s_outs = [
-                                        o for rm in ref_p.get("markets", []) if rm["key"] == m_key for o in rm.get("outcomes", [])
-                                    ]
                                     for o in m.get("outcomes", []):
                                         o_name = o.get("name", "")
                                         o_pt = o.get("point")
                                         o_price = o.get("price")
-                                        if len(s_outs) == 2 and o_pt is not None and o_price is not None and o_price >= -155:
-                                            s_match = next(
-                                                (x for x in s_outs if x.get("name") == o_name and x.get("point") == o_pt),
-                                                None,
-                                            )
+                                        if o_pt is None or o_price is None or o_price < -155 or o_price > 130:
+                                            continue
+                                        h1_fps = []
+                                        h1_stale = 0
+                                        h1_has_pin = False
+                                        for rb in ref_books:
+                                            s_outs = [
+                                                ro for rm in rb.get("markets", []) if rm["key"] == m_key for ro in rm.get("outcomes", [])
+                                            ]
+                                            if len(s_outs) != 2:
+                                                continue
+                                            s_same = next((x for x in s_outs if x.get("name") == o_name), None)
                                             s_other = next((x for x in s_outs if x.get("name") != o_name), None)
-                                            if s_match and s_other:
-                                                fair_p, ev_pct, q_kelly = compute_novig_ev(
-                                                    o_price, s_match["price"], s_other["price"]
-                                                )
-                                                if ev_pct >= 1.5:
-                                                    game_lines.append(
-                                                        f"- [{sport_key} 1H] {matchup} -> {m_key.upper()} {o_name} {o_pt} ({o_price:+d}) "
-                                                        f"vs {ref_p['key']} ({s_match['price']:+d}) | FairWin: {fair_p}% | EV: +{ev_pct}% | 1/4-Kelly: {q_kelly}%"
-                                                    )
+                                            if not s_same or not s_other:
+                                                continue
+                                            if s_same.get("point") == o_pt:
+                                                fp, _, _ = compute_novig_ev(o_price, s_same["price"], s_other["price"])
+                                                if fp > 0:
+                                                    h1_fps.append(fp / 100.0)
+                                                    if rb["key"] == "pinnacle":
+                                                        h1_has_pin = True
+                                            elif s_same.get("point") is not None and o_price >= -125:
+                                                sp_ref = s_same.get("point")
+                                                if (m_key == "spreads_h1" and o_pt > sp_ref) or (
+                                                    m_key == "totals_h1"
+                                                    and ((o_name == "Over" and o_pt < sp_ref) or (o_name == "Under" and o_pt > sp_ref))
+                                                ):
+                                                    h1_stale += 1
+                                                    if rb["key"] == "pinnacle":
+                                                        h1_has_pin = True
+                                        h1_ev = 0.0
+                                        fair_p = 0.0
+                                        q_kelly = 0.0
+                                        if h1_fps:
+                                            avg_fp = sum(h1_fps) / len(h1_fps)
+                                            hr_dec = american_to_decimal(o_price)
+                                            fair_p = round(avg_fp * 100.0, 1)
+                                            h1_ev = round(((avg_fp * hr_dec) - 1.0) * 100.0, 2)
+                                            b_dec = hr_dec - 1.0
+                                            full_k = ((b_dec * avg_fp) - (1.0 - avg_fp)) / b_dec if b_dec > 0 else 0.0
+                                            q_kelly = round(max(0.0, full_k * 0.25 * 100.0), 1)
+                                        if h1_ev >= 1.5 or h1_stale >= 1:
+                                            c_score, c_reasons = _score_market_candidate_confidence(
+                                                ev_pct=h1_ev,
+                                                has_line_edge=h1_stale >= 1,
+                                                stale_book_count=h1_stale,
+                                                is_pinnacle=h1_has_pin,
+                                                n_sharp_books=max(len(h1_fps), h1_stale),
+                                                hr_price=o_price,
+                                            )
+                                            cm_str = ""
+                                            if c_score >= 78:
+                                                sc_v, sc_b, sc_t = _format_confidence_meter(c_score)
+                                                cm_str = f" [CONFIDENCE METER: {sc_v}% | {sc_b} | {sc_t}]"
+                                            pt_fmt = f"{o_pt:+.1f}" if m_key == "spreads_h1" else f"{o_pt}"
+                                            game_lines.append(
+                                                f"- [{sport_key} 1H] {matchup} -> {m_disp} {o_name} {pt_fmt} ({o_price:+d}) "
+                                                f"| FairWin: {fair_p}% | EV: +{h1_ev}% | 1/4-Kelly: {q_kelly}%{cm_str}"
+                                            )
+                                            if mq_entry is not None and c_score > 0:
+                                                mq_entry["candidates"].append({
+                                                    "score": c_score,
+                                                    "pick": f"{o_name} {pt_fmt} 1H ({o_price:+d})" if m_key == "spreads_h1" else f"1H {o_name} {pt_fmt} ({o_price:+d})",
+                                                    "market": m_disp,
+                                                    "reasons": ", ".join(c_reasons),
+                                                })
                                     continue
 
                                 for o in m.get("outcomes", []):
@@ -373,47 +557,98 @@ def fetch_hardrock_odds_and_props():
                                     opp_side = "Under" if side == "Over" else "Over"
                                     hr_pt = o.get("point")
                                     hr_price = o.get("price")
-                                    ref_val = ref_lookup.get((m_key, player, side))
-                                    ref_opp = ref_lookup.get((m_key, player, opp_side))
-                                    if not ref_val or hr_pt is None or hr_price is None or hr_price < -165:
+                                    if hr_pt is None or hr_price is None or hr_price < -155 or hr_price > 130:
                                         continue
-                                    ref_pt, ref_price = ref_val
 
-                                    # Market Width (Hold) Filter: reject wide/illiquid sharp markets (> 36 cents width)
-                                    if ref_opp and ref_opp[1] is not None:
-                                        imp_sum = american_to_implied(ref_price) + american_to_implied(ref_opp[1])
-                                        if imp_sum > 1.095:
+                                    p_fps = []
+                                    stale_books = []
+                                    has_pin_prop = False
+                                    best_ref_label = ref_p["key"]
+                                    best_ref_pt = None
+                                    best_ref_price = None
+
+                                    for rb_key, lk in ref_lookups.items():
+                                        rv = lk.get((m_key, player, side))
+                                        ro_opp = lk.get((m_key, player, opp_side))
+                                        if not rv or rv[0] is None or rv[1] is None:
                                             continue
+                                        r_pt, r_pr = rv
+                                        # Market Width (Hold) Filter: reject wide/illiquid sharp markets (> 9.5% total hold)
+                                        if ro_opp and ro_opp[1] is not None:
+                                            if (american_to_implied(r_pr) + american_to_implied(ro_opp[1])) > 1.095:
+                                                continue
+                                        if best_ref_pt is None or rb_key == "pinnacle":
+                                            best_ref_label = rb_key
+                                            best_ref_pt = r_pt
+                                            best_ref_price = r_pr
 
-                                    has_line_edge = (
-                                        ((side == "Over" and hr_pt < ref_pt) or (side == "Under" and hr_pt > ref_pt))
-                                        and hr_price >= -155
-                                        and hr_price >= (ref_price - 25)
-                                    )
+                                        if hr_pt == r_pt and ro_opp and ro_opp[0] == hr_pt and ro_opp[1] is not None:
+                                            fp, _, _ = compute_novig_ev(hr_price, r_pr, ro_opp[1])
+                                            if fp > 0:
+                                                p_fps.append(fp / 100.0)
+                                                if rb_key == "pinnacle":
+                                                    has_pin_prop = True
+                                        elif (
+                                            ((side == "Over" and hr_pt < r_pt) or (side == "Under" and hr_pt > r_pt))
+                                            and hr_price >= (r_pr - 25)
+                                        ):
+                                            stale_books.append(f"{rb_key}:{r_pt}")
+                                            if rb_key == "pinnacle":
+                                                has_pin_prop = True
+
+                                    if best_ref_pt is None:
+                                        continue
+
+                                    prop_ev = 0.0
                                     ev_str = ""
-                                    if hr_pt == ref_pt and ref_opp and ref_opp[0] == hr_pt:
-                                        fair_p, ev_pct, q_kelly = compute_novig_ev(hr_price, ref_price, ref_opp[1])
-                                        if ev_pct >= 2.0:
-                                            ev_str = f" | FairWin: {fair_p}% | EV: +{ev_pct}% | 1/4-Kelly: {q_kelly}%"
+                                    if p_fps:
+                                        avg_fp = sum(p_fps) / len(p_fps)
+                                        hr_dec = american_to_decimal(hr_price)
+                                        prop_ev = round(((avg_fp * hr_dec) - 1.0) * 100.0, 2)
+                                        b_dec = hr_dec - 1.0
+                                        full_k = ((b_dec * avg_fp) - (1.0 - avg_fp)) / b_dec if b_dec > 0 else 0.0
+                                        q_kelly = round(max(0.0, full_k * 0.25 * 100.0), 1)
+                                        if prop_ev >= 2.0:
+                                            ev_str = f" | FairWin: {round(avg_fp*100,1)}% | EV: +{prop_ev}% | 1/4-Kelly: {q_kelly}%"
 
-                                    if has_line_edge or ev_str:
-                                        prop_lines.append(
-                                            f"- [{sport_key} PROP] {player} ({matchup}) {m_key} {side} {hr_pt} ({hr_price:+d}) "
-                                            f"vs {ref_p['key']} {ref_pt} ({ref_price:+d}){ev_str}"
+                                    has_line_edge = len(stale_books) >= 1
+                                    if has_line_edge or prop_ev >= 2.0:
+                                        c_score, c_reasons = _score_market_candidate_confidence(
+                                            ev_pct=prop_ev,
+                                            has_line_edge=has_line_edge,
+                                            stale_book_count=len(stale_books),
+                                            is_pinnacle=has_pin_prop,
+                                            n_sharp_books=max(len(p_fps), len(stale_books)),
+                                            hr_price=hr_price,
                                         )
+                                        cm_str = ""
+                                        if c_score >= 78:
+                                            sc_v, sc_b, sc_t = _format_confidence_meter(c_score)
+                                            cm_str = f" [CONFIDENCE METER: {sc_v}% | {sc_b} | {sc_t}]"
+                                        prop_lines.append(
+                                            f"- [{sport_key} PROP] {player} ({matchup}) {m_disp} {side} {hr_pt} ({hr_price:+d}) "
+                                            f"vs {best_ref_label} {best_ref_pt} ({best_ref_price:+d}){ev_str}{cm_str}"
+                                        )
+                                        if mq_entry is not None and c_score > 0:
+                                            mq_entry["candidates"].append({
+                                                "score": c_score,
+                                                "pick": f"{player} {side} {hr_pt} {m_disp} ({hr_price:+d})",
+                                                "market": f"Player Prop ({m_disp})",
+                                                "reasons": ", ".join(c_reasons),
+                                            })
                         except Exception:
                             continue
             except Exception as exc:
                 game_lines.append(f"- [{sport_key}] Odds fetch error: {exc}")
 
-    # Always augment with ESPN Quantitative Matchup, BPI/FPI, Steam Move, B2B Rest & Prop Steam Engine (100% Free & Unlimited)
-    espn_quant_games, espn_quant_props = fetch_espn_quant_matchups_and_props()
-    game_lines.extend(espn_quant_games)
-    prop_lines.extend(espn_quant_props)
+    # Emit Marquee / Primetime Full-Market Best Bets (strictly >= 78% Tier 1 & Tier 2; <78% skipped) at the top
+    marquee_summary_lines = _build_marquee_best_bet_lines(marquee_meta)
+    final_game_lines = marquee_summary_lines + game_lines + espn_quant_games
+    final_prop_lines = prop_lines + espn_quant_props
 
     return (
-        game_lines or ["- No active lines found for today's slate."],
-        prop_lines or ["- No positive-EV player prop discrepancies detected on today's slate."],
+        final_game_lines or ["- No active lines found for today's slate."],
+        final_prop_lines or ["- No positive-EV player prop discrepancies detected on today's slate."],
     )
 
 
@@ -444,13 +679,11 @@ def _format_confidence_meter(score):
     filled = max(1, min(10, int(round(score / 10.0))))
     bar = "█" * filled + "░" * (10 - filled)
     if score >= 88:
-        tier = "🔥 TIER 1: MAX HAMMER (50% BR)"
+        tier = "🔥 TIER 1: MAX HAMMER"
     elif score >= 78:
-        tier = "💎 TIER 2: STRONG CONVICTION (35% BR Solo / 25% Dual)"
-    elif score >= 68:
-        tier = "✅ TIER 3: SOLID EDGE (20% BR Solo / 18% Dual)"
+        tier = "💎 TIER 2: STRONG CONVICTION"
     else:
-        tier = "⛔ TIER 4: PASS (<68%)"
+        tier = "⛔ PASS (<78% — Tier 1 & 2 Only)"
     return score, bar, tier
 
 
@@ -461,6 +694,216 @@ def _parse_rec_wins_losses(rec_str):
     if m:
         return int(m.group(1)), int(m.group(2))
     return 0, 0
+
+
+def _extract_major_tv_networks(comp):
+    """Extract national TV broadcast labels (NBC, CBS, FOX, ABC, ESPN, TNT, Prime Video, Netflix, etc.)."""
+    found = []
+    seen = set()
+    raw_names = []
+    for b in comp.get("broadcasts", []) or []:
+        for n in b.get("names", []) or []:
+            if n:
+                raw_names.append(str(n).strip())
+    for gb in comp.get("geoBroadcasts", []) or []:
+        short_n = (gb.get("media") or {}).get("shortName")
+        if short_n:
+            raw_names.append(str(short_n).strip())
+    for raw in raw_names:
+        up = raw.upper().strip()
+        # Exclude streaming-only minor tiers like ESPN+ / ESPNU / ESPNEWS
+        if up in ("ESPN+", "ESPNU", "ESPNEWS", "ACCX", "SECN+", "BTN+"):
+            continue
+        matched = None
+        if up in MAJOR_TV_NETWORKS:
+            matched = raw
+        elif up.startswith("PRIME") or "AMAZON PRIME" in up:
+            matched = "Prime Video"
+        elif up.startswith("TNT"):
+            matched = "TNT"
+        elif up.startswith("NBC") and up != "NBCSN":
+            matched = "NBC"
+        elif up in ("ESPN", "ESPN2"):
+            matched = up
+        if matched and matched.upper() not in seen:
+            seen.add(matched.upper())
+            found.append(matched)
+    return found
+
+
+def _detect_marquee_game(label, event, comp, home, away, dt_est=None):
+    """
+    Auto-detect major / primetime games across leagues:
+    - NFL: Standalone non-Sunday (TNF/Black Friday/Sat/MNF), Sunday 4:05/4:25 PM national window or 8:20 PM SNF,
+      morning international games, or Sunday matchups where both teams are >= .500 with 4+ wins.
+    - CFB / NCAAM: AP Top-25 vs Top-25 ranked matchup, Top-15 team on major national TV, or non-Saturday CFB on national TV.
+    - NBA / NHL: Major national TV broadcast (ABC/NBC/ESPN/TNT/Prime/CBS/FOX/TBS/truTV/Netflix) or elite matchup (both >= .600 with 10+ GP).
+    - UCL: All UEFA Champions League matches.
+    - EPL / LALIGA: Big-club headliner (two big clubs) or national TV (NBC/USA/ABC/ESPN).
+    Returns (is_marquee: bool, reason: str).
+    """
+    lbl = str(label or "").upper()
+    tv_nets = _extract_major_tv_networks(comp or {})
+    primary_tv = tv_nets[0] if tv_nets else ""
+    tier1_tv = [n for n in tv_nets if n.upper() != "ESPN2"]
+    h_name = (home.get("team") or {}).get("displayName", "")
+    a_name = (away.get("team") or {}).get("displayName", "")
+    h_rec = next((r.get("summary", "") for r in (home.get("records") or []) if r.get("type") == "total"), "")
+    a_rec = next((r.get("summary", "") for r in (away.get("records") or []) if r.get("type") == "total"), "")
+    hw, hl = _parse_rec_wins_losses(h_rec)
+    aw, al = _parse_rec_wins_losses(a_rec)
+
+    h_rank = int((home.get("curatedRank") or {}).get("current", 99) or 99)
+    a_rank = int((away.get("curatedRank") or {}).get("current", 99) or 99)
+
+    if lbl == "NFL":
+        if dt_est is not None:
+            wd = dt_est.weekday()  # 6 = Sunday
+            hr = dt_est.hour + dt_est.minute / 60.0
+            if wd != 6:
+                net_tag = f" ({primary_tv})" if primary_tv else ""
+                return True, f"NFL Standalone Primetime{net_tag}"
+            if hr >= 19.5:
+                return True, f"NFL Sunday Night ({primary_tv or 'NBC'})"
+            if hr >= 15.75:
+                return True, f"NFL Late National Window ({primary_tv or 'CBS/FOX'})"
+            if hr < 11.5:
+                return True, f"NFL International Window ({primary_tv or 'NFLN'})"
+        if hw >= 4 and aw >= 4 and hw >= hl and aw >= al:
+            return True, f"NFL Winning Matchup ({a_rec} vs {h_rec})"
+        return False, ""
+
+    if lbl in ("CFB", "NCAAM"):
+        if 1 <= a_rank <= 25 and 1 <= h_rank <= 25:
+            return True, f"AP Top-25 Matchup (#{a_rank} vs #{h_rank})"
+        best_rank = min(a_rank, h_rank)
+        if 1 <= best_rank <= 15 and tv_nets:
+            return True, f"Top-15 National TV (#{best_rank} on {primary_tv})"
+        if lbl == "CFB" and dt_est is not None and dt_est.weekday() != 5 and tier1_tv:
+            return True, f"CFB Standalone National TV ({tier1_tv[0]})"
+        return False, ""
+
+    if lbl in ("NBA", "NHL"):
+        if tier1_tv:
+            return True, f"National TV ({tier1_tv[0]})"
+        if (hw + hl) >= 10 and (aw + al) >= 10 and (hw / (hw + hl)) >= 0.60 and (aw / (aw + al)) >= 0.60:
+            return True, f"Contender Matchup ({a_rec} vs {h_rec})"
+        return False, ""
+
+    if lbl == "UCL":
+        return True, "UEFA Champions League"
+
+    if lbl in ("EPL", "LALIGA"):
+        h_low = h_name.lower()
+        a_low = a_name.lower()
+        h_big = any(c in h_low for c in SOCCER_BIG_CLUBS)
+        a_big = any(c in a_low for c in SOCCER_BIG_CLUBS)
+        if h_big and a_big:
+            return True, f"{lbl} Big-Club Headliner"
+        if tier1_tv:
+            return True, f"{lbl} National TV ({tier1_tv[0]})"
+        return False, ""
+
+    return False, ""
+
+
+def _score_market_candidate_confidence(
+    ev_pct=0.0,
+    has_line_edge=False,
+    stale_book_count=0,
+    is_pinnacle=False,
+    n_sharp_books=1,
+    hr_price=-110,
+    steam_shift=0.0,
+):
+    """
+    Deterministic 0-99 Confidence Meter for Odds API 1H, Totals, Spreads, ML, and Player Props.
+    Calibrated strictly so ONLY genuine high-conviction sharp edges reach Tier 2 (>=78%) or Tier 1 (>=88%).
+    Returns (score: int, reasons: list[str]).
+    """
+    if hr_price is None or hr_price < -155 or hr_price > 130:
+        return 0, []
+
+    score = 50
+    reasons = []
+    has_edge_driver = False
+
+    if ev_pct >= 6.0:
+        score += 24
+        reasons.append(f"Sharp No-Vig +{ev_pct:.1f}% EV (+24)")
+        has_edge_driver = True
+    elif ev_pct >= 4.0:
+        score += 20
+        reasons.append(f"Sharp No-Vig +{ev_pct:.1f}% EV (+20)")
+        has_edge_driver = True
+    elif ev_pct >= 2.5:
+        score += 15
+        reasons.append(f"Sharp No-Vig +{ev_pct:.1f}% EV (+15)")
+        has_edge_driver = True
+    elif ev_pct >= 1.5:
+        score += 10
+        reasons.append(f"Sharp No-Vig +{ev_pct:.1f}% EV (+10)")
+        has_edge_driver = True
+
+    if stale_book_count >= 2:
+        score += 16
+        reasons.append(f"HRB Stale Line vs {stale_book_count} Sharp Books (+16)")
+        has_edge_driver = True
+    elif has_line_edge or stale_book_count == 1:
+        score += 12
+        reasons.append("HRB Stale Line Edge (+12)")
+        has_edge_driver = True
+
+    if steam_shift >= 7.0:
+        score += 14
+        reasons.append(f"Sharp Juice Steam +{steam_shift:.1f}% (+14)")
+        has_edge_driver = True
+    elif steam_shift >= 4.5:
+        score += 10
+        reasons.append(f"Sharp Juice Steam +{steam_shift:.1f}% (+10)")
+        has_edge_driver = True
+
+    if not has_edge_driver:
+        return 0, []
+
+    if is_pinnacle or n_sharp_books >= 2:
+        score += 6
+        reasons.append("Pinnacle/Multi-Book Sharp Consensus (+6)")
+    elif n_sharp_books == 1:
+        score += 3
+        reasons.append("Sharp Book Benchmark (+3)")
+
+    if -145 <= hr_price <= 110:
+        score += 6
+        reasons.append(f"Odds Sweet-Spot {hr_price:+d} (+6)")
+    else:
+        score += 3
+        reasons.append(f"Playable Odds {hr_price:+d} (+3)")
+
+    return max(25, min(96, int(round(score)))), reasons
+
+
+def _norm_team_key(name):
+    toks = [t for t in re.findall(r"[a-z0-9]+", str(name or "").lower()) if len(t) >= 3 and t not in ("the", "fc", "cf", "sc", "afc", "club")]
+    return set(toks)
+
+
+def _find_marquee_entry(marquee_meta, sport_key, away, home):
+    if not marquee_meta:
+        return None
+    target_lbl = SPORT_KEY_TO_LABEL.get(sport_key, "").upper()
+    a_toks = _norm_team_key(away)
+    h_toks = _norm_team_key(home)
+    if not a_toks or not h_toks:
+        return None
+    for entry in marquee_meta.values():
+        if target_lbl and entry.get("label") != target_lbl:
+            continue
+        ea = _norm_team_key(entry.get("a_name"))
+        eh = _norm_team_key(entry.get("h_name"))
+        if (a_toks & ea) and (h_toks & eh):
+            return entry
+    return None
 
 
 def _compute_matchup_confidence(
@@ -685,7 +1128,7 @@ def _compute_matchup_confidence(
     return f"[CONFIDENCE METER: {final_score}% | {bar} | {tier} -> Top Play: {best_pick_label} ({', '.join(best_reasons)})]"
 
 
-def fetch_espn_quant_matchups_and_props():
+def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
     """
     100% Free Unlimited Quantitative Engine via ESPN API:
     - Live Spreads, Moneylines, Totals + Opening-to-Current Steam Moves
@@ -693,9 +1136,11 @@ def fetch_espn_quant_matchups_and_props():
     - Automated Back-to-Back (0-Days Rest) & Road Fatigue Detection
     - NHL Confirmed/Expected Starting Goalies + Season SV% & GAA
     - ESPN Core API Player Prop Steam Move Detection (Open vs. Current Prop Movement)
+    - Marquee / Primetime Game Detection (National TV, AP Top-25, NFL Standalone, UCL, Soccer Big-6)
     """
     quant_games = []
     quant_props = []
+    marquee_meta = {}
     est_tz = datetime.timezone(datetime.timedelta(hours=-5))
     now_est = datetime.datetime.now(est_tz)
     today_ymd = now_est.strftime("%Y%m%d")
@@ -783,6 +1228,7 @@ def fetch_espn_quant_matchups_and_props():
             # Parse exact EST kickoff/tipoff time & assign Sequential Time-Slot Window
             time_est_str = "TBD EST"
             slot_tag = "[WINDOW 5: 6:30-9:00 PM PRIMETIME]"
+            dt_est = None
             raw_date = ev.get("date", "")
             if raw_date:
                 try:
@@ -823,6 +1269,7 @@ def fetch_espn_quant_matchups_and_props():
             h_abbr = home.get("team", {}).get("abbreviation", h_name)
             a_abbr = away.get("team", {}).get("abbreviation", a_name)
             matchup = f"{a_name} @ {h_name}"
+            is_marquee, mq_reason = _detect_marquee_game(label, ev, comp, home, away, dt_est)
 
             # Extract Overall / Home / Road records (+ Soccer 5-match form string if present)
             h_rec = next((r.get("summary", "") for r in home.get("records", []) if r.get("type") == "total"), "")
@@ -1060,6 +1507,7 @@ def fetch_espn_quant_matchups_and_props():
                 pass
 
             # Compute Deterministic 0-99 Confidence Meter across the 6 Pillars
+            conf_tag = ""
             try:
                 conf_tag = _compute_matchup_confidence(
                     label=label,
@@ -1081,28 +1529,81 @@ def fetch_espn_quant_matchups_and_props():
             except Exception:
                 pass
 
+            if is_marquee:
+                tags.insert(0, f"[MARQUEE: {mq_reason}]")
+                mq_key = f"{label}:{matchup}"
+                mq_entry = {
+                    "label": label,
+                    "matchup": matchup,
+                    "a_name": a_name,
+                    "h_name": h_name,
+                    "a_abbr": a_abbr,
+                    "h_abbr": h_abbr,
+                    "slot_tag": slot_tag,
+                    "time_est": time_est_str,
+                    "reason": mq_reason,
+                    "rec_str": rec_str,
+                    "odds_summary": " | ".join(odds_summary),
+                    "candidates": [],
+                }
+                if conf_tag and "DO NOT CHASE LATE" not in " ".join(tags):
+                    m_fg = re.search(
+                        r"\[CONFIDENCE METER:\s*(\d{2,3})%\s*\|[^|]+\|\s*([^->]+?)\s*->\s*Top Play:\s*([^\]]+)\]",
+                        conf_tag,
+                    )
+                    if m_fg:
+                        fg_score = int(m_fg.group(1))
+                        fg_top = m_fg.group(3).strip()
+                        fg_pick = fg_top
+                        fg_reasons = ""
+                        m_pr = re.match(r"^(.+?\([+-]\d{3,4}\))\s*\((.+)\)$", fg_top)
+                        if m_pr:
+                            fg_pick = m_pr.group(1).strip()
+                            fg_reasons = m_pr.group(2).strip()
+                        # Expand team abbreviation prefix to full team name for crisp marquee pick display
+                        if a_abbr and re.match(rf"^{re.escape(a_abbr)}\b", fg_pick):
+                            fg_pick = re.sub(rf"^{re.escape(a_abbr)}\b", a_name, fg_pick, count=1)
+                        elif h_abbr and re.match(rf"^{re.escape(h_abbr)}\b", fg_pick):
+                            fg_pick = re.sub(rf"^{re.escape(h_abbr)}\b", h_name, fg_pick, count=1)
+                        m_fo = re.search(r"\(([+-]\d{3,4})\)", fg_pick)
+                        fg_odds = int(m_fo.group(1)) if m_fo else None
+                        if fg_odds is not None and -155 <= fg_odds <= 130 and "EXCEEDS" not in fg_pick:
+                            mq_entry["candidates"].append({
+                                "score": fg_score,
+                                "pick": fg_pick,
+                                "market": "Full Game",
+                                "reasons": fg_reasons,
+                            })
+                marquee_meta[mq_key] = mq_entry
+
             if odds_summary or tags:
                 quant_games.append(
                     f"- [{label} QUANT] {slot_tag} ({time_est_str}) {matchup} {rec_str} -> {' | '.join(odds_summary)}"
                     + ((" -> " + " ".join(tags)) if tags else "")
                 )
 
-            # 3. Scan ESPN Core API Player Props for Significant Line/Juice Steam Moves (NBA & NHL)
-            if label in ("NBA", "NHL") and ev_id:
+            # 3. Scan ESPN Core API Player Props for Significant Line/Juice Steam Moves (NBA, NHL, and Marquee NFL)
+            if (label in ("NBA", "NHL") or (label == "NFL" and is_marquee)) and ev_id:
                 try:
                     pb_url = f"https://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/events/{ev_id}/competitions/{ev_id}/odds/100/propBets?lang=en&region=us&limit=120"
                     pb_items = requests.get(pb_url, timeout=10).json().get("items", [])
                     steamed_candidates = []
+                    allowed_espn_props = {
+                        "Total Points",
+                        "Total Rebounds",
+                        "Total Assists",
+                        "Total 3-Point Field Goals",
+                        "Total Pts, Reb, & Ast",
+                        "Total Shots on Goal",
+                        "Total Passing Yards",
+                        "Total Rushing Yards",
+                        "Total Receiving Yards",
+                        "Total Receptions",
+                        "Total Passing Touchdowns",
+                    }
                     for item in pb_items:
                         prop_name = item.get("type", {}).get("name", "")
-                        if prop_name not in (
-                            "Total Points",
-                            "Total Rebounds",
-                            "Total Assists",
-                            "Total 3-Point Field Goals",
-                            "Total Pts, Reb, & Ast",
-                            "Total Shots on Goal",
-                        ):
+                        if prop_name not in allowed_espn_props:
                             continue
                         cur_line = _safe_float_line(item.get("current", {}).get("target", {}).get("value"))
                         open_line = _safe_float_line(item.get("open", {}).get("target", {}).get("value"))
@@ -1139,16 +1640,38 @@ def fetch_espn_quant_matchups_and_props():
                             dir_side = "Over" if cur_line > open_line else "Under"
                         else:
                             dir_side = "Over" if cur_odds < (open_odds or cur_odds) else "Under"
-                        p_score = 64 + (10 if -145 <= cur_odds <= -110 else 6) + min(12, int(imp_s))
+                        p_score, p_reasons = _score_market_candidate_confidence(
+                            ev_pct=0.0,
+                            has_line_edge=False,
+                            stale_book_count=0,
+                            is_pinnacle=False,
+                            n_sharp_books=1,
+                            hr_price=cur_odds,
+                            steam_shift=imp_s,
+                        )
+                        if p_score <= 0:
+                            continue
                         ps_val, ps_bar, ps_tier = _format_confidence_meter(p_score)
                         quant_props.append(
                             f"- [{label} PROP STEAM] {slot_tag} ({time_est_str}) {p_name} ({a_abbr} @ {h_abbr}) {prop_name} {dir_side} {cur_line} ({cur_odds:+d}) "
                             f"[Steamed from Open {open_line} ({open_odds:+d}) -> Now {cur_line} ({cur_odds:+d})] "
                             f"[CONFIDENCE METER: {ps_val}% | {ps_bar} | {ps_tier}]"
                         )
+                        if is_marquee:
+                            mq_key = f"{label}:{matchup}"
+                            if mq_key in marquee_meta:
+                                clean_pn = prop_name.replace("Total ", "")
+                                marquee_meta[mq_key]["candidates"].append({
+                                    "score": ps_val,
+                                    "pick": f"{p_name} {dir_side} {cur_line} {clean_pn} ({cur_odds:+d})",
+                                    "market": "Player Prop Steam",
+                                    "reasons": ", ".join(p_reasons) + f", Open {open_line} ({open_odds:+d}) -> {cur_line} ({cur_odds:+d})",
+                                })
                 except Exception:
                     pass
 
+    if return_marquee_meta:
+        return quant_games, quant_props, marquee_meta
     return quant_games, quant_props
 
 
