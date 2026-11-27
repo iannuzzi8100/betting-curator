@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+import quant_signals
 
 load_dotenv()
 
@@ -271,6 +272,10 @@ def _read_shadow_stats(sh):
     parsed_rows.reverse()
     parsed_rows.sort(key=lambda x: x["date"], reverse=True)
     default_out["recent"] = parsed_rows[:30]
+    try:
+        default_out["pillar_scorecard"] = quant_signals.compute_pillar_scorecard_from_rows(rows[1:])
+    except Exception:
+        default_out["pillar_scorecard"] = {"total_graded": 0, "min_total_graded": 25, "min_pillar_n": 12, "is_active": False, "note": "", "pillars": []}
     return default_out
 
 
@@ -1512,6 +1517,84 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       justify-content: space-between;
       align-items: center;
     }
+    .kelly-calc-box {
+      background: rgba(59,130,246,0.08);
+      border: 1px solid rgba(59,130,246,0.24);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 0.80rem;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .kelly-calc-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .kelly-conf-sel {
+      background: rgba(15,23,42,0.85);
+      color: var(--text);
+      border: 1px solid rgba(148,163,184,0.25);
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      font-family: inherit;
+    }
+    .kelly-apply-btn {
+      background: rgba(59,130,246,0.2);
+      color: #93c5fd;
+      border: 1px solid rgba(59,130,246,0.45);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-size: 0.76rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .kelly-apply-btn:hover { background: rgba(59,130,246,0.32); }
+    .odds-cap-warn {
+      display: none;
+      background: rgba(244,63,94,0.10);
+      border: 1px solid rgba(244,63,94,0.32);
+      color: #fda4af;
+      border-radius: 10px;
+      padding: 8px 11px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .cal-status-card {
+      background: rgba(15,23,42,0.68);
+      border: 1px solid rgba(148,163,184,0.16);
+      border-radius: 12px;
+      padding: 11px 13px;
+      margin-bottom: 10px;
+    }
+    .cal-prog-bar {
+      width: 100%;
+      height: 6px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 7px;
+    }
+    .cal-prog-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    .weight-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 0.70rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
     .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
     .btn-primary {
       background: linear-gradient(135deg, var(--green), #059669);
@@ -1932,7 +2015,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="form-row-2">
           <div class="field">
             <label>Sport</label>
-            <select id="f-sport">
+            <select id="f-sport" onchange="updatePayoutPreview()">
               <option value="CFB">CFB</option>
               <option value="NFL">NFL</option>
               <option value="NBA">NBA</option>
@@ -1958,7 +2041,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="field">
           <label>Selection &amp; Matchup</label>
-          <input id="f-sel" type="text" placeholder="e.g. Middle Tennessee -6.5 (2:00 PM EST)" oninput="syncLineControlsFromSel()" />
+          <input id="f-sel" type="text" placeholder="e.g. Middle Tennessee -6.5 (2:00 PM EST)" oninput="syncLineControlsFromSel(); updatePayoutPreview();" />
         </div>
         <div class="field">
           <label>Quick Spread / Moneyline</label>
@@ -1980,6 +2063,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <input id="f-stake" type="number" step="0.01" min="0.01" placeholder="10.00" oninput="updatePayoutPreview()" />
           </div>
         </div>
+        <div class="kelly-calc-box" id="f-kelly-box">
+          <div class="kelly-calc-row">
+            <span style="color:var(--muted);font-weight:600;">Half-Kelly Sizing</span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label for="f-conf" style="color:var(--muted);font-size:0.74rem;">Confidence</label>
+              <select id="f-conf" class="kelly-conf-sel" onchange="updatePayoutPreview()">
+                <option value="78">78%</option>
+                <option value="80">80%</option>
+                <option value="82" selected>82%</option>
+                <option value="85">85%</option>
+                <option value="88">88%</option>
+                <option value="90">90%</option>
+                <option value="92">92%</option>
+                <option value="95">95%</option>
+              </select>
+            </div>
+          </div>
+          <div class="kelly-calc-row">
+            <span id="f-kelly-rec" style="color:#e2e8f0;font-weight:700;">Rec: $0.00 (0.0U)</span>
+            <button type="button" class="kelly-apply-btn" id="f-kelly-apply-btn" onclick="applyKellyRecommendedStake()">Apply Stake</button>
+          </div>
+          <div id="f-kelly-meta" style="color:var(--muted);font-size:0.73rem;"></div>
+        </div>
+        <div class="odds-cap-warn" id="f-odds-warn"></div>
         <div class="payout-preview">
           <span style="color:var(--muted);">Estimated Payout</span>
           <strong id="f-payout-preview" style="color:var(--green);">$0.00</strong>
@@ -2715,6 +2822,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       setSelectionLine(formatSpreadToken(nextSpread));
     }
 
+    let lastRecommendedKellyStake = 0;
+    function computeManualHalfKelly(oddsNum, confPct, selText, sportText) {
+      const data = currentData || {};
+      const settledBr = Math.max(0, Number(data.bankroll || 0));
+      const pendList = data.pending_tickets || [];
+      const pendingTot = pendList.reduce((acc, t) => acc + Number(t.stake || 0), 0);
+      const availCash = Math.max(0, Math.round((settledBr - pendingTot) * 100) / 100);
+      const eqPts = data.equity_curve || [];
+      const peakBr = Math.max(100, settledBr, ...eqPts.map(pt => Number(pt.bankroll || 0)));
+      const isDrawdown = (settledBr < 75) || (peakBr > 0 && ((peakBr - settledBr) / peakBr) > 0.20);
+      const baseSinglePct = isDrawdown ? 0.12 : 0.18;
+      const baseUnit = Math.max(0.01, settledBr * 0.05);
+      const b = oddsNum > 0 ? oddsNum / 100 : 100 / Math.max(1, Math.abs(oddsNum));
+      const cp = Math.max(68, Math.min(99, Number(confPct || 82)));
+      const pWin = 0.545 + ((cp - 68) / 31) * 0.11;
+      const fullKelly = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
+      const spU = normalizeSport(sportText || "").toUpperCase();
+      const isMl = /\b(ml|moneyline|to\s+win)\b/i.test(String(selText || "")) && !/\b(over|under)\s+\d/i.test(String(selText || ""));
+      const isNewLeague = (spU === "UCL" || spU === "LALIGA");
+      const kMult = isNewLeague ? 0.30 : (isMl ? 0.55 : 0.40);
+      const singlePct = isNewLeague ? Math.min(baseSinglePct, 0.10) : baseSinglePct;
+      const kellyF = fullKelly * kMult;
+      let rawStake = Math.min(settledBr * singlePct, settledBr * kellyF, availCash);
+      if (settledBr < 1000 && b > 0) {
+        const toGoal = (1000 - settledBr) / b;
+        if (rawStake > toGoal) rawStake = toGoal;
+      }
+      const roundedStake = rawStake >= 2.0 ? Math.round(rawStake * 2) / 2 : 0;
+      const units = roundedStake > 0 ? Math.round((roundedStake / baseUnit) * 10) / 10 : 0;
+      return {
+        stake: roundedStake,
+        units,
+        availCash,
+        isDrawdown,
+        singleCapPct: Math.round(singlePct * 100),
+        pWinPct: Math.round(pWin * 1000) / 10,
+        kellyPct: Math.round(kellyF * 1000) / 10,
+      };
+    }
+
+    function applyKellyRecommendedStake() {
+      if (lastRecommendedKellyStake >= 2.0) {
+        document.getElementById("f-stake").value = lastRecommendedKellyStake.toFixed(2);
+        updatePayoutPreview();
+      }
+    }
+
     function updatePayoutPreview() {
       const odds = parseInt(String(getOddsValue("f") || "").replace(/\+/g, ""), 10);
       const stake = parseFloat(document.getElementById("f-stake").value || "0");
@@ -2723,6 +2877,51 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         payout = odds > 0 ? stake * (1 + odds / 100) : stake * (1 + 100 / Math.abs(odds));
       }
       document.getElementById("f-payout-preview").textContent = fmtMoney(payout);
+
+      // Live Half-Kelly Stake Recommendation
+      const confEl = document.getElementById("f-conf");
+      const recEl = document.getElementById("f-kelly-rec");
+      const metaEl = document.getElementById("f-kelly-meta");
+      const applyBtn = document.getElementById("f-kelly-apply-btn");
+      const warnEl = document.getElementById("f-odds-warn");
+      const selTxt = (document.getElementById("f-sel") && document.getElementById("f-sel").value) || "";
+      const spTxt = (document.getElementById("f-sport") && document.getElementById("f-sport").value) || "";
+
+      if (recEl && !isNaN(odds) && odds !== 0) {
+        const confVal = confEl ? parseInt(confEl.value || "82", 10) : 82;
+        const hk = computeManualHalfKelly(odds, confVal, selTxt, spTxt);
+        lastRecommendedKellyStake = hk.stake;
+        if (hk.stake >= 2.0) {
+          recEl.textContent = `Rec: ${fmtMoney(hk.stake)} (${hk.units.toFixed(1)}U)`;
+          recEl.style.color = "#34d399";
+          if (applyBtn) applyBtn.style.display = "inline-block";
+        } else {
+          recEl.textContent = `Rec: Pass (<$2 min edge or cash cap)`;
+          recEl.style.color = "#fbbf24";
+          if (applyBtn) applyBtn.style.display = "none";
+        }
+        if (metaEl) {
+          metaEl.textContent = `Est. Win ${hk.pWinPct}% • Half-Kelly ${hk.kellyPct}% • Cap ${hk.singleCapPct}%${hk.isDrawdown ? " (Drawdown Brake)" : ""} • Free Cash ${fmtMoney(hk.availCash)}`;
+        }
+      }
+
+      // Live Odds Cap & Cash Guardrail Warning
+      if (warnEl) {
+        const warns = [];
+        if (!isNaN(odds) && odds !== 0 && (odds < -155 || odds > 130)) {
+          warns.push(`Odds (${odds > 0 ? "+" + odds : odds}) are outside the system -155 to +130 sweet-spot cap.`);
+        }
+        const availCash = currentData ? Number(currentData.available_cash || 0) : null;
+        if (availCash !== null && !isNaN(stake) && stake > availCash + 0.01) {
+          warns.push(`Stake (${fmtMoney(stake)}) exceeds current free cash (${fmtMoney(availCash)}).`);
+        }
+        if (warns.length > 0) {
+          warnEl.textContent = warns.join(" ");
+          warnEl.style.display = "block";
+        } else {
+          warnEl.style.display = "none";
+        }
+      }
     }
 
     function normalizeSport(sport) {
@@ -3102,11 +3301,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         document.getElementById("f-sel").value = sel;
         setOddsValue("f", odds);
         document.getElementById("f-stake").value = Number(stake).toFixed(2);
+        const confEl = document.getElementById("f-conf");
+        if (confEl && prefillPlay.confidence_pct != null) {
+          const targetC = Number(prefillPlay.confidence_pct);
+          const opts = [...confEl.options].map(o => Number(o.value));
+          let bestOpt = opts[0];
+          opts.forEach(v => { if (Math.abs(v - targetC) < Math.abs(bestOpt - targetC)) bestOpt = v; });
+          confEl.value = String(bestOpt);
+        }
       } else {
         document.getElementById("log-modal-title").textContent = "Log Placed Bet";
         document.getElementById("f-sel").value = "";
         setOddsValue("f", "-110");
         document.getElementById("f-stake").value = "";
+        const confEl = document.getElementById("f-conf");
+        if (confEl) confEl.value = "82";
       }
       syncLineControlsFromSel();
       updatePayoutPreview();
@@ -4180,6 +4389,119 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const bestWinSub = bestWin ? `Best: +${fmtMoney(bestWin.pl)} (${esc(bestWin.id)})` : "Best: --";
       const clvSub = avgClv !== null ? `Avg CLV: ${avgClv >= 0 ? "+" : ""}${avgClv.toFixed(1)}% (${clvList.length} tracked)` : `Avg Stake: ${fmtMoney(avgStake)}`;
 
+      // Build Model & Pillar Calibration Scorecard (server-computed or clean client fallback from recent shadow plays)
+      function buildPillarScorecardHtml() {
+        const sh = (currentData && currentData.shadow_stats) || {};
+        let sc = sh.pillar_scorecard || null;
+        if (!sc || !Array.isArray(sc.pillars)) {
+          const defs = [
+            ["mod_ml", "ModFav ML Sweet-Spot", /ModFav ML/i],
+            ["bpi_ev", "ESPN BPI/FPI +EV", /BPI\/FPI \+/i],
+            ["torvik_ev", "Bart Torvik AdjEff", /Torvik AdjEff/i],
+            ["l5_form", "Last-5 Form & Margin", /(?:Major L5 Form|L5 Edge|Hot L5)/i],
+            ["sharp_steam", "Sharp Line Steam", /Sharp Steam/i],
+            ["b2b_fatigue", "B2B / 3-in-4 Fatigue", /(?:0d-Rest B2B|3-in-4 Fatigue)/i],
+            ["goalie_edge", "NHL Goalie SV% / GSAx", /(?:NHL Goalie Mismatch|Goalie GSAx)/i],
+            ["home_road_split", "Home / Road Splits", /(?:Home\/Road Split|Road Warrior Split)/i],
+            ["net_diff", "Season Net Differential", /Season Net-Diff/i],
+            ["moneypuck_xgf", "MoneyPuck 5v5 xGF%", /MoneyPuck xGF%/i],
+          ];
+          const recRows = Array.isArray(sh.recent) ? sh.recent : [];
+          const totalG = Number(sh.wins || 0) + Number(sh.losses || 0);
+          const pillarsArr = defs.map(([k, lbl, rx]) => {
+            let w = 0, l = 0, u = 0;
+            recRows.forEach(r => {
+              const resL = String(r.result || "").toLowerCase();
+              if (resL !== "won" && resL !== "lost") return;
+              if (rx.test(String(r.pillars || ""))) {
+                if (resL === "won") w++; else l++;
+                u += Number(r.flat_pl || 0);
+              }
+            });
+            const dec = w + l;
+            return {
+              key: k, label: lbl, wins: w, losses: l, pushes: 0, total: dec,
+              win_pct: dec > 0 ? Math.round((w / dec) * 1000) / 10 : 0,
+              flat_units: Math.round(u * 100) / 100,
+              flat_roi: dec > 0 ? Math.round((u / dec) * 1000) / 10 : 0,
+              weight: 1.0, active_calibrated: false,
+            };
+          }).sort((a, b) => (b.total > 0) - (a.total > 0) || b.flat_units - a.flat_units);
+          sc = {
+            total_graded: totalG,
+            min_total_graded: 25,
+            min_pillar_n: 12,
+            is_active: totalG >= 25,
+            note: totalG >= 25 ? `Self-Calibration Active (${totalG} shadow plays)` : `Calibration warming up (${totalG}/25 graded shadow plays)`,
+            pillars: pillarsArr,
+          };
+        }
+
+        const totalG = Number(sc.total_graded || 0);
+        const minG = Number(sc.min_total_graded || 25);
+        const progPct = Math.max(0, Math.min(100, Math.round((totalG / Math.max(1, minG)) * 100)));
+        const isActive = Boolean(sc.is_active);
+        const badgeBg = isActive ? "rgba(16,185,129,0.16)" : "rgba(59,130,246,0.16)";
+        const badgeCol = isActive ? "#34d399" : "#93c5fd";
+        const badgeTxt = isActive ? "CALIBRATION ACTIVE" : `WARMING UP (${totalG}/${minG})`;
+        const plB = sh.placed || {};
+        const skB = sh.skipped || {};
+        const shadowSummary = (Number(sh.total || 0) > 0)
+          ? `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:0.75rem;color:var(--muted);margin-top:7px;">
+               <span>Shadow All: <strong style="color:var(--text);">${sh.wins || 0}W-${sh.losses || 0}L</strong> (${Number(sh.flat_units || 0) >= 0 ? "+" : ""}${Number(sh.flat_units || 0).toFixed(2)}U)</span>
+               <span>Placed: <strong style="color:#34d399;">${plB.wins || 0}W-${plB.losses || 0}L</strong> • Skipped: <strong style="color:#93c5fd;">${skB.wins || 0}W-${skB.losses || 0}L</strong></span>
+             </div>`
+          : "";
+
+        const activePillars = (sc.pillars || []).filter(p => Number(p.total || 0) > 0);
+        const maxAbsU = Math.max(1, ...activePillars.map(p => Math.abs(Number(p.flat_units || 0))));
+        const rowsHtml = activePillars.length > 0
+          ? `<div class="breakdown-list">${activePillars.map(p => {
+              const u = Number(p.flat_units || 0);
+              const isPos = u >= 0;
+              const col = isPos ? "#34d399" : "#fb7185";
+              const barCol = isPos ? "#10b981" : "#f43f5e";
+              const barW = Math.max(6, Math.min(100, Math.round((Math.abs(u) / maxAbsU) * 100)));
+              const wt = Number(p.weight || 1.0);
+              const wtBg = wt > 1.04 ? "rgba(16,185,129,0.16)" : (wt < 0.96 ? "rgba(244,63,94,0.16)" : "rgba(148,163,184,0.14)");
+              const wtCol = wt > 1.04 ? "#34d399" : (wt < 0.96 ? "#fda4af" : "#cbd5e1");
+              return `
+                <div class="breakdown-row">
+                  <div class="breakdown-top">
+                    <span class="breakdown-name" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      ${esc(p.label)}
+                      <span class="weight-badge" style="background:${wtBg};color:${wtCol};">${wt.toFixed(2)}x</span>
+                    </span>
+                    <span class="breakdown-pl" style="color:${col};">${isPos ? "+" : ""}${u.toFixed(2)}U <span style="font-size:0.74rem;font-weight:700;opacity:0.9;">(${Number(p.flat_roi || 0) >= 0 ? "+" : ""}${Number(p.flat_roi || 0).toFixed(1)}% ROI)</span></span>
+                  </div>
+                  <div class="breakdown-sub">
+                    <span>${p.wins}W-${p.losses}L (${Number(p.win_pct || 0).toFixed(1)}%)</span>
+                    <span>${p.active_calibrated ? "Auto-Weighted" : `${p.wins + p.losses}/${sc.min_pillar_n || 12} min sample`}</span>
+                  </div>
+                  <div class="breakdown-bar-bg">
+                    <div class="breakdown-bar-fill" style="width:${barW}%;background:${barCol};"></div>
+                  </div>
+                </div>
+              `;
+            }).join("")}</div>`
+          : `<div class="empty-msg">No graded pillar signals logged yet.</div>`;
+
+        return `
+          <div class="analytics-sec-title">Model &amp; Pillar Calibration</div>
+          <div class="cal-status-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:0.80rem;font-weight:700;color:#e2e8f0;">Self-Calibrating Weights (0.65x–1.25x)</span>
+              <span class="weight-badge" style="background:${badgeBg};color:${badgeCol};">${esc(badgeTxt)}</span>
+            </div>
+            <div class="cal-prog-bar">
+              <div class="cal-prog-fill" style="width:${progPct}%;background:${isActive ? "#10b981" : "#3b82f6"};"></div>
+            </div>
+            ${shadowSummary}
+          </div>
+          ${rowsHtml}
+        `;
+      }
+
       bodyEl.innerHTML = `
         <div class="analytics-grid">
           <div class="analytics-card">
@@ -4207,6 +4529,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         ${renderBreakdownRows(byMarket)}
         <div class="analytics-sec-title">By Sport</div>
         ${renderBreakdownRows(bySport)}
+        ${buildPillarScorecardHtml()}
       `;
     }
 
@@ -5314,12 +5637,78 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (state === "in") {
               p.__liveColor = "#10b981";
               p.__liveText = `LIVE (${detail}) • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+              p.__lineDrift = null;
             } else if (state === "post") {
               p.__liveColor = "#94a3b8";
               p.__liveText = `FINAL • ${aAbbr} ${away.score} - ${hAbbr} ${home.score}`;
+              p.__lineDrift = null;
             } else {
               p.__liveColor = "";
               p.__liveText = "";
+              // Live Line-Drift Check vs. Morning Curated Line (Zero extra API calls!)
+              p.__lineDrift = null;
+              const od0 = (comp.odds || [])[0];
+              if (od0) {
+                const selLow = String(p.selection || p.title || "").toLowerCase();
+                const matchTeamSide = (compSide) => {
+                  const t = compSide.team || {};
+                  const cands = [t.displayName, t.shortDisplayName, t.name, t.abbreviation]
+                    .map(x => String(x || "").toLowerCase().trim()).filter(Boolean);
+                  let sc = 0;
+                  cands.forEach(nm => {
+                    if (nm.length >= 2 && new RegExp(`\\b${nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(selLow)) {
+                      sc += nm.length >= 5 ? 4 : 2;
+                    }
+                  });
+                  return sc;
+                };
+                const hSc = matchTeamSide(home);
+                const aSc = matchTeamSide(away);
+                if (Math.max(hSc, aSc) >= 2) {
+                  const sideKey = hSc >= aSc ? "home" : "away";
+                  const parseOddsInt = (v) => {
+                    if (v === null || v === undefined) return null;
+                    const s = String(v).trim().toUpperCase();
+                    if (s === "EVEN") return 100;
+                    const n = parseInt(s.replace(/\+/g, ""), 10);
+                    return isNaN(n) ? null : n;
+                  };
+                  const fmtO = (n) => (n > 0 ? `+${n}` : `${n}`);
+                  if (/\bML\b/i.test(selLow) && p.odds != null) {
+                    const liveMl = parseOddsInt(od0.moneyline?.[sideKey]?.close?.odds);
+                    const origMl = Number(p.odds);
+                    if (liveMl !== null && !isNaN(origMl)) {
+                      if (liveMl < -155) {
+                        p.__lineDrift = { cls: "pill-red", text: `Live ${fmtO(liveMl)} • Past -155 Cap` };
+                      } else if (liveMl >= origMl + 5) {
+                        p.__lineDrift = { cls: "pill-green", text: `Live ${fmtO(liveMl)} • Better Price` };
+                      } else if (liveMl <= origMl - 15) {
+                        p.__lineDrift = { cls: "pill-amber", text: `Live ${fmtO(liveMl)} • Line Moved` };
+                      } else {
+                        p.__lineDrift = { cls: "pill-blue", text: `Live ${fmtO(liveMl)} • On Line` };
+                      }
+                    }
+                  } else if (!/\b(?:Over|Under)\b/i.test(selLow)) {
+                    const mSp = selLow.match(/([+-]\d+(?:\.\d+)?)/);
+                    const rawLiveSp = od0.pointSpread?.[sideKey]?.close?.line;
+                    const liveSp = rawLiveSp != null ? parseFloat(String(rawLiveSp)) : NaN;
+                    if (mSp && !isNaN(liveSp)) {
+                      const origSp = parseFloat(mSp[1]);
+                      const diff = origSp - liveSp; // positive = steeper/worse for user
+                      const spTxt = liveSp > 0 ? `+${liveSp}` : `${liveSp}`;
+                      if (diff >= 1.5) {
+                        p.__lineDrift = { cls: "pill-red", text: `Live ${spTxt} • Moved ${diff.toFixed(1)} pts` };
+                      } else if (diff >= 0.5) {
+                        p.__lineDrift = { cls: "pill-amber", text: `Live ${spTxt} • Moved ${diff.toFixed(1)} pts` };
+                      } else if (diff <= -0.5) {
+                        p.__lineDrift = { cls: "pill-green", text: `Live ${spTxt} • Better Line` };
+                      } else {
+                        p.__lineDrift = { cls: "pill-blue", text: `Live ${spTxt} • On Line` };
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
           if (!match.date) return;
@@ -5599,6 +5988,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               </div>`;
           } else {
             const statusPills = [];
+            if (p.__lineDrift && p.__lineDrift.text) {
+              statusPills.push(`<span class="pill ${esc(p.__lineDrift.cls || "pill-blue")}">${esc(p.__lineDrift.text)}</span>`);
+            }
             if (wb && wb.antIds && wb.antIds.length > 0) {
               statusPills.push(`<span class="pill pill-green">Anticipates ${esc(wb.antIds.join(", "))} (+${fmtMoney(wb.antProfit)})</span>`);
             }
