@@ -2027,10 +2027,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <span class="chart-title-sub" id="eq-range-subtitle">$100.00 Start &bull; Tap or drag to inspect any bet</span>
           </div>
           <div class="chart-range-tabs" role="tablist" aria-label="Equity chart timeframe">
-            <button type="button" class="chart-range-btn active" id="eq-tab-all" onclick="event.stopPropagation(); setEquityRange('all')">All</button>
+            <button type="button" class="chart-range-btn active" id="eq-tab-15b" onclick="event.stopPropagation(); setEquityRange('15b')">15B</button>
             <button type="button" class="chart-range-btn" id="eq-tab-30b" onclick="event.stopPropagation(); setEquityRange('30b')">30B</button>
-            <button type="button" class="chart-range-btn" id="eq-tab-15b" onclick="event.stopPropagation(); setEquityRange('15b')">15B</button>
             <button type="button" class="chart-range-btn" id="eq-tab-7d" onclick="event.stopPropagation(); setEquityRange('7d')">7D</button>
+            <button type="button" class="chart-range-btn" id="eq-tab-all" onclick="event.stopPropagation(); setEquityRange('all')">All</button>
           </div>
         </div>
         <div class="chart-kpi-strip" style="cursor:pointer;" onclick="openAnalyticsModal()">
@@ -3998,10 +3998,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       renderEquityChart(data);
     }
 
-    let equityChartRange = "all";
+    let equityChartRange = "15b";
     function setEquityRange(rangeKey) {
-      equityChartRange = rangeKey || "all";
-      ["all", "30b", "15b", "7d"].forEach(k => {
+      equityChartRange = rangeKey || "15b";
+      ["15b", "30b", "7d", "all"].forEach(k => {
         const btn = document.getElementById(`eq-tab-${k}`);
         if (btn) btn.classList.toggle("active", k === equityChartRange);
       });
@@ -4089,6 +4089,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const ddPct = peakVal > 0 ? ((endVal - peakVal) / peakVal) * 100 : 0;
       const isUp = deltaVal >= -0.005;
 
+      // Per-bet dot colors: emerald green if won, rose red if lost, slate for anchor/push
+      const baseDotR = sliced.length <= 20 ? 4.0 : (sliced.length <= 35 ? 3.2 : 2.3);
+      const pointColors = sliced.map((p, idx) => {
+        if (idx === 0 && (equityChartRange !== "all" || p.result === "Start")) return "#94a3b8";
+        const rLow = String(p.result || "").trim().toLowerCase();
+        if (rLow === "won" || p.net_pl > 0.005) return "#10b981";
+        if (rLow === "lost" || p.net_pl < -0.005) return "#f43f5e";
+        return "#94a3b8";
+      });
+      const pointRadii = sliced.map((p, idx) => (idx === 0 ? Math.max(2.0, baseDotR - 1.2) : baseDotR));
+      const lastDotColor = pointColors[pointColors.length - 1] || (isUp ? "#10b981" : "#f43f5e");
+      const lastGlowColor = lastDotColor === "#10b981"
+        ? "rgba(16, 185, 129, 0.36)"
+        : (lastDotColor === "#f43f5e" ? "rgba(244, 63, 94, 0.34)" : "rgba(148, 163, 184, 0.30)");
+
       // Update header subtitle & 4-chip KPI strip
       const subEl = document.getElementById("eq-range-subtitle");
       if (subEl) subEl.textContent = rangeSubtitle;
@@ -4114,7 +4129,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       }
 
       const strokeColor = isUp ? "#10b981" : "#f43f5e";
-      const glowColor = isUp ? "rgba(16, 185, 129, 0.32)" : "rgba(244, 63, 94, 0.30)";
       const baselineVal = equityChartRange === "all" ? 100.0 : startVal;
       const baselineLabel = equityChartRange === "all" ? "$100 Start" : `Start ${fmtMoney(startVal)}`;
 
@@ -4176,18 +4190,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             c.setLineDash([]);
           }
 
-          // 3. Glowing Endpoint Dot on Latest Bankroll Point
+          // 3. Glowing Endpoint Dot on Latest Bankroll Point (colored by latest bet win/loss)
           const meta = chart.getDatasetMeta(0);
           if (meta && meta.data && meta.data.length > 0) {
             const lastPt = meta.data[meta.data.length - 1];
             if (lastPt && isFinite(lastPt.x) && isFinite(lastPt.y)) {
               c.beginPath();
-              c.arc(lastPt.x, lastPt.y, 7.5, 0, Math.PI * 2);
-              c.fillStyle = glowColor;
+              c.arc(lastPt.x, lastPt.y, 8.0, 0, Math.PI * 2);
+              c.fillStyle = lastGlowColor;
               c.fill();
               c.beginPath();
-              c.arc(lastPt.x, lastPt.y, 3.8, 0, Math.PI * 2);
-              c.fillStyle = strokeColor;
+              c.arc(lastPt.x, lastPt.y, 4.4, 0, Math.PI * 2);
+              c.fillStyle = lastDotColor;
               c.fill();
               c.lineWidth = 1.6;
               c.strokeStyle = "#0b1220";
@@ -4223,12 +4237,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
               }
               return grad;
             },
-            borderWidth: 2.4,
-            pointRadius: sliced.length <= 20 ? 2.5 : 0,
-            pointHoverRadius: 5,
-            pointBackgroundColor: strokeColor,
-            pointHoverBackgroundColor: strokeColor,
-            pointHoverBorderColor: "#0b1220",
+            borderWidth: 2.2,
+            pointRadius: pointRadii,
+            pointHoverRadius: 6,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: "#0b1220",
+            pointBorderWidth: 1.2,
+            pointHoverBackgroundColor: pointColors,
+            pointHoverBorderColor: "#f8fafc",
             pointHoverBorderWidth: 2,
             fill: true,
             tension: 0.28,
