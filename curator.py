@@ -119,7 +119,7 @@ def _calc_half_kelly_target(pick_txt, sport_txt, conf_pct, odds_i, eff_br, is_dr
 
     b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / max(1, abs(odds_i)))
     cp = conf_pct if conf_pct is not None else 74
-    p_win = 0.545 + (max(0, min(99, cp) - 68) / 31.0) * 0.11
+    p_win = 0.59 + (max(0, min(99, cp) - 70) / 29.0) * 0.09
     full_kelly = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
     adj_kelly = full_kelly * k_mult
     raw_st = min(eff_br * max_single_pct, eff_br * adj_kelly)
@@ -295,43 +295,16 @@ def run_argon_curation(today_str, summary_block, recent_bets, rules_text, audit_
     stake_t2_solo = round(min(max_single_amt, max(2.00, settled_bankroll * (0.08 if is_drawdown else 0.11))) * 2) / 2.0
     stake_t3_solo = round(min(max_single_amt, max(2.00, settled_bankroll * (0.05 if is_drawdown else 0.07))) * 2) / 2.0
 
-    # Detect Weekend Football + European Soccer Mode automatically from scraped intel / day of week
+    # Always run All-League Best-EV Mode 7 days a week — never block any sport on weekends
     est_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-5)))
-    dow = est_now.weekday()  # 5 = Saturday, 6 = Sunday
-    if dow == 5 and ("SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SATURDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[CFB QUANT]" in intel_text):
-        league_rule = (
-            "**SATURDAY FOOTBALL + EUROPEAN SOCCER ONLY (STRICT):** Today is Saturday during College Football season. "
-            "Pick **SOLELY from College Football (CFB) and European Soccer (EPL, UCL, LALIGA)**. "
-            "Do NOT recommend NBA, NHL, NCAAM, or any other sport today. "
-            "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
-            "     • **Window 1 — Early Morning (7:30–9:30 AM EPL/LALIGA):** 7:30 AM – 9:30 AM EST\n"
-            "     • **Window 2 — Late Morning (10:00–11:30 AM EPL/LALIGA):** 9:45 AM – 11:45 AM EST\n"
-            "     • **Window 3 — Noon / Early Afternoon (12:00–2:30 PM CFB/EPL/LALIGA/UCL):** 11:45 AM – 2:45 PM EST\n"
-            "     • **Window 4 — Late Afternoon (3:00–5:30 PM CFB/LALIGA/UCL):** 2:45 PM – 6:15 PM EST\n"
-            "     • **Window 5 — Primetime (6:30–9:00 PM CFB):** 6:15 PM – 9:15 PM EST\n"
-            "     • **Window 6 — Late Night (9:30 PM+ CFB):** 9:15 PM – 11:30 PM EST"
-        )
-        slate_header_tag = "Saturday CFB + European Soccer Confidence Meter Slate"
-    elif dow == 6 and ("SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SUNDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[NFL QUANT]" in intel_text):
-        league_rule = (
-            "**SUNDAY FOOTBALL + EUROPEAN SOCCER ONLY (STRICT):** Today is Sunday during NFL season. "
-            "Pick **SOLELY from NFL and European Soccer (EPL, UCL, LALIGA)**. "
-            "Do NOT recommend NBA, NHL, NCAAM, or any other sport today. "
-            "Cover every remaining upcoming Time-Slot Window in chronological order:\n"
-            "     • **Window 1 — Morning (8:00–11:30 AM EPL/LALIGA):** 8:00 AM – 11:45 AM EST\n"
-            "     • **Window 2 — Early Afternoon (1:00 PM NFL / 12:30–3:00 PM LALIGA/EPL):** 12:00 PM – 3:45 PM EST\n"
-            "     • **Window 3 — Late Afternoon (4:05 / 4:25 PM NFL):** 4:00 PM – 7:30 PM EST\n"
-            "     • **Window 4 — Primetime (8:20 PM NFL SNF):** 8:00 PM – 11:30 PM EST"
-        )
-        slate_header_tag = "Sunday NFL + European Soccer Confidence Meter Slate"
-    else:
-        league_rule = (
-            "**ALL-LEAGUE BEST-EV TIME-SLOT MODE:** Pick the highest-conviction plays across any active league "
-            "(NBA, NHL, CFB, NFL, NCAAM, EPL, UCL, LALIGA, MLB) — staggered across every remaining ~3-hour betting window "
-            "so each window settles and compounds the resulting bankroll into the next window. "
-            "Use exact league tags `UCL` for UEFA Champions League and `LALIGA` for Spanish La Liga."
-        )
-        slate_header_tag = "Confidence Meter Time-Slot Slate"
+    dow = est_now.weekday()
+    league_rule = (
+        "**ALL-LEAGUE BEST-EV TIME-SLOT MODE (7 DAYS A WEEK — NEVER BLOCK A SPORT):** Pick the highest-conviction plays across EVERY active league today "
+        "(CFB FBS/FCS, NFL, NBA, NHL, NCAAM, EPL, UCL, LALIGA, MLB) — staggered across every remaining ~3-hour betting window "
+        "so each window settles and compounds the resulting bankroll into the next window. "
+        "Use exact league tags `UCL` for UEFA Champions League and `LALIGA` for Spanish La Liga."
+    )
+    slate_header_tag = "All-League Confidence Meter Time-Slot Slate"
 
     prompt = f"""
 You are the Argon Quantitative Sports Betting Engine driving a rapid-compounding $100 to $1,000 Hard Rock Bet Challenge using our **Deterministic 0–100 Confidence Meter** and **Sequential Time-Slot Compounding**.
@@ -588,11 +561,8 @@ def _build_deterministic_curated_slate(today_str, slate_header_tag, intel_text, 
     avail_br = float(ledger_meta.get("available", 0.0) or 0.0)
     pending_lines = ledger_meta.get("pending_lines") or []
 
+    # Never block any league on weekends — always evaluate all active sports
     allowed_leagues = None
-    if dow == 5 and ("SATURDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SATURDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[CFB QUANT]" in intel_text):
-        allowed_leagues = {"CFB", "EPL", "UCL", "LALIGA"}
-    elif dow == 6 and ("SUNDAY FOOTBALL + EPL MODE ACTIVE" in intel_text or "SUNDAY FOOTBALL + SOCCER MODE ACTIVE" in intel_text or "[NFL QUANT]" in intel_text):
-        allowed_leagues = {"NFL", "EPL", "UCL", "LALIGA"}
 
     def _time_to_min(t_str):
         m_t = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)", t_str or "", flags=re.I)
