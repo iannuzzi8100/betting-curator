@@ -879,7 +879,7 @@ def compute_ledger_state(all_values, today_str=None):
 
     for e in sorted(bet_entries, key=lambda x: x["bet_num"]):
         rl = e["res"].lower()
-        if rl in ("won", "lost"):
+        if rl in ("won", "lost", "adjustment", "bonus", "promo"):
             total_net_pl += e["net_pl"]
             settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
 

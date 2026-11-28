@@ -402,6 +402,9 @@ def fetch_dashboard_data():
                 "net_pl": 0.0,
                 "stake": round(e["stake"], 2),
             })
+        elif res_l in ("adjustment", "bonus", "promo"):
+            total_net_pl += e["net_pl"]
+            settled_bankroll = e["run_br"] if e["run_br"] > 0 else round(100.0 + total_net_pl, 2)
 
     def _classify_market(b_type, sel):
         bt = str(b_type or "").lower()
@@ -551,7 +554,7 @@ def fetch_dashboard_data():
                 if hm and not is_pass_row:
                     trailing_ctx = (hm.group(2) or "").upper()
                     if "BR" not in trailing_ctx and "BANKROLL" not in trailing_ctx and "RESULTING" not in trailing_ctx:
-                        init_cp = int(hm.group(1))
+                        init_cp = min(99, int(hm.group(1)))
                 # Strip trailing "— 87% 💎" or "— [87% 💎]" from headline since badge shows it on the right
                 clean_title = re.sub(r"\s*[—-]\s*\[?\d{2,3}%\s*[^\]]*\]?$", "", clean_title).strip()
                 # Streamline verbose "[Window X: ... (8:20 PM EST)]" prefix if present
@@ -580,7 +583,7 @@ def fetch_dashboard_data():
                     cur_play["confidence_math"] = cm_body
                     pm = re.search(r"=\s*(\d{2,3})\s*%", cm_body) or re.search(r"(\d{2,3})\s*%", cm_body)
                     if pm and not cur_play.get("is_pass"):
-                        cur_play["confidence_pct"] = int(pm.group(1))
+                        cur_play["confidence_pct"] = min(99, int(pm.group(1)))
                 elif low_b.startswith("game & line:") or low_b.startswith("game and line:"):
                     gl_body = re.sub(r"^game\s*(?:&|and)\s*line:\s*", "", raw_bullet, flags=re.I).strip()
                     cur_play["game_line"] = gl_body
@@ -3004,7 +3007,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function parseTitleFallback(title) {
-      let sport = "CFB", gameTime = "", rest = String(title || "").trim();
+      let sport = "CFB", gameTime = "", rest = String(title || "").replace(/\s*\[MARQUEE\]\s*/gi, " ").trim();
       const bm = rest.match(/^\[([^\]]+)\]\s*(.*)$/);
       if (bm) {
         rest = bm[2].trim();
@@ -3051,7 +3054,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function extractSelectionCore(text) {
-      let s = String(text || "").trim();
+      let s = String(text || "").replace(/\s*\[MARQUEE\]\s*/gi, " ").trim();
       s = s.replace(/^\d+\.\s*/, "").replace(/\*/g, "").trim();
       s = s.replace(/^\[[^\]]+\]\s*/, "").trim();
       const smStream = s.match(/^(?:(?:\d{1,2}:\d{2}\s*[AP]M(?:\s*[A-Z]{2,4})?)\s*)?[•·]\s*[^—]+?\([A-Za-z0-9/ ]{2,10}\)\s*[—–]\s*(.+)$/i);
