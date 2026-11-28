@@ -1299,7 +1299,8 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
         ("EPL", "soccer", "eng.1", None),
         ("UCL", "soccer", "uefa.champions", None),
         ("LALIGA", "soccer", "esp.1", None),
-        ("CFB", "football", "college-football", "80"),
+        ("CFB", "football", "college-football", "80"),  # Division I FBS
+        ("CFB", "football", "college-football", "81"),  # Division I FCS (lined games)
         ("NFL", "football", "nfl", None),
         ("NBA", "basketball", "nba", None),
         ("NHL", "hockey", "nhl", None),
@@ -1307,36 +1308,12 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
     ]
     soccer_labels = ("EPL", "UCL", "LALIGA")
 
-    # Auto-detect Weekend Football + European Soccer Mode (Saturday = CFB + EPL/UCL/LALIGA; Sunday = NFL + EPL/UCL/LALIGA).
-    # Automatically falls back to ALL leagues as soon as CFB/NFL season ends (0 games scheduled).
-    weekday = now_est.weekday()  # 5 = Saturday, 6 = Sunday
+    # Always scan ALL active leagues 7 days a week — never block a sport on weekends
     league_configs = all_league_configs
-    if weekday == 5:
-        try:
-            cfb_check = requests.get(
-                "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
-                params={"dates": today_ymd, "groups": "80"},
-                timeout=10,
-            ).json().get("events", [])
-            if len(cfb_check) > 0:
-                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "UCL", "LALIGA", "CFB")]
-                quant_games.append("- [SLATE MODE] SATURDAY FOOTBALL + SOCCER MODE ACTIVE (Strictly CFB & EPL/UCL/La Liga Soccer)")
-        except Exception:
-            pass
-    elif weekday == 6:
-        try:
-            nfl_check = requests.get(
-                "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-                params={"dates": today_ymd},
-                timeout=10,
-            ).json().get("events", [])
-            if len(nfl_check) > 0:
-                league_configs = [c for c in all_league_configs if c[0] in ("EPL", "UCL", "LALIGA", "NFL")]
-                quant_games.append("- [SLATE MODE] SUNDAY FOOTBALL + SOCCER MODE ACTIVE (Strictly NFL & EPL/UCL/La Liga Soccer)")
-        except Exception:
-            pass
+    quant_games.append("- [SLATE MODE] ALL-LEAGUE BEST-EV MODE ACTIVE (Scanning CFB FBS/FCS, NFL, NBA, NHL, NCAAM, EPL, UCL, La Liga)")
 
     athlete_cache = {}
+    seen_event_ids = set()
 
     # Load self-calibrated pillar weights from Shadow Grading Log (gracefully neutral 1.00x if <25 plays)
     pillar_weights, cal_note = quant_signals.load_shadow_pillar_weights()
@@ -1362,24 +1339,34 @@ def fetch_espn_quant_matchups_and_props(return_marquee_meta=False):
 
         # 2. Fetch Today's Games & Odds
         try:
-            t_params = {"dates": today_ymd}
+            t_params = {"dates": today_ymd, "limit": 200}
             if groups:
                 t_params["groups"] = groups
             events = requests.get(base_sb, params=t_params, timeout=12).json().get("events", [])
         except Exception:
             continue
 
-        max_events = 65 if label == "CFB" else (25 if label in ("NFL", *soccer_labels) else 20)
-        sliced_events = events[:max_events]
-        pre_ids = [
-            str(e.get("id", ""))
-            for e in sliced_events
-            if e.get("id") and e.get("status", {}).get("type", {}).get("state", "") not in ("in", "post")
-        ]
+        max_events = 65 if label == "CFB" else (45 if label == "NCAAM" else (25 if label in ("NFL", *soccer_labels) else 25))
+        eligible_events = []
+        for e in events:
+            eid = str(e.get("id", ""))
+            if not eid or eid in seen_event_ids:
+                continue
+            if e.get("status", {}).get("type", {}).get("state", "") in ("in", "post"):
+                continue
+            # Skip unlined FCS / mid-major NCAAM games so we only score bettable markets
+            if groups == "81" and not ((e.get("competitions") or [{}])[0].get("odds")):
+                continue
+            eligible_events.append(e)
+            if len(eligible_events) >= max_events:
+                break
+
+        pre_ids = [str(e.get("id", "")) for e in eligible_events if e.get("id")]
         summary_cache = quant_signals.prefetch_espn_summaries(sport, league, pre_ids, max_workers=8, timeout=10)
 
-        for ev in sliced_events:
+        for ev in eligible_events:
             ev_id = str(ev.get("id", ""))
+            seen_event_ids.add(ev_id)
             status_state = ev.get("status", {}).get("type", {}).get("state", "")
             # Skip already-finished OR already-live games so curator only picks upcoming playable slots
             if status_state in ("in", "post"):

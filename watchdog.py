@@ -9,7 +9,7 @@ import quant_signals
 
 ESPN_SPORT_ROUTES = {
     "NFL": ("football", "nfl", None),
-    "CFB": ("football", "college-football", "80"),
+    "CFB": ("football", "college-football", ("80", "81")),
     "NBA": ("basketball", "nba", None),
     "NHL": ("hockey", "nhl", None),
     "NCAAM": ("basketball", "mens-college-basketball", "50"),
@@ -375,13 +375,24 @@ def run_watchdog(data_path="docs/data.json", hours_ahead=6.0):
     for sp in sports_needed:
         sport_path, league_path, groups = ESPN_SPORT_ROUTES[sp]
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport_path}/{league_path}/scoreboard"
-        params = {"dates": today_ymd, "limit": 200}
-        if groups:
-            params["groups"] = groups
-        try:
-            sb_by_sport[sp] = requests.get(url, params=params, timeout=12).json().get("events", [])
-        except Exception:
-            sb_by_sport[sp] = []
+        grp_list = groups if isinstance(groups, (list, tuple)) else [groups]
+        ev_list = []
+        seen_e = set()
+        for grp in grp_list:
+            params = {"dates": today_ymd, "limit": 200}
+            if grp:
+                params["groups"] = grp
+            try:
+                for ev_i in requests.get(url, params=params, timeout=12).json().get("events", []):
+                    eid = str(ev_i.get("id", ""))
+                    if eid and eid in seen_e:
+                        continue
+                    if eid:
+                        seen_e.add(eid)
+                    ev_list.append(ev_i)
+            except Exception:
+                continue
+        sb_by_sport[sp] = ev_list
 
     matched = []
     ev_ids_by_sport = {}

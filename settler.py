@@ -46,7 +46,7 @@ SHADOW_HEADERS = [
 ]
 
 ESPN_LEAGUES = {
-    "CFB": {"path": "football/college-football", "groups": "80"},
+    "CFB": {"path": "football/college-football", "groups": ["80", "81"]},
     "NFL": {"path": "football/nfl", "groups": None},
     "NBA": {"path": "basketball/nba", "groups": None},
     "NCAAM": {"path": "basketball/mens-college-basketball", "groups": "50"},
@@ -224,18 +224,28 @@ def fetch_final_scores(target_dates, pending_bets=None):
             continue
         path = league_info["path"]
         for d in target_dates:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard?dates={d}"
-            if league_info.get("groups"):
-                url += f"&groups={league_info['groups']}&limit=500"
-
-            try:
-                res = requests.get(url, timeout=10)
-                if res.status_code != 200:
+            raw_groups = league_info.get("groups")
+            group_list = raw_groups if isinstance(raw_groups, (list, tuple)) else [raw_groups]
+            events = []
+            seen_ev_ids = set()
+            for grp in group_list:
+                url = f"https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard?dates={d}"
+                if grp:
+                    url += f"&groups={grp}&limit=500"
+                try:
+                    res = requests.get(url, timeout=10)
+                    if res.status_code != 200:
+                        continue
+                    for ev_item in res.json().get("events", []):
+                        eid = ev_item.get("id", "")
+                        if eid and eid in seen_ev_ids:
+                            continue
+                        if eid:
+                            seen_ev_ids.add(eid)
+                        events.append(ev_item)
+                except Exception as e:
+                    print(f"Error fetching {path} (grp={grp}) for {d}: {e}", flush=True)
                     continue
-                events = res.json().get("events", [])
-            except Exception as e:
-                print(f"Error fetching {path} for {d}: {e}", flush=True)
-                continue
 
             for event in events:
                 event_id = event.get("id", "")

@@ -936,16 +936,17 @@ def _adjust_curated_plays_for_bankroll(
         odds_i = int(p.get("odds") or -110)
         b_mult = (odds_i / 100.0) if odds_i > 0 else (100.0 / abs(odds_i))
         cp = float(p.get("confidence_pct") if p.get("confidence_pct") is not None else 74)
-        p_win = 0.545 + (max(0.0, min(99.0, cp) - 68.0) / 31.0) * 0.11
+        p_win = 0.59 + (max(0.0, min(99.0, cp) - 70.0) / 29.0) * 0.09
         full_k = max(0.0, (p_win * b_mult - (1.0 - p_win)) / b_mult) if b_mult > 0 else 0.0
         sp_u = _normalize_sport(p.get("sport", "")).upper()
         sel_txt = str(p.get("selection") or title)
         is_ml = bool(re.search(r"\b(ml|moneyline|to\s+win)\b", sel_txt, flags=re.I)) and not bool(
             re.search(r"\b(over|under)\s+\d", sel_txt, flags=re.I)
         )
+        is_nhl = sp_u == "NHL"
         is_new_lg = sp_u in ("UCL", "LALIGA")
-        k_mult = 0.30 if is_new_lg else (0.55 if is_ml else 0.40)
-        eff_single_pct = min(base_single_pct, 0.10) if is_new_lg else base_single_pct
+        k_mult = 0.30 if (is_nhl or is_new_lg) else (0.55 if is_ml else 0.35)
+        eff_single_pct = min(base_single_pct, 0.08) if is_nhl else (min(base_single_pct, 0.10) if is_new_lg else base_single_pct)
         max_single_amt = settled_bankroll * eff_single_pct
         kelly_f = full_k * k_mult
         raw_st = min(max_single_amt, settled_bankroll * kelly_f)
@@ -2897,8 +2898,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       const baseSinglePct = isDrawdown ? 0.12 : 0.18;
       const baseUnit = Math.max(0.01, settledBr * 0.05);
       const b = oddsNum > 0 ? oddsNum / 100 : 100 / Math.max(1, Math.abs(oddsNum));
-      const cp = Math.max(68, Math.min(99, Number(confPct || 82)));
-      const pWin = 0.545 + ((cp - 68) / 31) * 0.11;
+      const cp = Math.max(70, Math.min(99, Number(confPct || 82)));
+      const pWin = 0.59 + ((cp - 70) / 29) * 0.09;
       const fullKelly = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
       const spU = normalizeSport(sportText || "").toUpperCase();
       const isMl = /\b(ml|moneyline|to\s+win)\b/i.test(String(selText || "")) && !/\b(over|under)\s+\d/i.test(String(selText || ""));
@@ -3238,7 +3239,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const oddsVal = Number(p.odds != null ? p.odds : (fb.odds != null ? fb.odds : -110));
         const b = oddsVal > 0 ? oddsVal / 100 : 100 / Math.max(1, Math.abs(oddsVal));
         const cp = Number(p.confidence_pct != null ? p.confidence_pct : 74);
-        const pWin = 0.545 + (Math.max(0, Math.min(99, cp) - 68) / 31) * 0.11;
+        const pWin = 0.59 + (Math.max(0, Math.min(99, cp) - 70) / 29) * 0.09;
         const fullKellyF = b > 0 ? Math.max(0, (pWin * b - (1 - pWin)) / b) : 0;
         const spU = normalizeSport(p.sport || fb.sport || "").toUpperCase();
         const selTxt = String(p.selection || fb.selection || title);
@@ -5511,19 +5512,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       await Promise.all([...pairs.values()].map(async ({ sp, ymd }) => {
         try {
           const base = ESPN_SPORT_ENDPOINTS[sp];
-          const sep = base.includes("?") ? "&" : "?";
-          const r = await fetch(`${base}${sep}dates=${ymd}`, { cache: "no-store" });
-          const j = await r.json();
+          const bases = (sp === "CFB" || sp === "NCAAF")
+            ? [base, "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=81&limit=500"]
+            : [base];
           if (!eventsBySport[sp]) {
             eventsBySport[sp] = [];
             seenBySport[sp] = new Set();
           }
-          for (const ev of (j.events || [])) {
-            const id = String(ev.id || "");
-            if (id && seenBySport[sp].has(id)) continue;
-            if (id) seenBySport[sp].add(id);
-            eventsBySport[sp].push(ev);
-          }
+          await Promise.all(bases.map(async (u) => {
+            try {
+              const sep = u.includes("?") ? "&" : "?";
+              const r = await fetch(`${u}${sep}dates=${ymd}`, { cache: "no-store" });
+              const j = await r.json();
+              for (const ev of (j.events || [])) {
+                const id = String(ev.id || "");
+                if (id && seenBySport[sp].has(id)) continue;
+                if (id) seenBySport[sp].add(id);
+                eventsBySport[sp].push(ev);
+              }
+            } catch (_e) {}
+          }));
         } catch (e) {
           if (!eventsBySport[sp]) eventsBySport[sp] = [];
         }
